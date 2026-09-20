@@ -1,0 +1,57 @@
+@import "tailwindcss"; /* これを先頭に追加 */
+
+/* Leaflet ポップアップの視認性向上 */
+.leaflet-popup-content-wrapper {
+  background: rgba(255, 255, 255, 0.95) !important; /* ほぼ白の半透明 */
+  color: #333 !important; /* 濃いめのグレー */
+  border-radius: 8px !important;
+  box-shadow: 0 3px 14px rgba(0,0,0,0.2) !important;
+}
+
+.leaflet-popup-content {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+.leaflet-popup-content b {
+  font-weight: 700 !important; /* 太字を強調 */
+  color: #1a202c !important; /* さらに濃い色 */
+}
+
+/* 特に緊急時のポップアップ強調 */
+.leaflet-popup-content b[style*="color:red"] {
+  font-weight: 900 !important; /* 最も太い */
+  color: #dc2626 !important; /* テールウィンドのred-600相当 */
+}
+
+.leaflet-popup-tip {
+  background: rgba(255, 255, 255, 0.95) !important; /* ポップアップの吹き出し部分 */
+}
+
+/* Leaflet ポップアップの視認性向上 */
+.leaflet-popup-content-wrapper {
+  background: rgba(255, 255, 255, 0.95) !important;
+  color: #333 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 3px 14px rgba(0,0,0,0.2) !important;
+}
+
+.leaflet-popup-content {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+
+.leaflet-popup-content b {
+  font-weight: 700 !important;
+  color: #1a202c !important;
+}
+
+/* 特に緊急時のポップアップ強調 */
+.leaflet-popup-content b[style*="color:red"] {
+  font-weight: 900 !important;
+  color: #dc2626 !important;
+}
+
+.leaflet-popup-tip {
+  background: rgba(255, 255, 255, 0.95) !important;
+}

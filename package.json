@@ -1,0 +1,35 @@
+{
+  "name": "transit-tag-game",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "test:rules": "firebase emulators:exec --project demo-no-project --only auth,firestore \"node --test tests/firestore-rules.test.mjs\"",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@firebase/firestore": "^4.11.0",
+    "@types/leaflet": "^1.9.21",
+    "firebase": "^12.9.0",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.564.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.24",
+    "firebase-tools": "^15.30.2",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}

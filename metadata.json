@@ -1,0 +1,8 @@
+{
+  "name": "Transit Tag Game",
+  "description": "公共交通機関を利用したチーム対抗ゲームの管理アプリ。位置情報共有、ミッション、捕獲システムを搭載。",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

@@ -1,0 +1,48 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Bootstrap this document once from the Firebase Console after creating
+    // the administrator Auth account. Do not allow clients to create it.
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    match /admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.id == uid
+        && request.resource.data.team in ['A', 'B'];
+      // This preserves the current client architecture while protecting
+      // game-wide configuration and other players from non-admin writes.
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == uid);
+      allow delete: if isAdmin();
+    }
+
+    match /missions/{missionId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /game_config/{configId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
