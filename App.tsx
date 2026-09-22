@@ -20,6 +20,7 @@ import {
   Clock
 } from 'lucide-react';
 import { User, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
+import { getPlayerRole, getRoleForTeam, isGamePaused } from './src/game';
 import { INITIAL_GAME_CONFIG } from './constants';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -81,7 +82,7 @@ const App: React.FC = () => {
   const myRole = useMemo((): Role => {
     if (!currentUser) return 'RUNNER';
     if (isAdmin) return 'ONI';
-    return currentUser.team === 'A' ? gameConfig.teamARole : gameConfig.teamBRole;
+    return getPlayerRole(currentUser, gameConfig);
   }, [currentUser, gameConfig.teamARole, gameConfig.teamBRole, isAdmin]);
 
   // Users 購読
@@ -176,7 +177,7 @@ const App: React.FC = () => {
 
   // 新幹線移動時間超過時の自動待機モード移行
   useEffect(() => {
-    if (gameConfig.gameStatus.includes('_PAUSED')) return;
+    if (isGamePaused(gameConfig.gameStatus)) return;
 
     const now = Date.now();
     const TWO_POINT_FIVE_HOURS = 2.5 * 60 * 60 * 1000;
@@ -210,7 +211,7 @@ const App: React.FC = () => {
   // 押した瞬間の lastLat/lastLng を exposedLat/Lng に保存し 5 分間表示。
   // 本人がその後移動してもピンは動かない。
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
-    if (!currentUser || (gameConfig.gameStatus.includes('_PAUSED') && !isAdmin)) return;
+    if (!currentUser || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
 
     if (!confirm('現在地を公開しますか？\n\n公開された座標は5分間地図上に固定表示されます。\n（その後移動してもピンはその場に残ります）')) return;
 
@@ -279,7 +280,7 @@ const App: React.FC = () => {
 
   // スコア更新（ミッション完了時）
   const handleScoreUpdate = useCallback(async (points: number): Promise<void> => {
-    if (!currentUser || (gameConfig.gameStatus.includes('_PAUSED') && !isAdmin)) return;
+    if (!currentUser || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
 
     try {
       const teamField = currentUser.team === 'A' ? 'teamAScore' : 'teamBScore';
@@ -337,11 +338,11 @@ const App: React.FC = () => {
 
   // 捕獲処理
   const handleCapture = useCallback(async (_dummy: string): Promise<void> => {
-    if (!currentUser || myRole !== 'ONI' || (gameConfig.gameStatus.includes('_PAUSED') && !isAdmin)) return;
+    if (!currentUser || myRole !== 'ONI' || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
 
     const now = Date.now();
     const target = allUsers.find(u => {
-      const uRole: Role = u.team === 'A' ? gameConfig.teamARole : gameConfig.teamBRole;
+      const uRole: Role = getPlayerRole(u, gameConfig);
       return (
         uRole === 'RUNNER' &&
         u.status === 'ACTIVE' &&
@@ -402,7 +403,7 @@ const App: React.FC = () => {
       !currentUser ||
       myRole !== 'RUNNER' ||
       (currentUser.invincibleCards ?? 0) <= 0 ||
-      (gameConfig.gameStatus.includes('_PAUSED') && !isAdmin)
+      (isGamePaused(gameConfig.gameStatus) && !isAdmin)
     ) return;
 
     if (!confirm('無敵カードを使いますか？（30分間有効）')) return;
@@ -426,7 +427,7 @@ const App: React.FC = () => {
 
   // 新幹線待機
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
-    if (!currentUser || (gameConfig.gameStatus.includes('_PAUSED') && !isAdmin)) return;
+    if (!currentUser || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
 
     if (!confirm('新幹線移動（1時間待機）を開始しますか？')) return;
 
@@ -457,7 +458,7 @@ const App: React.FC = () => {
   if ((gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) && !isAdminPath) {
     const aScore = gameConfig.teamAScore ?? 0;
     const bScore = gameConfig.teamBScore ?? 0;
-    const winner = gameConfig.teamARole === 'RUNNER' ? 'A' : gameConfig.teamBRole === 'RUNNER' ? 'B' : 'DRAW';
+    const winner = getRoleForTeam('A', gameConfig) === 'RUNNER' ? 'A' : getRoleForTeam('B', gameConfig) === 'RUNNER' ? 'B' : 'DRAW';
     return (
       <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
         <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
@@ -516,13 +517,13 @@ const App: React.FC = () => {
     );
   }
 
-  const isGamePaused = gameConfig.gameStatus.includes('_PAUSED');
+  const gamePaused = isGamePaused(gameConfig.gameStatus);
 
   return (
     <HashRouter>
       <div className="flex flex-col h-screen max-h-screen bg-slate-50 overflow-hidden">
         {/* 一時中断オーバーレイ */}
-        {isGamePaused && !isAdmin && (
+        {gamePaused && !isAdmin && (
           <div className="absolute inset-0 z-[2000] bg-red-600/95 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center text-white">
             <AlertTriangle size={80} className="mb-6 animate-bounce" />
             <h2 className="text-3xl font-black mb-4 uppercase italic">ゲーム一時中断</h2>
@@ -536,9 +537,9 @@ const App: React.FC = () => {
         )}
 
         {/* 役割バナー */}
-        <div className={`px-4 py-1 flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-white ${gameConfig.teamARole === 'ONI' ? 'bg-red-600' : 'bg-blue-600'}`}>
+        <div className={`px-4 py-1 flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-white ${getRoleForTeam('A', gameConfig) === 'ONI' ? 'bg-red-600' : 'bg-blue-600'}`}>
           <Swords size={12} />
-          {gameConfig.teamARole === 'ONI'
+          {getRoleForTeam('A', gameConfig) === 'ONI'
             ? 'Team A is ONI / Team B is RUNNER'
             : 'Team B is ONI / Team A is RUNNER'}
         </div>

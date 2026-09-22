@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { User, LocationLog, GameConfig, Role } from '../types';
+import { getPlayerRole, isGamePaused } from '../src/game';
 import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
 import { doc, updateDoc, setDoc, FieldValue, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -31,7 +32,7 @@ const MapView: React.FC<Props> = ({
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
 
-  const currentRole: Role = currentUser.team === 'A' ? gameConfig.teamARole : gameConfig.teamBRole;
+  const currentRole: Role = getPlayerRole(currentUser, gameConfig);
 
   // Leaflet 読み込み確認
   useEffect(() => {
@@ -50,7 +51,7 @@ const MapView: React.FC<Props> = ({
 
   // 位置情報更新
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
-    if (!currentUser || gameConfig.gameStatus.includes('_PAUSED')) return;
+    if (!currentUser || isGamePaused(gameConfig.gameStatus)) return;
     if (!navigator.onLine) return;
 
     const now = Date.now();
@@ -92,7 +93,7 @@ const MapView: React.FC<Props> = ({
   // タイマー
   useEffect(() => {
     const timer = setInterval(() => {
-      if (gameConfig.gameStatus.includes('_PAUSED')) return;
+      if (isGamePaused(gameConfig.gameStatus)) return;
       const now = Date.now();
 
       // 管理者強制開示の残り時間を計算

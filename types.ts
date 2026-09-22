@@ -1,7 +1,7 @@
 import { Timestamp, FieldValue } from 'firebase/firestore';
+import type { GameStatus, Role } from './src/game/types';
 
-export type Role = 'ONI' | 'RUNNER';
-export type GameStatus = 'PRE_GAME' | 'DAY1_ACTIVE' | 'DAY1_PAUSED' | 'DAY1_ENDED' | 'DAY2_ACTIVE' | 'DAY2_PAUSED' | 'FINAL_MISSION' | 'GAME_OVER';
+export type { GameStatus, Role } from './src/game/types';
 
 export interface GameLog {
   id: string;
