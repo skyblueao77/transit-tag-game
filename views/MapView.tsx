@@ -5,6 +5,7 @@ import {
   getPlayerRole,
   isActiveUntil,
   isGamePaused,
+  resolveLocationVisibility,
   isWaitingActive,
   ONI_INITIAL_LOCK_DURATION_MS,
   remainingSeconds,
@@ -173,90 +174,58 @@ const MapView: React.FC<Props> = ({
     markersRef.current = {};
 
     const now = Date.now();
-    
-    // 全体強制開示（管理者ボタン）の状態
-    const isGlobalForceReveal = isActiveUntil(gameConfig.locationRevealUntil, now);
 
-users.forEach(user => {
-      const isSelf = user.id === currentUser.id;
-      const isEmergency = user.status === 'EMERGENCY' || user.status === 'RETIRED';
+    users.forEach(user => {
+      const visibility = resolveLocationVisibility({
+        viewerId: currentUser.id,
+        player: user,
+        phase: gameConfig.gameStatus,
+        now,
+        globalRevealUntil: gameConfig.locationRevealUntil,
+        teamARevealUntil: gameConfig.teamARevealUntil,
+        teamBRevealUntil: gameConfig.teamBRevealUntil,
+      });
 
-      // 1. 自分自身の表示
-      if (isSelf) {
-        if (!user.lastLat || !user.lastLng) return;
-        const marker = L.circleMarker([user.lastLat, user.lastLng], {
-          radius: 10, fillColor: user.color, color: '#fff', weight: 3, opacity: 1, fillOpacity: 0.95,
-        }).addTo(mapRef.current);
-        marker.bindPopup(`<b>【自分】${user.name} (Team ${user.team})</b><br/>現在地`);
-        markersRef.current[user.id] = marker;
-        return;
-      }
+      if (visibility.mode === 'HIDDEN' || visibility.latitude === undefined || visibility.longitude === undefined) return;
 
-      // 2. 緊急状態の表示
-      if (isEmergency) {
-        if (!user.lastLat || !user.lastLng) return;
-        const marker = L.circleMarker([user.lastLat, user.lastLng], {
-          radius: 10, fillColor: '#ef4444', color: '#000', weight: 5, opacity: 1, fillOpacity: 0.9,
-        }).addTo(mapRef.current);
-        marker.bindPopup(`<b style="color:red">【緊急:${user.status}】${user.name}</b>`);
-        marker.openPopup();
-        markersRef.current[user.id] = marker;
-        return;
-      }
-
-      // 3. 表示判定ロジック
-      
-      // A. チーム別サーチ（ペナルティ）中か？
-      const teamRevealUntil = user.team === 'A' 
-        ? (gameConfig.teamARevealUntil || 0) 
-        : (gameConfig.teamBRevealUntil || 0);
-      const isTeamSearchActive = isActiveUntil(teamRevealUntil, now);
-
-      
-      // C. 個人のミッション完了によるスナップショット公開中か？
-      const isIndividualExposed =
-        user.locationExposedUntil != null &&
-        isActiveUntil(user.locationExposedUntil, now) &&
-        user.exposedLat != null &&
-        user.exposedLng != null;
-
-      // いずれかの条件を満たしていれば表示
-      if (!isGlobalForceReveal && !isTeamSearchActive && !isIndividualExposed) return;
-
-      // 4. 座標の決定
-      // 🚨 チーム個別サーチ（ペナルティ）の時だけ「リアルタイム（最新地）」を使う
-      // 📸 それ以外の公開（一斉公開・個人公開）は「スナップショット（固定値）」を使う
-      const displayLat = isTeamSearchActive ? user.lastLat : user.exposedLat!;
-      const displayLng = isTeamSearchActive ? user.lastLng : user.exposedLng!;
-
-      if (!displayLat || !displayLng) return;
-
+      const isSelf = visibility.mode === 'SELF_PRIVATE';
+      const isEmergency = visibility.mode === 'EMERGENCY_REALTIME';
+      const isTeamSearchActive = visibility.mode === 'TEAM_REALTIME';
+      const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
+      const isIndividualExposed = visibility.mode === 'INDIVIDUAL_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
-      // 5. マーカーのスタイル
-      const marker = L.circleMarker([displayLat, displayLng], {
-        radius: 8,
-        // 色分け：チームサーチは赤、一斉スナップショットはオレンジ、個人はチーム色
-        fillColor: isTeamSearchActive ? '#ef4444' : (isGlobalForceReveal ? '#f59e0b' : user.color),
-        color: isInvincible ? '#fbbf24' : '#fff',
-        weight: isInvincible ? 4 : 3,
+      const marker = L.circleMarker([visibility.latitude, visibility.longitude], {
+        radius: isSelf || isEmergency ? 10 : 8,
+        fillColor: isEmergency
+          ? '#ef4444'
+          : isTeamSearchActive
+            ? '#ef4444'
+            : isGlobalForceReveal
+              ? '#f59e0b'
+              : user.color,
+        color: isEmergency ? '#000' : isInvincible ? '#fbbf24' : '#fff',
+        weight: isEmergency ? 5 : isInvincible ? 4 : 3,
         opacity: 1,
-        fillOpacity: isTeamSearchActive ? 0.9 : 0.7,
+        fillOpacity: isSelf ? 0.95 : isEmergency ? 0.9 : isTeamSearchActive ? 0.9 : 0.7,
       }).addTo(mapRef.current);
-      
-      
-      // 6. ポップアップ内容
-      let popupContent = `<b>${user.name} (Team ${user.team})</b><br/>`;
-      if (isTeamSearchActive) {
-        popupContent += `<span style="color:red; font-weight:bold;">🚨 チーム個別サーチ中 (リアルタイム)</span>`;
+
+      let popupContent: string;
+      if (isSelf) {
+        popupContent = `<b>【自分】${user.name} (Team ${user.team})</b><br/>現在地`;
+      } else if (isEmergency) {
+        popupContent = `<b style="color:red">【緊急:${user.status}】${user.name}</b>`;
+      } else if (isTeamSearchActive) {
+        popupContent = `<b>${user.name} (Team ${user.team})</b><br/><span style="color:red; font-weight:bold;">🚨 チーム個別サーチ中 (リアルタイム)</span>`;
       } else if (isGlobalForceReveal) {
-        popupContent += `<span style="color:orange; font-weight:bold;">📸 全員スナップショット公開中</span>`;
+        popupContent = `<b>${user.name} (Team ${user.team})</b><br/><span style="color:orange; font-weight:bold;">📸 全員スナップショット公開中</span>`;
       } else {
-        const remainSec = remainingSeconds(user.locationExposedUntil, now);
-        popupContent += `<small>📍 公開中の位置 (残り ${formatTime(remainSec)})</small>`;
+        const remainSec = remainingSeconds(visibility.expiresAt, now);
+        popupContent = `<b>${user.name} (Team ${user.team})</b><br/><small>📍 公開中の位置 (残り ${formatTime(remainSec)})</small>`;
       }
 
       marker.bindPopup(popupContent);
+      if (isEmergency) marker.openPopup();
       markersRef.current[user.id] = marker;
     });
   }, [

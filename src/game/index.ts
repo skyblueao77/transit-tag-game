@@ -36,6 +36,13 @@ export {
   SHINKANSEN_WAIT_DURATION_MS,
 } from './time';
 export type { GameClockState } from './time';
+export { resolveLocationVisibility } from './reveal';
+export type {
+  LocationVisibilityInput,
+  LocationVisibilityMode,
+  LocationVisibilityPlayer,
+  LocationVisibilityResult,
+} from './reveal';
 export {
   activateInvincibility,
   canActivateInvincibility,
