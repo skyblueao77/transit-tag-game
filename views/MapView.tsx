@@ -37,11 +37,26 @@ const MapView: React.FC<Props> = ({
   });
   const [isLeafletReady, setIsLeafletReady] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [selectedTargetId, setSelectedTargetId] = useState('');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
 
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
+  const captureCandidates = currentRole === 'ONI'
+    ? users.filter(user => (
+      user.id !== currentUser.id &&
+      user.status === 'ACTIVE' &&
+      getPlayerRole(user, gameConfig) === 'RUNNER' &&
+      !isActiveUntil(user.invincibleUntil, Date.now())
+    ))
+    : [];
+
+  useEffect(() => {
+    if (!captureCandidates.some(user => user.id === selectedTargetId)) {
+      setSelectedTargetId(captureCandidates[0]?.id ?? '');
+    }
+  }, [captureCandidates, selectedTargetId]);
 
   // Leaflet 読み込み確認
   useEffect(() => {
@@ -332,17 +347,45 @@ users.forEach(user => {
 
       <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[1000] w-full px-6 flex flex-col items-center gap-3">
         {currentRole === 'ONI' && (
-          <button
-            onClick={async () => { setIsProcessing(true); await onCapture(''); setIsProcessing(false); }}
-            disabled={isProcessing || currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED')}
-            className={`px-10 py-4 rounded-full font-black text-lg shadow-2xl transition-all ${
-              isProcessing || currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED')
-                ? 'bg-slate-400 text-white'
-                : 'bg-slate-900 text-white active:scale-95'
-            }`}
-          >
-            捕獲ボタン
-          </button>
+          <div className="w-full max-w-sm flex flex-col gap-2">
+            <label className="text-xs font-bold text-slate-600 text-center" htmlFor="capture-target">
+              捕獲対象
+            </label>
+            <select
+              id="capture-target"
+              value={selectedTargetId}
+              onChange={event => setSelectedTargetId(event.target.value)}
+              disabled={isProcessing || captureCandidates.length === 0}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold shadow-xl disabled:bg-slate-100"
+            >
+              {captureCandidates.length === 0 ? (
+                <option value="">捕獲可能な逃走者はいません</option>
+              ) : (
+                captureCandidates.map(user => (
+                  <option key={user.id} value={user.id}>{user.name}</option>
+                ))
+              )}
+            </select>
+            <button
+              onClick={async () => {
+                setIsProcessing(true);
+                try { await onCapture(selectedTargetId); }
+                finally { setIsProcessing(false); }
+              }}
+              disabled={
+                isProcessing || !selectedTargetId || captureCandidates.length === 0 ||
+                currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED')
+              }
+              className={`px-10 py-4 rounded-full font-black text-lg shadow-2xl transition-all ${
+                isProcessing || !selectedTargetId || captureCandidates.length === 0 ||
+                currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED')
+                  ? 'bg-slate-400 text-white'
+                  : 'bg-slate-900 text-white active:scale-95'
+              }`}
+            >
+              捕獲ボタン
+            </button>
+          </div>
         )}
         {currentRole === 'RUNNER' && (
           <div className="flex gap-2">

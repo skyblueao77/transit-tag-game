@@ -31,6 +31,7 @@ export {
   remainingSeconds,
   INVINCIBILITY_DURATION_MS,
   ONI_INITIAL_LOCK_DURATION_MS,
+  CAPTURE_WAIT_DURATION_MS,
   SHINKANSEN_LIMIT_DURATION_MS,
   SHINKANSEN_WAIT_DURATION_MS,
 } from './time';
@@ -49,3 +50,17 @@ export {
   remainingWaitingMilliseconds,
   remainingWaitingSeconds,
 } from './waiting';
+export {
+  CAPTURE_REWARD_POINTS,
+  resolveCapture,
+  validateCapture,
+} from './capture';
+export type {
+  CaptureFailure,
+  CaptureInput,
+  CapturePlayer,
+  CapturePlayerChange,
+  CaptureRejectionReason,
+  CaptureResult,
+  CaptureSuccess,
+} from './capture';
