@@ -21,8 +21,9 @@ import {
 } from 'lucide-react';
 import { User, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
 import {
-  calculateMissionReward,
   activateInvincibility,
+  calculateMissionReward,
+  resolveCapture,
   calculateMissionScore,
   canRevealLocation,
   canScore,
@@ -347,65 +348,65 @@ const App: React.FC = () => {
   };
 
   // 捕獲処理
-  const handleCapture = useCallback(async (_dummy: string): Promise<void> => {
-    if (!currentUser || myRole !== 'ONI' || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
+  const handleCapture = useCallback(async (targetId: string): Promise<void> => {
+    if (!currentUser) return;
 
     const now = Date.now();
-    const target = allUsers.find(u => {
-      const uRole: Role = getPlayerRole(u, gameConfig);
-      return (
-        uRole === 'RUNNER' &&
-        u.status === 'ACTIVE' &&
-        !(u.invincibleUntil && u.invincibleUntil > now)
-      );
+    const capture = resolveCapture({
+      captorId: currentUser.id,
+      targetId,
+      players: allUsers.map(user => ({
+        id: user.id,
+        team: user.team,
+        status: user.status,
+        invincibleUntil: user.invincibleUntil,
+        invincibleCards: user.invincibleCards ?? 0,
+      })),
+      teamRoles: gameConfig,
+      phase: gameConfig.gameStatus,
+      now,
     });
 
-    if (!target) {
-      alert('周囲に有効な逃走者がいません。');
+    if (!capture.allowed) {
+      alert('このプレイヤーは捕獲できません。');
       return;
     }
-    if (!confirm(`${target.name} を捕獲しましたか？`)) return;
 
-    const thirtyMinutes = 30 * 60 * 1000;
-    const newRoleA: Role = gameConfig.teamARole === 'ONI' ? 'RUNNER' : 'ONI';
-    const newRoleB: Role = newRoleA === 'ONI' ? 'RUNNER' : 'ONI';
+    const target = allUsers.find(user => user.id === targetId);
+    if (!target || !confirm(`${target.name} を捕獲しましたか？`)) return;
 
     try {
+      const scoreField = capture.reward.team === 'A' ? 'teamAScore' : 'teamBScore';
       await updateDoc(doc(db, 'game_config', 'current'), {
-        teamARole: newRoleA,
-        teamBRole: newRoleB,
-        nextRevealTime: now + thirtyMinutes,
-        // increment で先祖返り防止（捕獲成功チームにのみ50pt加算）
-        ...(currentUser.team === 'A' ? { teamAScore: increment(50) } : { teamBScore: increment(50) }),
-        
+        teamARole: capture.teamRoles.teamARole,
+        teamBRole: capture.teamRoles.teamBRole,
+        nextRevealTime: capture.nextRevealTime,
+        [scoreField]: increment(capture.reward.scoreDelta),
       });
 
-      const oniTeam = newRoleA === 'ONI' ? 'A' : 'B';
-      const batch: Promise<void>[] = allUsers.map(u => {
-        if (u.team === oniTeam) {
-          // setDoc merge: ドキュメント未存在でもエラーにならない
-          return setDoc(doc(db, 'users', u.id), {
-            status: 'WAITING',
-            waitingUntil: now + thirtyMinutes,
-            invincibleUntil: 0,
-          }, { merge: true });
-        } else {
-          return setDoc(doc(db, 'users', u.id), {
-            status: 'ACTIVE',
-            waitingUntil: 0,
-            invincibleCards: (u.invincibleCards ?? 0) + 1,
-          }, { merge: true });
+      const playerUpdates: Promise<void>[] = capture.playerChanges.map(change => {
+        const updates: Record<string, unknown> = {
+          status: change.status,
+          waitingUntil: change.waitingUntil,
+        };
+        if (change.invincibleUntil !== undefined) {
+          updates.invincibleUntil = change.invincibleUntil;
         }
+        if (change.invincibleCardsDelta !== 0) {
+          const player = allUsers.find(user => user.id === change.playerId);
+          updates.invincibleCards = (player?.invincibleCards ?? 0) + change.invincibleCardsDelta;
+        }
+        return setDoc(doc(db, 'users', change.playerId), updates, { merge: true });
       });
-      await Promise.all(batch);
+      await Promise.all(playerUpdates);
 
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      await addGameLog(`${timeStr} Team ${currentUser.team} が捕獲成功！攻守交代 (+50pt)`, 'CAPTURE');
+      await addGameLog(`${timeStr} Team ${currentUser.team} が捕獲成功！攻守交代 (+${capture.reward.scoreDelta}pt)`, 'CAPTURE');
     } catch (error) {
       console.error('Capture error:', error);
       alert('捕獲処理に失敗しました。');
     }
-  }, [currentUser, allUsers, gameConfig, myRole, isAdmin, addGameLog]);
+  }, [currentUser, allUsers, gameConfig, addGameLog]);
 
   // 無敵カード使用
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {

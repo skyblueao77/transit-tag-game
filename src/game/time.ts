@@ -43,5 +43,6 @@ export function gameElapsedSince(
 
 export const INVINCIBILITY_DURATION_MS = 30 * 60 * 1000;
 export const ONI_INITIAL_LOCK_DURATION_MS = 30 * 60 * 1000;
+export const CAPTURE_WAIT_DURATION_MS = 30 * 60 * 1000;
 export const SHINKANSEN_LIMIT_DURATION_MS = 2.5 * 60 * 60 * 1000;
 export const SHINKANSEN_WAIT_DURATION_MS = 60 * 60 * 1000;
