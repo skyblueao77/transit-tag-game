@@ -1,6 +1,15 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { User, LocationLog, GameConfig, Role } from '../types';
-import { canUpdatePrivateLocation, getPlayerRole, isGamePaused } from '../src/game';
+import {
+  canUpdatePrivateLocation,
+  getPlayerRole,
+  isActiveUntil,
+  isGamePaused,
+  isWaitingActive,
+  ONI_INITIAL_LOCK_DURATION_MS,
+  remainingSeconds,
+  SHINKANSEN_LIMIT_DURATION_MS,
+} from '../src/game';
 import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
 import { doc, updateDoc, setDoc, FieldValue, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -97,30 +106,28 @@ const MapView: React.FC<Props> = ({
       const now = Date.now();
 
       // 管理者強制開示の残り時間を計算
-      const forceReveal = gameConfig.locationRevealUntil 
-        ? Math.max(0, Math.floor((gameConfig.locationRevealUntil - now) / 1000)) 
+      const forceReveal = remainingSeconds(gameConfig.locationRevealUntil, now);
+
+      const myTeamRevealUntil = currentUser.team === 'A'
+        ? gameConfig.teamARevealUntil
+        : gameConfig.teamBRevealUntil;
+      const teamSearchRemaining = remainingSeconds(myTeamRevealUntil, now);
+      const waiting = isWaitingActive(currentUser.status, currentUser.waitingUntil, now)
+        ? remainingSeconds(currentUser.waitingUntil, now)
+        : 0;
+      const invincible = remainingSeconds(currentUser.invincibleUntil, now);
+      const final = gameConfig.isFinalMissionActive
+        ? remainingSeconds(gameConfig.finalMissionEndTime, now)
         : 0;
 
-      const myTeamRevealUntil = currentUser.team === 'A' 
-    ? (gameConfig.teamARevealUntil || 0) 
-    : (gameConfig.teamBRevealUntil || 0);
-      const teamSearchRemaining = Math.max(0, Math.floor((myTeamRevealUntil - now) / 1000));
-      const waiting = currentUser.waitingUntil ? Math.max(0, Math.floor((currentUser.waitingUntil - now) / 1000)) : 0;
-      const invincible = currentUser.invincibleUntil ? Math.max(0, Math.floor((currentUser.invincibleUntil - now) / 1000)) : 0;
-      //const nextReveal = Math.max(0, Math.floor(((gameConfig.nextRevealTime ?? now) - now) / 1000));
-      const final = gameConfig.isFinalMissionActive ? Math.max(0, Math.floor((gameConfig.finalMissionEndTime - now) / 1000)) : 0;
-      
-      
-      const oniLockTime = (gameConfig.startTime || 0) + 30 * 60 * 1000;
-      const oniLock = currentRole === 'ONI' ? Math.max(0, Math.floor((oniLockTime - now) / 1000)) : 0;
-      const nextReveal = gameConfig.nextRevealTime
-        ? Math.max(0, Math.floor((gameConfig.nextRevealTime - now) / 1000))
-        : 0;
+      const oniLockTime = (gameConfig.startTime || 0) + ONI_INITIAL_LOCK_DURATION_MS;
+      const oniLock = currentRole === 'ONI' ? remainingSeconds(oniLockTime, now) : 0;
+      const nextReveal = remainingSeconds(gameConfig.nextRevealTime, now);
 
-
-      const shinkansenRemaining = currentUser.shinkansenStartTime
-        ? Math.max(0, Math.floor((currentUser.shinkansenStartTime + 2.5 * 60 * 60 * 1000 - now) / 1000))
-        : 0;
+      const shinkansenUntil = currentUser.shinkansenStartTime
+        ? currentUser.shinkansenStartTime + SHINKANSEN_LIMIT_DURATION_MS
+        : undefined;
+      const shinkansenRemaining = remainingSeconds(shinkansenUntil, now);
       
       setTimeLeft({ waiting, invincible, nextReveal, final, oniLock, shinkansenRemaining, forceReveal,teamSearchRemaining });
     }, 1000);
@@ -153,7 +160,7 @@ const MapView: React.FC<Props> = ({
     const now = Date.now();
     
     // 全体強制開示（管理者ボタン）の状態
-    const isGlobalForceReveal = (gameConfig.locationRevealUntil || 0) > now;
+    const isGlobalForceReveal = isActiveUntil(gameConfig.locationRevealUntil, now);
 
 users.forEach(user => {
       const isSelf = user.id === currentUser.id;
@@ -188,13 +195,13 @@ users.forEach(user => {
       const teamRevealUntil = user.team === 'A' 
         ? (gameConfig.teamARevealUntil || 0) 
         : (gameConfig.teamBRevealUntil || 0);
-      const isTeamSearchActive = teamRevealUntil > now;
+      const isTeamSearchActive = isActiveUntil(teamRevealUntil, now);
 
       
       // C. 個人のミッション完了によるスナップショット公開中か？
       const isIndividualExposed =
         user.locationExposedUntil != null &&
-        user.locationExposedUntil > now &&
+        isActiveUntil(user.locationExposedUntil, now) &&
         user.exposedLat != null &&
         user.exposedLng != null;
 
@@ -209,7 +216,7 @@ users.forEach(user => {
 
       if (!displayLat || !displayLng) return;
 
-      const isInvincible = user.invincibleUntil && user.invincibleUntil > now;
+      const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
       // 5. マーカーのスタイル
       const marker = L.circleMarker([displayLat, displayLng], {
@@ -230,7 +237,7 @@ users.forEach(user => {
       } else if (isGlobalForceReveal) {
         popupContent += `<span style="color:orange; font-weight:bold;">📸 全員スナップショット公開中</span>`;
       } else {
-        const remainSec = Math.floor(((user.locationExposedUntil as number) - now) / 1000);
+        const remainSec = remainingSeconds(user.locationExposedUntil, now);
         popupContent += `<small>📍 公開中の位置 (残り ${formatTime(remainSec)})</small>`;
       }
 

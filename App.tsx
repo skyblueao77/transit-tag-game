@@ -22,12 +22,15 @@ import {
 import { User, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
 import {
   calculateMissionReward,
+  activateInvincibility,
   calculateMissionScore,
   canRevealLocation,
   canScore,
   getPlayerRole,
   getRoleForTeam,
   isGamePaused,
+  SHINKANSEN_LIMIT_DURATION_MS,
+  SHINKANSEN_WAIT_DURATION_MS,
 } from './src/game';
 import { INITIAL_GAME_CONFIG } from './constants';
 import { auth, db } from './firebase';
@@ -188,7 +191,7 @@ const App: React.FC = () => {
     if (isGamePaused(gameConfig.gameStatus)) return;
 
     const now = Date.now();
-    const TWO_POINT_FIVE_HOURS = 2.5 * 60 * 60 * 1000;
+    const TWO_POINT_FIVE_HOURS = SHINKANSEN_LIMIT_DURATION_MS;
 
     allUsers.forEach(user => {
       if (!user.shinkansenStartTime || user.status !== 'ACTIVE') return;
@@ -198,7 +201,7 @@ const App: React.FC = () => {
         try {
           await updateDoc(doc(db, 'users', user.id), {
             status: 'WAITING',
-            waitingUntil: now + 60 * 60 * 1000,
+            waitingUntil: now + SHINKANSEN_WAIT_DURATION_MS,
             shinkansenStartTime: null,
           });
           await addGameLog(
@@ -406,20 +409,24 @@ const App: React.FC = () => {
 
   // 無敵カード使用
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {
-    if (
-      !currentUser ||
-      myRole !== 'RUNNER' ||
-      (currentUser.invincibleCards ?? 0) <= 0 ||
-      (isGamePaused(gameConfig.gameStatus) && !isAdmin)
-    ) return;
+    if (!currentUser) return;
 
+    const now = Date.now();
+    const activation = activateInvincibility({
+      role: myRole,
+      invincibleCards: currentUser.invincibleCards ?? 0,
+      invincibleUntil: currentUser.invincibleUntil,
+      phase: gameConfig.gameStatus,
+      now,
+    });
+    if (!activation.allowed) return;
     if (!confirm('無敵カードを使いますか？（30分間有効）')) return;
 
     try {
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       await updateDoc(doc(db, 'users', currentUser.id), {
-        invincibleUntil: Date.now() + 30 * 60 * 1000,
-        invincibleCards: (currentUser.invincibleCards ?? 0) - 1,
+        invincibleUntil: activation.invincibleUntil,
+        invincibleCards: (currentUser.invincibleCards ?? 0) + activation.cardDelta,
       });
       await addGameLog(
         `${timeStr} Team ${currentUser.team} ${currentUser.name} が無敵カードを使用`,
@@ -430,7 +437,7 @@ const App: React.FC = () => {
       console.error('Invincibility error:', error);
       alert('無敵カードの使用に失敗しました。');
     }
-  }, [currentUser, myRole, gameConfig.gameStatus, isAdmin, addGameLog]);
+  }, [currentUser, myRole, gameConfig.gameStatus, addGameLog]);
 
   // 新幹線待機
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
@@ -443,7 +450,7 @@ const App: React.FC = () => {
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       await updateDoc(doc(db, 'users', currentUser.id), {
         status: 'WAITING',
-        waitingUntil: now + 60 * 60 * 1000,
+        waitingUntil: now + SHINKANSEN_WAIT_DURATION_MS,
         shinkansenStartTime: now,
       });
       await addGameLog(
