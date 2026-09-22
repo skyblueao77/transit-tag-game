@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { User, LocationLog, GameConfig, Role } from '../types';
-import { getPlayerRole, isGamePaused } from '../src/game';
+import { canUpdatePrivateLocation, getPlayerRole, isGamePaused } from '../src/game';
 import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
 import { doc, updateDoc, setDoc, FieldValue, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -51,7 +51,7 @@ const MapView: React.FC<Props> = ({
 
   // 位置情報更新
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
-    if (!currentUser || isGamePaused(gameConfig.gameStatus)) return;
+    if (!currentUser || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
     if (!navigator.onLine) return;
 
     const now = Date.now();
