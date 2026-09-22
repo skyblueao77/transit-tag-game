@@ -45,20 +45,11 @@ import MissionView from './views/MissionView';
 import AdminView from './views/AdminView';
 
 const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('kyun_user');
-    if (saved) {
-      try {
-        return JSON.parse(saved) as User;
-      } catch (e) {
-        console.error('Failed to parse saved user', e);
-        return null;
-      }
-    }
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   const [authUser, setAuthUser] = useState(auth.currentUser);
+  const [authReady, setAuthReady] = useState(false);
+  const [userLoading, setUserLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [gameConfig, setGameConfig] = useState<GameConfig>(INITIAL_GAME_CONFIG);
@@ -66,7 +57,16 @@ const App: React.FC = () => {
   const [lastBroadcastTime, setLastBroadcastTime] = useState(0);
   const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
 
-  useEffect(() => onAuthStateChanged(auth, setAuthUser), []);
+  useEffect(() => onAuthStateChanged(auth, user => {
+    setAuthUser(user);
+    setAuthReady(true);
+    if (!user) {
+      setCurrentUser(null);
+      setUserLoading(false);
+    } else {
+      setUserLoading(true);
+    }
+  }), []);
 
   const addGameLog = useCallback(async (message: string, type: GameLog['type']): Promise<void> => {
     const newLog: GameLog = {
@@ -97,42 +97,41 @@ const App: React.FC = () => {
     return getPlayerRole(currentUser, gameConfig);
   }, [currentUser, gameConfig.teamARole, gameConfig.teamBRole, isAdmin]);
 
-  // Users 購読
+  // Auth UIDをキーにPlayer documentを復元し、全Player一覧も購読する
   useEffect(() => {
     if (!authUser) return;
-    const unsub = onSnapshot(
+
+    const unsubscribeCurrentUser = onSnapshot(
+      doc(db, 'users', authUser.uid),
+      snapshot => {
+        if (snapshot.exists()) {
+          setCurrentUser({ id: snapshot.id, ...snapshot.data() } as User);
+        } else {
+          setCurrentUser(null);
+        }
+        setUserLoading(false);
+      },
+      error => {
+        console.error('Error fetching current user data:', error);
+        setCurrentUser(null);
+        setUserLoading(false);
+      }
+    );
+
+    const unsubscribeUsers = onSnapshot(
       collection(db, 'users'),
       snapshot => {
-        const users = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as User));
-        setAllUsers(users);
-
-        const saved = localStorage.getItem('kyun_user');
-        if (!saved) return;
-
-        let localUser: User;
-        try {
-          localUser = JSON.parse(saved) as User;
-        } catch {
-          return;
-        }
-
-        const remoteUser = users.find(u => u.id === localUser.id);
-        if (remoteUser) {
-          setCurrentUser(remoteUser);
-          localStorage.setItem('kyun_user', JSON.stringify(remoteUser));
-        } else {
-          localStorage.removeItem('kyun_user');
-          setCurrentUser(null);
-          if (localUser.team !== 'ADMIN') {
-            alert('アカウントが削除されました。最初からやり直してください。');
-          }
-        }
+        setAllUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as User)));
       },
       error => {
         console.error('Error fetching users data:', error);
       }
     );
-    return () => unsub();
+
+    return () => {
+      unsubscribeCurrentUser();
+      unsubscribeUsers();
+    };
   }, [authUser?.uid]);
 
   // Missions 購読
@@ -467,6 +466,14 @@ const App: React.FC = () => {
 
   // ---- 画面分岐 ----
 
+  if (!authReady || userLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+        <div className="text-sm font-bold">Loading...</div>
+      </div>
+    );
+  }
+
   if (!currentUser && !isAdminPath) return <SetupView onComplete={setCurrentUser} />;
 
   // ゲームオーバー画面
@@ -523,7 +530,7 @@ const App: React.FC = () => {
         </div>
 
         <button
-          onClick={() => { localStorage.removeItem('kyun_user'); window.location.reload(); }}
+          onClick={async () => { await auth.signOut(); window.location.reload(); }}
           className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
         >
           <LogOut size={18} /> 最初に戻る

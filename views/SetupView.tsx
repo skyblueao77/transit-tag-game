@@ -72,7 +72,6 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
 
     try {
       await setDoc(doc(db, 'users', id), newUser);
-      localStorage.setItem('kyun_user', JSON.stringify(newUser));
       onComplete(newUser);
     } catch (error) {
       console.error('Error saving user:', error);
