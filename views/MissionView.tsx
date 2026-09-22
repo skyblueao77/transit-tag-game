@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { GameConfig, Mission, User } from '../types';
 import { FINAL_MISSIONS } from '../constants';
+import { canCompleteMission, isSameMissionId } from '../src/game';
 import { Target, CheckCircle2, MapPin, Hourglass, Camera, Hash } from 'lucide-react';
 
 interface Props {
   config: GameConfig;
   user: User;
-  onComplete: (points: number) => Promise<void>;
+  onComplete: (mission: Mission, isFinalMission: boolean) => Promise<void>;
   onExposeLocation: () => Promise<void>;
   missions: Mission[];
 }
@@ -66,16 +67,17 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
 
   // ミッション完了報告（座標判定なし・自主報告）
   const handleComplete = async () => {
-    const mission: Mission = config.isFinalMissionActive ? finalMission : (currentMission as Mission);
-    if (!mission) return;
-    if (config.isFinalMissionActive && isFinalReported) return;
-    if (!config.isFinalMissionActive && activeMissionId === lastCompletedMissionId) return;
+    const isFinalMission = config.isFinalMissionActive;
+    const mission: Mission = isFinalMission ? finalMission : (currentMission as Mission);
+    if (!mission || !canCompleteMission(config.gameStatus, isFinalMission)) return;
+    if (isFinalMission && isFinalReported) return;
+    if (!isFinalMission && isSameMissionId(activeMissionId, lastCompletedMissionId)) return;
 
     if (!confirm(`ミッション「${mission.title}」を完了報告しますか？\n\n※写真はLINEで運営に送ってください。`)) return;
 
     setIsSubmitting(true);
     try {
-      await onComplete(mission.points);
+      await onComplete(mission, isFinalMission);
 
       if (config.isFinalMissionActive) {
         setIsFinalReported(true);

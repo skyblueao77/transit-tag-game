@@ -20,7 +20,15 @@ import {
   Clock
 } from 'lucide-react';
 import { User, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
-import { getPlayerRole, getRoleForTeam, isGamePaused } from './src/game';
+import {
+  calculateMissionReward,
+  calculateMissionScore,
+  canRevealLocation,
+  canScore,
+  getPlayerRole,
+  getRoleForTeam,
+  isGamePaused,
+} from './src/game';
 import { INITIAL_GAME_CONFIG } from './constants';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -211,7 +219,7 @@ const App: React.FC = () => {
   // 押した瞬間の lastLat/lastLng を exposedLat/Lng に保存し 5 分間表示。
   // 本人がその後移動してもピンは動かない。
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
-    if (!currentUser || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
+    if (!currentUser || !canRevealLocation(gameConfig.gameStatus)) return;
 
     if (!confirm('現在地を公開しますか？\n\n公開された座標は5分間地図上に固定表示されます。\n（その後移動してもピンはその場に残ります）')) return;
 
@@ -279,31 +287,30 @@ const App: React.FC = () => {
   }, [currentUser, gameConfig.gameStatus, isAdmin, addGameLog]);
 
   // スコア更新（ミッション完了時）
-  const handleScoreUpdate = useCallback(async (points: number): Promise<void> => {
-    if (!currentUser || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
+  const handleScoreUpdate = useCallback(async (mission: Mission, isFinalMission: boolean): Promise<void> => {
+    if (!currentUser || !canScore(gameConfig.gameStatus)) return;
 
     try {
+      const reward = calculateMissionReward(mission, isFinalMission);
+      const score = calculateMissionScore(reward, Math.random());
       const teamField = currentUser.team === 'A' ? 'teamAScore' : 'teamBScore';
-      const currentScore =
-        currentUser.team === 'A' ? gameConfig.teamAScore : gameConfig.teamBScore;
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
       // increment を使うことで複数端末の同時操作による先祖返りを防止
       await updateDoc(doc(db, 'game_config', 'current'), {
-        [teamField]: increment(points),
+        [teamField]: increment(score.teamScoreDelta),
       });
 
       const updates: Partial<User> & Record<string, unknown> = {
-        score: increment(points) as unknown as number,
+        score: increment(score.playerScoreDelta) as unknown as number,
       };
-      let buffMessage = '';
-      if (Math.random() < 0.2) {
-        updates.invincibleCards = (currentUser.invincibleCards ?? 0) + 1;
-        buffMessage = '【LUCKY】無敵カード獲得！';
+      const buffMessage = score.luckyReward ? '【LUCKY】無敵カード獲得！' : '';
+      if (score.invincibleCardDelta > 0) {
+        updates.invincibleCards = (currentUser.invincibleCards ?? 0) + score.invincibleCardDelta;
       }
       await updateDoc(doc(db, 'users', currentUser.id), updates);
       await addGameLog(
-        `${timeStr} Team ${currentUser.team} ${currentUser.name} がミッション達成 (+${points}pt) ${buffMessage}`.trim(),
+        `${timeStr} Team ${currentUser.team} ${currentUser.name} がミッション達成 (+${score.playerScoreDelta}pt) ${buffMessage}`.trim(),
         'MISSION'
       );
 
