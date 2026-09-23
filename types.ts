@@ -17,8 +17,6 @@ export interface User {
   team: string;
   color: string;
   score: number;
-  lastLat: number; // 常に更新される真の現在地（距離判定に使用）
-  lastLng: number; // 常に更新される真の現在地（距離判定に使用）
 
   /** * 位置公開スナップショット仕様 
    * リアルタイムの移動を隠すため、公開ボタンが押された瞬間の座標をここにコピーします。
@@ -27,17 +25,19 @@ export interface User {
   exposedLng?: number;           // 公開された瞬間の経度（固定）
   locationExposedUntil?: number; // 公開が終了する時刻 (Date.now() + 5分)
 
-  /**
-   * lastUpdate は Firestoreから取得時は Timestamp オブジェクト、
-   * 書き込み時は FieldValue (serverTimestamp) または number が入るため any で許容します。
-   */
-  lastUpdate: any;
+
   status: 'ACTIVE' | 'CAPTURED' | 'WAITING' | 'EMERGENCY' | 'RETIRED';
   invincibleUntil?: number;
   waitingUntil?: number;
   invincibleCards: number;
   lastStation?: string;
   shinkansenStartTime?: number;
+}
+
+export interface PrivateLocation {
+  latitude: number;
+  longitude: number;
+  updatedAt?: unknown;
 }
 
 export interface Mission {

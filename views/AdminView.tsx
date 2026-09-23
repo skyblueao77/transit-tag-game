@@ -165,14 +165,20 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     try {
       const revealUntil = Date.now() + searchDuration * 60 * 1000;
       const batch = writeBatch(db);
-      users.forEach(u => {
-        if (u.lastLat && u.lastLng) {
-          batch.update(doc(db, 'users', u.id), {
-            exposedLat: u.lastLat, 
-            exposedLng: u.lastLng, 
-            locationExposedUntil: revealUntil
-          });
-        }
+      const privateLocations = await Promise.all(users.map(async user => {
+        const snapshot = await getDoc(doc(db, 'privateLocations', user.id));
+        if (!snapshot.exists()) return null;
+        const location = snapshot.data();
+        if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) return null;
+        return { userId: user.id, latitude: location.latitude as number, longitude: location.longitude as number };
+      }));
+      privateLocations.forEach(location => {
+        if (!location) return;
+        batch.update(doc(db, 'users', location.userId), {
+          exposedLat: location.latitude,
+          exposedLng: location.longitude,
+          locationExposedUntil: revealUntil
+        });
       });
       batch.update(doc(db, 'game_config', 'current'), { locationRevealUntil: revealUntil });
       await batch.commit();

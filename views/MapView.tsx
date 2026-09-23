@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { User, LocationLog, GameConfig, Role } from '../types';
+import { User, PrivateLocation, LocationLog, GameConfig, Role } from '../types';
 import {
   canUpdatePrivateLocation,
   getPlayerRole,
@@ -21,6 +21,7 @@ interface Props {
   users: User[];
   logs: LocationLog[];
   currentUser: User;
+  privateLocation: PrivateLocation | null;
   gameConfig: GameConfig;
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
@@ -28,7 +29,7 @@ interface Props {
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, gameConfig, onCapture, onActivateInvincibility, onStartShinkansenWait
+  users, currentUser, privateLocation, gameConfig, onCapture, onActivateInvincibility, onStartShinkansenWait
 }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -84,10 +85,10 @@ const MapView: React.FC<Props> = ({
     if (position.coords.accuracy > 400) return;
 
     try {
-      await setDoc(doc(db, 'users', currentUser.id), {
-        lastLat: position.coords.latitude,
-        lastLng: position.coords.longitude,
-        lastUpdate: serverTimestamp() as FieldValue,
+      await setDoc(doc(db, 'privateLocations', currentUser.id), {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        updatedAt: serverTimestamp() as FieldValue,
       }, { merge: true });
       lastUploadTime.current = now;
     } catch (error) {
@@ -102,8 +103,8 @@ const MapView: React.FC<Props> = ({
 
     watchId.current = navigator.geolocation.watchPosition(
       position => {
-        const latDiff = Math.abs(position.coords.latitude - (currentUser.lastLat || 0));
-        const lngDiff = Math.abs(position.coords.longitude - (currentUser.lastLng || 0));
+        const latDiff = Math.abs(position.coords.latitude - (privateLocation?.latitude ?? 0));
+        const lngDiff = Math.abs(position.coords.longitude - (privateLocation?.longitude ?? 0));
         if (latDiff > 0.0001 || lngDiff > 0.0001) updateLocation(position);
       },
       error => console.error('Geolocation watch error:', error),
@@ -156,13 +157,13 @@ const MapView: React.FC<Props> = ({
     const L = (window as any).L;
     if (!mapRef.current) {
       mapRef.current = L.map(containerRef.current).setView(
-        [currentUser.lastLat || 35.6812, currentUser.lastLng || 139.7671], 13
+        [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13
       );
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapRef.current);
     } else {
-      mapRef.current.setView([currentUser.lastLat || 35.6812, currentUser.lastLng || 139.7671], 13);
+      mapRef.current.setView([privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13);
     }
-  }, [isLeafletReady, timeLeft.oniLock, currentUser.lastLat, currentUser.lastLng]);
+  }, [isLeafletReady, timeLeft.oniLock, privateLocation?.latitude, privateLocation?.longitude]);
 
 // ── マーカー描画（強制共有・チーム別サーチ対応版） ────────────────────────
   useEffect(() => {
@@ -178,7 +179,9 @@ const MapView: React.FC<Props> = ({
     users.forEach(user => {
       const visibility = resolveLocationVisibility({
         viewerId: currentUser.id,
-        player: user,
+        player: user.id === currentUser.id && privateLocation
+          ? { ...user, lastLat: privateLocation.latitude, lastLng: privateLocation.longitude }
+          : user,
         phase: gameConfig.gameStatus,
         now,
         globalRevealUntil: gameConfig.locationRevealUntil,

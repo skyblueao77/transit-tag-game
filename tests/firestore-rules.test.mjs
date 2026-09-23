@@ -10,6 +10,10 @@ let userAToken;
 let userAUid;
 let userBToken;
 let userBUid;
+let userCToken;
+let userCUid;
+let userDToken;
+let userDUid;
 let adminToken;
 let adminUid;
 
@@ -46,6 +50,16 @@ function fields(values) {
   };
 }
 
+function privateLocationFields(latitude = 35.6812, longitude = 139.7671) {
+  return {
+    fields: {
+      latitude: { doubleValue: latitude },
+      longitude: { doubleValue: longitude },
+      updatedAt: { timestampValue: '2026-01-01T00:00:00Z' },
+    },
+  };
+}
+
 async function seed(path, values) {
   const response = await firestore(path, {
     token: 'owner',
@@ -63,6 +77,12 @@ before(async () => {
   const userB = await auth('signUp', {});
   userBToken = userB.idToken;
   userBUid = userB.localId;
+  const userC = await auth('signUp', {});
+  userCToken = userC.idToken;
+  userCUid = userC.localId;
+  const userD = await auth('signUp', {});
+  userDToken = userD.idToken;
+  userDUid = userD.localId;
   adminToken = (await auth('signUp', { email: 'admin@example.test', password: 'test-password-123' })).idToken;
 
   await seed(`users/${userAUid}`, { id: userAUid, team: 'A', name: 'User A' });
@@ -99,6 +119,106 @@ describe('Firestore Security Rules', () => {
       token: userAToken,
       method: 'PATCH',
       body: fields({ id: userBUid, team: 'A', name: 'Tampered' }),
+    })).status, 403);
+  });
+
+  test('protects private locations by owner and admin access', async () => {
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: privateLocationFields(0, 0),
+    })).status, 200);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, { token: userAToken })).status, 200);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, { token: userBToken })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      token: userBToken,
+      method: 'PATCH',
+      body: privateLocationFields(1, 1),
+    })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, { token: adminToken })).status, 200);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      token: adminToken,
+      method: 'PATCH',
+      body: privateLocationFields(2, 2),
+    })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'DELETE',
+    })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      token: adminToken,
+      method: 'DELETE',
+    })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userAUid}`)).status, 403);
+  });
+
+  test('rejects unauthenticated and cross-player private location writes', async () => {
+    assert.equal((await firestore(`privateLocations/${userBUid}`, {
+      method: 'PATCH',
+      body: privateLocationFields(1, 1),
+    })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      method: 'PATCH',
+      body: privateLocationFields(1, 1),
+    })).status, 403);
+    assert.equal((await firestore(`privateLocations/${userBUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: privateLocationFields(1, 1),
+    })).status, 403);
+  });
+
+  test('enforces private location coordinate boundaries and field allowlist', async () => {
+    for (const [latitude, longitude] of [[91, 0], [-91, 0], [0, 181], [0, -181]]) {
+      assert.equal((await firestore(`privateLocations/${userBUid}`, {
+        token: userBToken,
+        method: 'PATCH',
+        body: privateLocationFields(latitude, longitude),
+      })).status, 403);
+    }
+
+    for (const [latitude, longitude] of [[90, 180], [-90, -180], [0, 0]]) {
+      assert.equal((await firestore(`privateLocations/${userBUid}`, {
+        token: userBToken,
+        method: 'PATCH',
+        body: privateLocationFields(latitude, longitude),
+      })).status, 200);
+    }
+
+    assert.equal((await firestore(`privateLocations/${userBUid}`, {
+      token: userBToken,
+      method: 'PATCH',
+      body: {
+        fields: {
+          latitude: { doubleValue: 1 },
+          longitude: { doubleValue: 1 },
+          updatedAt: { timestampValue: '2026-01-01T00:00:00Z' },
+          role: { stringValue: 'ONI' },
+        },
+      },
+    })).status, 403);
+  });
+
+  test('rejects legacy private GPS fields in public user documents', async () => {
+    assert.equal((await firestore(`users/${userCUid}`, {
+      token: userCToken,
+      method: 'PATCH',
+      body: fields({ id: userCUid, team: 'A', name: 'User C', lastLat: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userDUid}`, {
+      token: userDToken,
+      method: 'PATCH',
+      body: fields({ id: userDUid, team: 'A', name: 'User D', lastLng: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ lastLat: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ lastLng: 1 }),
     })).status, 403);
   });
 

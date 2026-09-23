@@ -4,7 +4,7 @@ import { TEAM_COLORS } from '../constants';
 import { Users, Train, MapPin } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { signInAnonymously } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 
 interface Props {
   onComplete: (user: User) => void;
@@ -63,15 +63,20 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
       team,
       color,
       score: 0,
-      lastLat: currentPos.lat,
-      lastLng: currentPos.lng,
-      lastUpdate: Date.now(),
+
       status: 'ACTIVE',
       invincibleCards: 0,
     };
 
     try {
-      await setDoc(doc(db, 'users', id), newUser);
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'users', id), newUser);
+      batch.set(doc(db, 'privateLocations', id), {
+        latitude: currentPos.lat,
+        longitude: currentPos.lng,
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
       onComplete(newUser);
     } catch (error) {
       console.error('Error saving user:', error);
