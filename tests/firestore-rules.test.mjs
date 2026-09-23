@@ -60,6 +60,17 @@ function privateLocationFields(latitude = 35.6812, longitude = 139.7671) {
   };
 }
 
+function exposedLocationFields(latitude = 35.6812, longitude = 139.7671) {
+  return {
+    fields: {
+      latitude: { doubleValue: latitude },
+      longitude: { doubleValue: longitude },
+      capturedAt: { timestampValue: '2026-01-01T00:00:00Z' },
+      expiresAt: { integerValue: 1_000_000 },
+    },
+  };
+}
+
 async function seed(path, values) {
   const response = await firestore(path, {
     token: 'owner',
@@ -196,6 +207,81 @@ describe('Firestore Security Rules', () => {
           role: { stringValue: 'ONI' },
         },
       },
+    })).status, 403);
+  });
+
+  test('protects exposed location snapshots and rejects legacy snapshot fields', async () => {
+    assert.equal((await firestore(`exposedLocations/${userAUid}`)).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      method: 'PATCH',
+      body: exposedLocationFields(),
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(0, 0),
+    })).status, 200);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userBToken,
+      method: 'PATCH',
+      body: exposedLocationFields(1, 1),
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userBToken })).status, 200);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: adminToken,
+      method: 'PATCH',
+      body: exposedLocationFields(2, 2),
+    })).status, 200);
+    for (const [latitude, longitude] of [[91, 0], [-91, 0], [0, 181], [0, -181]]) {
+      assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+        token: userAToken,
+        method: 'PATCH',
+        body: exposedLocationFields(latitude, longitude),
+      })).status, 403);
+    }
+    for (const [latitude, longitude] of [[90, 180], [-90, -180], [0, 0]]) {
+      assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+        token: userAToken,
+        method: 'PATCH',
+        body: exposedLocationFields(latitude, longitude),
+      })).status, 200);
+    }
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: {
+        fields: {
+          latitude: { doubleValue: 1 },
+          longitude: { doubleValue: 1 },
+          capturedAt: { timestampValue: '2026-01-01T00:00:00Z' },
+          expiresAt: { integerValue: 1_000_000 },
+          role: { stringValue: 'ONI' },
+        },
+      },
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'DELETE',
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: adminToken,
+      method: 'DELETE',
+    })).status, 403);
+
+    assert.equal((await firestore(`users/${userCUid}`, {
+      token: userCToken,
+      method: 'PATCH',
+      body: fields({ id: userCUid, team: 'A', name: 'User C', exposedLat: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userDUid}`, {
+      token: userDToken,
+      method: 'PATCH',
+      body: fields({ id: userDUid, team: 'A', name: 'User D', exposedLng: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ locationExposedUntil: 1 }),
     })).status, 403);
   });
 

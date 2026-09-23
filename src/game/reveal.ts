@@ -15,11 +15,13 @@ export interface LocationVisibilityPlayer {
   id: string;
   team: string;
   status: string;
-  lastLat?: number | null;
-  lastLng?: number | null;
-  exposedLat?: number | null;
-  exposedLng?: number | null;
-  locationExposedUntil?: number;
+  privateLatitude?: number | null;
+  privateLongitude?: number | null;
+  exposedLocation?: {
+    latitude: number | null;
+    longitude: number | null;
+    expiresAt?: number;
+  };
 }
 
 export interface LocationVisibilityInput {
@@ -51,11 +53,11 @@ function visibleRealtime(
   player: LocationVisibilityPlayer,
   expiresAt?: number,
 ): LocationVisibilityResult {
-  if (!hasCoordinates(player.lastLat, player.lastLng)) return { mode: 'HIDDEN' };
+  if (!hasCoordinates(player.privateLatitude, player.privateLongitude)) return { mode: 'HIDDEN' };
   return {
     mode,
-    latitude: player.lastLat,
-    longitude: player.lastLng,
+    latitude: player.privateLatitude,
+    longitude: player.privateLongitude,
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
@@ -65,11 +67,13 @@ function visibleSnapshot(
   player: LocationVisibilityPlayer,
   expiresAt?: number,
 ): LocationVisibilityResult {
-  if (!hasCoordinates(player.exposedLat, player.exposedLng)) return { mode: 'HIDDEN' };
+  if (!player.exposedLocation || !hasCoordinates(player.exposedLocation.latitude, player.exposedLocation.longitude)) {
+    return { mode: 'HIDDEN' };
+  }
   return {
     mode,
-    latitude: player.exposedLat,
-    longitude: player.exposedLng,
+    latitude: player.exposedLocation.latitude,
+    longitude: player.exposedLocation.longitude,
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
@@ -109,8 +113,9 @@ export function resolveLocationVisibility(
     return visibleSnapshot('GLOBAL_SNAPSHOT', player, input.globalRevealUntil);
   }
 
-  if (isActiveUntil(player.locationExposedUntil, now)) {
-    return visibleSnapshot('INDIVIDUAL_SNAPSHOT', player, player.locationExposedUntil);
+  const individualExpiresAt = player.exposedLocation?.expiresAt;
+  if (isActiveUntil(individualExpiresAt, now)) {
+    return visibleSnapshot('INDIVIDUAL_SNAPSHOT', player, individualExpiresAt);
   }
 
   return { mode: 'HIDDEN' };

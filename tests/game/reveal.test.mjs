@@ -8,11 +8,9 @@ const basePlayer = {
   id: 'runner-1',
   team: 'B',
   status: 'ACTIVE',
-  lastLat: 35.1,
-  lastLng: 139.1,
-  exposedLat: 35.2,
-  exposedLng: 139.2,
-  locationExposedUntil: now + 10_000,
+  privateLatitude: 35.1,
+  privateLongitude: 139.1,
+  exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000 },
 };
 
 function resolve(overrides = {}, context = {}) {
@@ -40,12 +38,12 @@ describe('location visibility rules', () => {
   });
 
   test('normal opponent without an active reveal is hidden', () => {
-    assert.deepEqual(resolve({ locationExposedUntil: now }), { mode: 'HIDDEN' });
+    assert.deepEqual(resolve({ exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now } }), { mode: 'HIDDEN' });
   });
 
   for (const status of ['EMERGENCY', 'RETIRED']) {
     test(`${status} opponent uses realtime coordinates`, () => {
-      assert.deepEqual(resolve({ status, locationExposedUntil: undefined }), {
+      assert.deepEqual(resolve({ status, exposedLocation: undefined }), {
         mode: 'EMERGENCY_REALTIME', latitude: 35.1, longitude: 139.1,
       });
     });
@@ -65,7 +63,7 @@ describe('location visibility rules', () => {
   });
 
   test('global reveal uses exposed snapshot coordinates, never private coordinates', () => {
-    assert.deepEqual(resolve({ locationExposedUntil: undefined }, {
+    assert.deepEqual(resolve({}, {
       globalRevealUntil: now + 10_000,
     }), {
       mode: 'GLOBAL_SNAPSHOT', latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000,
@@ -77,7 +75,7 @@ describe('location visibility rules', () => {
   });
 
   test('global reveal expires exactly at its deadline', () => {
-    assert.deepEqual(resolve({ locationExposedUntil: undefined }, {
+    assert.deepEqual(resolve({ exposedLocation: undefined }, {
       globalRevealUntil: now,
     }), { mode: 'HIDDEN' });
   });
@@ -86,12 +84,12 @@ describe('location visibility rules', () => {
     assert.deepEqual(resolve(), {
       mode: 'INDIVIDUAL_SNAPSHOT', latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000,
     });
-    assert.deepEqual(resolve({ locationExposedUntil: now }), { mode: 'HIDDEN' });
+    assert.deepEqual(resolve({ exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now } }), { mode: 'HIDDEN' });
   });
 
   test('public reveal is denied outside active public phases', () => {
     for (const phase of ['PRE_GAME', 'DAY1_PAUSED', 'DAY1_ENDED', 'DAY2_PAUSED', 'FINAL_MISSION', 'GAME_OVER']) {
-      assert.deepEqual(resolve({ locationExposedUntil: now + 10_000 }, {
+      assert.deepEqual(resolve({ exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000 } }, {
         phase,
         globalRevealUntil: now + 10_000,
         teamBRevealUntil: now + 10_000,
@@ -101,14 +99,14 @@ describe('location visibility rules', () => {
   });
 
   test('zero latitude and longitude are valid coordinates', () => {
-    assert.deepEqual(resolve({ lastLat: 0, lastLng: 0, exposedLat: 0, exposedLng: 0 }), {
+    assert.deepEqual(resolve({ privateLatitude: 0, privateLongitude: 0, exposedLocation: { latitude: 0, longitude: 0, expiresAt: now + 10_000 } }), {
       mode: 'INDIVIDUAL_SNAPSHOT', latitude: 0, longitude: 0, expiresAt: now + 10_000,
     });
   });
 
   test('missing coordinates do not produce a visible result', () => {
-    assert.deepEqual(resolve({ id: 'viewer-1', lastLat: undefined, lastLng: undefined }), { mode: 'HIDDEN' });
-    assert.deepEqual(resolve({ exposedLat: undefined, exposedLng: undefined }), { mode: 'HIDDEN' });
+    assert.deepEqual(resolve({ id: 'viewer-1', privateLatitude: undefined, privateLongitude: undefined }), { mode: 'HIDDEN' });
+    assert.deepEqual(resolve({ exposedLocation: undefined }), { mode: 'HIDDEN' });
   });
 
   test('unknown teams do not inherit team B reveal', () => {
