@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
+import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
 import {
   canUpdatePrivateLocation,
   getPlayerRole,
@@ -12,8 +13,7 @@ import {
   SHINKANSEN_LIMIT_DURATION_MS,
 } from '../src/game';
 import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
-import { doc, updateDoc, setDoc, FieldValue, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+
 
 
 
@@ -24,13 +24,14 @@ interface Props {
   privateLocation: PrivateLocation | null;
   exposedLocations: Record<string, ExposedLocation>;
   gameConfig: GameConfig;
+  onUpdatePrivateLocation: (input: Coordinates & { playerId: string }) => Promise<UpdatePrivateLocationResult>;
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, privateLocation, exposedLocations, gameConfig, onCapture, onActivateInvincibility, onStartShinkansenWait
+  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait
 }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -86,16 +87,20 @@ const MapView: React.FC<Props> = ({
     if (position.coords.accuracy > 400) return;
 
     try {
-      await setDoc(doc(db, 'privateLocations', currentUser.id), {
+      const result = await onUpdatePrivateLocation({
+        playerId: currentUser.id,
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
-        updatedAt: serverTimestamp() as FieldValue,
-      }, { merge: true });
+      });
+      if (!result.ok) {
+        console.error('Failed to update private location:', result.reason);
+        return;
+      }
       lastUploadTime.current = now;
     } catch (error) {
       console.error('Failed to update location:', error);
     }
-  }, [currentUser, gameConfig.gameStatus]);
+  }, [currentUser, gameConfig.gameStatus, onUpdatePrivateLocation]);
 
   // watchPosition
   useEffect(() => {
