@@ -20,6 +20,12 @@ import {
   Clock
 } from 'lucide-react';
 import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
+import type { UpdatePrivateLocationInput } from './src/application';
+import { exposeLocation, updatePrivateLocation } from './src/application';
+import {
+  firebaseExposedLocationStore,
+  firebasePrivateLocationStore,
+} from './src/infrastructure/firebase/locationStores';
 import {
   activateInvincibility,
   calculateMissionReward,
@@ -36,7 +42,7 @@ import {
 import { INITIAL_GAME_CONFIG } from './constants';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, updateDoc, onSnapshot, collection, setDoc, serverTimestamp, increment} from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, setDoc, increment} from 'firebase/firestore';
 
 // Views
 import SetupView from './views/SetupView';
@@ -249,6 +255,11 @@ const App: React.FC = () => {
     });
   }, [allUsers, gameConfig.gameStatus, currentUser?.id, addGameLog]);
 
+  const handleUpdatePrivateLocation = useCallback(
+    (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebasePrivateLocationStore),
+    [],
+  );
+
   // 位置公開（スナップショット方式）
   // 押した瞬間のprivate locationを exposedLocations/{uid} に保存し 5 分間表示。
   // 本人がその後移動してもピンは動かない。
@@ -273,17 +284,24 @@ const App: React.FC = () => {
       navigator.geolocation.getCurrentPosition(
         async pos => {
           try {
-            await setDoc(doc(db, 'privateLocations', currentUser.id), {
+            const privateResult = await handleUpdatePrivateLocation({
+              playerId: currentUser.id,
               latitude: pos.coords.latitude,
               longitude: pos.coords.longitude,
-              updatedAt: serverTimestamp(),
             });
-            await setDoc(doc(db, 'exposedLocations', currentUser.id), {
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-              capturedAt: serverTimestamp(),
-              expiresAt: now + EXPOSE_DURATION,
-            });
+            if (!privateResult.ok) throw new Error(privateResult.reason);
+
+            const exposeResult = await exposeLocation({
+              playerId: currentUser.id,
+              privateLocation: {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              },
+              phase: gameConfig.gameStatus,
+              now,
+              duration: EXPOSE_DURATION,
+            }, firebaseExposedLocationStore);
+            if (exposeResult.ok === false) throw new Error(exposeResult.reason);
             await addGameLog(
               `Team ${currentUser.team} ${currentUser.name} が現在地を公開しました（5分間）`,
               'SYSTEM'
@@ -307,12 +325,14 @@ const App: React.FC = () => {
 
     // private locationが存在する場合はそのままスナップショットとして書き込む
     try {
-      await setDoc(doc(db, 'exposedLocations', currentUser.id), {
-        latitude: snapLat,
-        longitude: snapLng,
-        capturedAt: serverTimestamp(),
-        expiresAt: now + EXPOSE_DURATION,
-      });
+      const exposeResult = await exposeLocation({
+        playerId: currentUser.id,
+        privateLocation: { latitude: snapLat, longitude: snapLng },
+        phase: gameConfig.gameStatus,
+        now,
+        duration: EXPOSE_DURATION,
+      }, firebaseExposedLocationStore);
+      if (exposeResult.ok === false) throw new Error(exposeResult.reason);
       await addGameLog(
         `Team ${currentUser.team} ${currentUser.name} が現在地を公開しました（5分間）`,
         'SYSTEM'
@@ -322,7 +342,7 @@ const App: React.FC = () => {
       console.error('Location expose error:', error);
       alert('通信エラー：位置の公開に失敗しました。');
     }
-  }, [currentUser, privateLocation, gameConfig.gameStatus, isAdmin, addGameLog]);
+  }, [currentUser, privateLocation, gameConfig.gameStatus, handleUpdatePrivateLocation, addGameLog]);
 
   // スコア更新（ミッション完了時）
   const handleScoreUpdate = useCallback(async (mission: Mission, isFinalMission: boolean): Promise<void> => {
@@ -690,6 +710,7 @@ const App: React.FC = () => {
                     privateLocation={privateLocation}
                     exposedLocations={exposedLocations}
                     gameConfig={gameConfig}
+                    onUpdatePrivateLocation={handleUpdatePrivateLocation}
                     onCapture={handleCapture}
                     onActivateInvincibility={handleActivateInvincibility}
                     onStartShinkansenWait={handleStartShinkansenWait}
