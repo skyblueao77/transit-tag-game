@@ -19,7 +19,7 @@ import {
   XCircle,
   Clock
 } from 'lucide-react';
-import { User, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
+import { User, PrivateLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
 import {
   activateInvincibility,
   calculateMissionReward,
@@ -46,6 +46,7 @@ import AdminView from './views/AdminView';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
 
   const [authUser, setAuthUser] = useState(auth.currentUser);
   const [authReady, setAuthReady] = useState(false);
@@ -62,6 +63,7 @@ const App: React.FC = () => {
     setAuthReady(true);
     if (!user) {
       setCurrentUser(null);
+      setPrivateLocation(null);
       setUserLoading(false);
     } else {
       setUserLoading(true);
@@ -118,6 +120,17 @@ const App: React.FC = () => {
       }
     );
 
+    const unsubscribePrivateLocation = onSnapshot(
+      doc(db, 'privateLocations', authUser.uid),
+      snapshot => {
+        setPrivateLocation(snapshot.exists() ? snapshot.data() as PrivateLocation : null);
+      },
+      error => {
+        console.error('Error fetching private location:', error);
+        setPrivateLocation(null);
+      }
+    );
+
     const unsubscribeUsers = onSnapshot(
       collection(db, 'users'),
       snapshot => {
@@ -130,6 +143,7 @@ const App: React.FC = () => {
 
     return () => {
       unsubscribeCurrentUser();
+      unsubscribePrivateLocation();
       unsubscribeUsers();
     };
   }, [authUser?.uid]);
@@ -219,7 +233,7 @@ const App: React.FC = () => {
   }, [allUsers, gameConfig.gameStatus, currentUser?.id, addGameLog]);
 
   // 位置公開（スナップショット方式）
-  // 押した瞬間の lastLat/lastLng を exposedLat/Lng に保存し 5 分間表示。
+  // 押した瞬間のprivate locationを exposedLat/Lng に保存し 5 分間表示。
   // 本人がその後移動してもピンは動かない。
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
     if (!currentUser || !canRevealLocation(gameConfig.gameStatus)) return;
@@ -229,12 +243,12 @@ const App: React.FC = () => {
     const now = Date.now();
     const EXPOSE_DURATION = 5 * 60 * 1000; // 5 分
 
-    // MapView が随時 lastLat/lastLng を更新しているので、それをスナップショットとして使う
-    const snapLat = currentUser.lastLat;
-    const snapLng = currentUser.lastLng;
+    // MapView が随時private locationを更新しているので、それをスナップショットとして使う
+    const snapLat = privateLocation?.latitude;
+    const snapLng = privateLocation?.longitude;
 
-    if (!snapLat || !snapLng || (snapLat === 0 && snapLng === 0)) {
-      // lastLat/lastLng がまだない場合は GPS から直接取得
+    if (snapLat == null || snapLng == null) {
+      // Private Location がまだない場合は GPS から直接取得
       if (!('geolocation' in navigator)) {
         alert('このブラウザは位置情報に対応していません。');
         return;
@@ -242,10 +256,12 @@ const App: React.FC = () => {
       navigator.geolocation.getCurrentPosition(
         async pos => {
           try {
+            await setDoc(doc(db, 'privateLocations', currentUser.id), {
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              updatedAt: serverTimestamp(),
+            });
             await updateDoc(doc(db, 'users', currentUser.id), {
-              lastLat: pos.coords.latitude,
-              lastLng: pos.coords.longitude,
-              lastUpdate: serverTimestamp(),
               exposedLat: pos.coords.latitude,
               exposedLng: pos.coords.longitude,
               locationExposedUntil: now + EXPOSE_DURATION,
@@ -271,7 +287,7 @@ const App: React.FC = () => {
       return;
     }
 
-    // lastLat/lastLng が存在する場合はそのままスナップショットとして書き込む
+    // private locationが存在する場合はそのままスナップショットとして書き込む
     try {
       await updateDoc(doc(db, 'users', currentUser.id), {
         exposedLat: snapLat,
@@ -287,7 +303,7 @@ const App: React.FC = () => {
       console.error('Location expose error:', error);
       alert('通信エラー：位置の公開に失敗しました。');
     }
-  }, [currentUser, gameConfig.gameStatus, isAdmin, addGameLog]);
+  }, [currentUser, privateLocation, gameConfig.gameStatus, isAdmin, addGameLog]);
 
   // スコア更新（ミッション完了時）
   const handleScoreUpdate = useCallback(async (mission: Mission, isFinalMission: boolean): Promise<void> => {
@@ -652,6 +668,7 @@ const App: React.FC = () => {
                     users={allUsers}
                     logs={locationLogs}
                     currentUser={currentUser}
+                    privateLocation={privateLocation}
                     gameConfig={gameConfig}
                     onCapture={handleCapture}
                     onActivateInvincibility={handleActivateInvincibility}
