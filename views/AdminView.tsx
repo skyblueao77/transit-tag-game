@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { auth, db } from '../firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 interface Props {
   config: GameConfig;
@@ -174,10 +174,11 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       }));
       privateLocations.forEach(location => {
         if (!location) return;
-        batch.update(doc(db, 'users', location.userId), {
-          exposedLat: location.latitude,
-          exposedLng: location.longitude,
-          locationExposedUntil: revealUntil
+        batch.set(doc(db, 'exposedLocations', location.userId), {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          capturedAt: serverTimestamp(),
+          expiresAt: revealUntil,
         });
       });
       batch.update(doc(db, 'game_config', 'current'), { locationRevealUntil: revealUntil });

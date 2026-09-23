@@ -18,13 +18,6 @@ export interface User {
   color: string;
   score: number;
 
-  /** * 位置公開スナップショット仕様 
-   * リアルタイムの移動を隠すため、公開ボタンが押された瞬間の座標をここにコピーします。
-   */
-  exposedLat?: number;           // 公開された瞬間の緯度（固定）
-  exposedLng?: number;           // 公開された瞬間の経度（固定）
-  locationExposedUntil?: number; // 公開が終了する時刻 (Date.now() + 5分)
-
 
   status: 'ACTIVE' | 'CAPTURED' | 'WAITING' | 'EMERGENCY' | 'RETIRED';
   invincibleUntil?: number;
@@ -38,6 +31,13 @@ export interface PrivateLocation {
   latitude: number;
   longitude: number;
   updatedAt?: unknown;
+}
+
+export interface ExposedLocation {
+  latitude: number;
+  longitude: number;
+  capturedAt?: unknown;
+  expiresAt: number;
 }
 
 export interface Mission {

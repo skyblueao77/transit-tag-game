@@ -34,18 +34,35 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /exposedLocations/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && (request.auth.uid == uid || isAdmin())
+        && request.resource.data.keys().hasOnly(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && request.resource.data.keys().hasAll(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && request.resource.data.latitude is number
+        && request.resource.data.latitude >= -90
+        && request.resource.data.latitude <= 90
+        && request.resource.data.longitude is number
+        && request.resource.data.longitude >= -180
+        && request.resource.data.longitude <= 180
+        && request.resource.data.capturedAt is timestamp
+        && request.resource.data.expiresAt is number;
+      allow delete: if false;
+    }
+
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.id == uid
         && request.resource.data.team in ['A', 'B']
-        && !request.resource.data.keys().hasAny(['lastLat', 'lastLng']);
+        && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']);
       // This preserves the current client architecture while protecting
       // game-wide configuration and other players from non-admin writes.
-      allow update: if (isAdmin() && !request.resource.data.keys().hasAny(['lastLat', 'lastLng']))
+      allow update: if (isAdmin() && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']))
         || (signedIn() && request.auth.uid == uid
-          && !request.resource.data.keys().hasAny(['lastLat', 'lastLng']));
+          && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']));
       allow delete: if isAdmin();
     }
 

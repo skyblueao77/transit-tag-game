@@ -19,7 +19,7 @@ import {
   XCircle,
   Clock
 } from 'lucide-react';
-import { User, PrivateLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
+import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
 import {
   activateInvincibility,
   calculateMissionReward,
@@ -47,6 +47,7 @@ import AdminView from './views/AdminView';
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
+  const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
 
   const [authUser, setAuthUser] = useState(auth.currentUser);
   const [authReady, setAuthReady] = useState(false);
@@ -131,6 +132,21 @@ const App: React.FC = () => {
       }
     );
 
+    const unsubscribeExposedLocations = onSnapshot(
+      collection(db, 'exposedLocations'),
+      snapshot => {
+        const locations: Record<string, ExposedLocation> = {};
+        snapshot.docs.forEach(snapshotDoc => {
+          locations[snapshotDoc.id] = snapshotDoc.data() as ExposedLocation;
+        });
+        setExposedLocations(locations);
+      },
+      error => {
+        console.error('Error fetching exposed locations:', error);
+        setExposedLocations({});
+      }
+    );
+
     const unsubscribeUsers = onSnapshot(
       collection(db, 'users'),
       snapshot => {
@@ -144,6 +160,7 @@ const App: React.FC = () => {
     return () => {
       unsubscribeCurrentUser();
       unsubscribePrivateLocation();
+      unsubscribeExposedLocations();
       unsubscribeUsers();
     };
   }, [authUser?.uid]);
@@ -233,7 +250,7 @@ const App: React.FC = () => {
   }, [allUsers, gameConfig.gameStatus, currentUser?.id, addGameLog]);
 
   // 位置公開（スナップショット方式）
-  // 押した瞬間のprivate locationを exposedLat/Lng に保存し 5 分間表示。
+  // 押した瞬間のprivate locationを exposedLocations/{uid} に保存し 5 分間表示。
   // 本人がその後移動してもピンは動かない。
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
     if (!currentUser || !canRevealLocation(gameConfig.gameStatus)) return;
@@ -261,10 +278,11 @@ const App: React.FC = () => {
               longitude: pos.coords.longitude,
               updatedAt: serverTimestamp(),
             });
-            await updateDoc(doc(db, 'users', currentUser.id), {
-              exposedLat: pos.coords.latitude,
-              exposedLng: pos.coords.longitude,
-              locationExposedUntil: now + EXPOSE_DURATION,
+            await setDoc(doc(db, 'exposedLocations', currentUser.id), {
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              capturedAt: serverTimestamp(),
+              expiresAt: now + EXPOSE_DURATION,
             });
             await addGameLog(
               `Team ${currentUser.team} ${currentUser.name} が現在地を公開しました（5分間）`,
@@ -289,10 +307,11 @@ const App: React.FC = () => {
 
     // private locationが存在する場合はそのままスナップショットとして書き込む
     try {
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        exposedLat: snapLat,
-        exposedLng: snapLng,
-        locationExposedUntil: now + EXPOSE_DURATION,
+      await setDoc(doc(db, 'exposedLocations', currentUser.id), {
+        latitude: snapLat,
+        longitude: snapLng,
+        capturedAt: serverTimestamp(),
+        expiresAt: now + EXPOSE_DURATION,
       });
       await addGameLog(
         `Team ${currentUser.team} ${currentUser.name} が現在地を公開しました（5分間）`,
@@ -669,6 +688,7 @@ const App: React.FC = () => {
                     logs={locationLogs}
                     currentUser={currentUser}
                     privateLocation={privateLocation}
+                    exposedLocations={exposedLocations}
                     gameConfig={gameConfig}
                     onCapture={handleCapture}
                     onActivateInvincibility={handleActivateInvincibility}

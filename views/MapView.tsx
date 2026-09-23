@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { User, PrivateLocation, LocationLog, GameConfig, Role } from '../types';
+import { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
 import {
   canUpdatePrivateLocation,
   getPlayerRole,
@@ -22,6 +22,7 @@ interface Props {
   logs: LocationLog[];
   currentUser: User;
   privateLocation: PrivateLocation | null;
+  exposedLocations: Record<string, ExposedLocation>;
   gameConfig: GameConfig;
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
@@ -29,7 +30,7 @@ interface Props {
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, privateLocation, gameConfig, onCapture, onActivateInvincibility, onStartShinkansenWait
+  users, currentUser, privateLocation, exposedLocations, gameConfig, onCapture, onActivateInvincibility, onStartShinkansenWait
 }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -179,9 +180,15 @@ const MapView: React.FC<Props> = ({
     users.forEach(user => {
       const visibility = resolveLocationVisibility({
         viewerId: currentUser.id,
-        player: user.id === currentUser.id && privateLocation
-          ? { ...user, lastLat: privateLocation.latitude, lastLng: privateLocation.longitude }
-          : user,
+        player: {
+          ...user,
+          ...(user.id === currentUser.id && privateLocation
+            ? { privateLatitude: privateLocation.latitude, privateLongitude: privateLocation.longitude }
+            : {}),
+          ...(exposedLocations[user.id]
+            ? { exposedLocation: exposedLocations[user.id] }
+            : {}),
+        },
         phase: gameConfig.gameStatus,
         now,
         globalRevealUntil: gameConfig.locationRevealUntil,
@@ -233,7 +240,9 @@ const MapView: React.FC<Props> = ({
     });
   }, [
     users, 
-    currentUser, 
+    currentUser,
+    privateLocation,
+    exposedLocations,
     timeLeft, 
     gameConfig.locationRevealUntil, 
     gameConfig.teamARevealUntil, 
