@@ -21,18 +21,24 @@ import {
 } from 'lucide-react';
 import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
-import { exposeLocation, updatePrivateLocation } from './src/application';
+import {
+  activateInvincibility,
+  capturePlayer,
+  completeMission,
+  exposeLocation,
+  updatePrivateLocation,
+} from './src/application';
 import {
   firebaseExposedLocationStore,
   firebasePrivateLocationStore,
 } from './src/infrastructure/firebase/locationStores';
 import {
-  activateInvincibility,
-  calculateMissionReward,
-  resolveCapture,
-  calculateMissionScore,
+  firebaseCaptureStore,
+  firebaseMissionCompletionStore,
+  firebasePowerupStore,
+} from './src/infrastructure/firebase/gameplayStores';
+import {
   canRevealLocation,
-  canScore,
   getPlayerRole,
   getRoleForTeam,
   isGamePaused,
@@ -42,7 +48,7 @@ import {
 import { INITIAL_GAME_CONFIG } from './constants';
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, updateDoc, onSnapshot, collection, setDoc, increment} from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, setDoc } from 'firebase/firestore';
 
 // Views
 import SetupView from './views/SetupView';
@@ -344,40 +350,27 @@ const App: React.FC = () => {
     }
   }, [currentUser, privateLocation, gameConfig.gameStatus, handleUpdatePrivateLocation, addGameLog]);
 
-  // スコア更新（ミッション完了時）
+  // ミッション完了
   const handleScoreUpdate = useCallback(async (mission: Mission, isFinalMission: boolean): Promise<void> => {
-    if (!currentUser || !canScore(gameConfig.gameStatus)) return;
+    if (!currentUser) return;
 
-    try {
-      const reward = calculateMissionReward(mission, isFinalMission);
-      const score = calculateMissionScore(reward, Math.random());
-      const teamField = currentUser.team === 'A' ? 'teamAScore' : 'teamBScore';
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const result = await completeMission({
+      mission,
+      isFinalMission,
+      phase: gameConfig.gameStatus,
+      randomValue: Math.random(),
+      playerId: currentUser.id,
+      team: currentUser.team === 'A' ? 'A' : 'B',
+    }, firebaseMissionCompletionStore);
+    if (result.ok === false) throw new Error(result.reason);
 
-      // increment を使うことで複数端末の同時操作による先祖返りを防止
-      await updateDoc(doc(db, 'game_config', 'current'), {
-        [teamField]: increment(score.teamScoreDelta),
-      });
-
-      const updates: Partial<User> & Record<string, unknown> = {
-        score: increment(score.playerScoreDelta) as unknown as number,
-      };
-      const buffMessage = score.luckyReward ? '【LUCKY】無敵カード獲得！' : '';
-      if (score.invincibleCardDelta > 0) {
-        updates.invincibleCards = (currentUser.invincibleCards ?? 0) + score.invincibleCardDelta;
-      }
-      await updateDoc(doc(db, 'users', currentUser.id), updates);
-      await addGameLog(
-        `${timeStr} Team ${currentUser.team} ${currentUser.name} がミッション達成 (+${score.playerScoreDelta}pt) ${buffMessage}`.trim(),
-        'MISSION'
-      );
-
-      // alert はMissionView側で表示するためここでは出さない
-    } catch (error) {
-      console.error('Score update error:', error);
-      alert('通信エラー：圏外か不安定な環境です。電波の良い場所で再度ボタンを押してください。');
-    }
-  }, [currentUser, gameConfig.gameStatus, isAdmin, gameConfig.teamAScore, gameConfig.teamBScore, addGameLog]);
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const buffMessage = result.score.luckyReward ? '【LUCKY】無敵カード獲得！' : '';
+    await addGameLog(
+      `${timeStr} Team ${currentUser.team} ${currentUser.name} がミッション達成 (+${result.score.playerScoreDelta}pt) ${buffMessage}`.trim(),
+      'MISSION'
+    );
+  }, [currentUser, gameConfig.gameStatus, addGameLog]);
 
   // SOS
   const handleSOS = async (): Promise<void> => {
@@ -405,8 +398,10 @@ const App: React.FC = () => {
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {
     if (!currentUser) return;
 
-    const now = Date.now();
-    const capture = resolveCapture({
+    const target = allUsers.find(user => user.id === targetId);
+    if (!target || !confirm(`${target.name} を捕獲しましたか？`)) return;
+
+    const result = await capturePlayer({
       captorId: currentUser.id,
       targetId,
       players: allUsers.map(user => ({
@@ -418,80 +413,46 @@ const App: React.FC = () => {
       })),
       teamRoles: gameConfig,
       phase: gameConfig.gameStatus,
-      now,
-    });
+      now: Date.now(),
+    }, firebaseCaptureStore);
 
-    if (!capture.allowed) {
-      alert('このプレイヤーは捕獲できません。');
+    if (result.ok === false) {
+      alert(result.reason === 'CAPTURE_REJECTED'
+        ? 'このプレイヤーは捕獲できません。'
+        : '捕獲処理に失敗しました。');
       return;
     }
 
-    const target = allUsers.find(user => user.id === targetId);
-    if (!target || !confirm(`${target.name} を捕獲しましたか？`)) return;
-
-    try {
-      const scoreField = capture.reward.team === 'A' ? 'teamAScore' : 'teamBScore';
-      await updateDoc(doc(db, 'game_config', 'current'), {
-        teamARole: capture.teamRoles.teamARole,
-        teamBRole: capture.teamRoles.teamBRole,
-        nextRevealTime: capture.nextRevealTime,
-        [scoreField]: increment(capture.reward.scoreDelta),
-      });
-
-      const playerUpdates: Promise<void>[] = capture.playerChanges.map(change => {
-        const updates: Record<string, unknown> = {
-          status: change.status,
-          waitingUntil: change.waitingUntil,
-        };
-        if (change.invincibleUntil !== undefined) {
-          updates.invincibleUntil = change.invincibleUntil;
-        }
-        if (change.invincibleCardsDelta !== 0) {
-          const player = allUsers.find(user => user.id === change.playerId);
-          updates.invincibleCards = (player?.invincibleCards ?? 0) + change.invincibleCardsDelta;
-        }
-        return setDoc(doc(db, 'users', change.playerId), updates, { merge: true });
-      });
-      await Promise.all(playerUpdates);
-
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      await addGameLog(`${timeStr} Team ${currentUser.team} が捕獲成功！攻守交代 (+${capture.reward.scoreDelta}pt)`, 'CAPTURE');
-    } catch (error) {
-      console.error('Capture error:', error);
-      alert('捕獲処理に失敗しました。');
-    }
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    await addGameLog(
+      `${timeStr} Team ${currentUser.team} が捕獲成功！攻守交代 (+${result.capture.reward.scoreDelta}pt)`,
+      'CAPTURE'
+    );
   }, [currentUser, allUsers, gameConfig, addGameLog]);
 
   // 無敵カード使用
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {
-    if (!currentUser) return;
+    if (!currentUser || !confirm('無敵カードを使いますか？（30分間有効）')) return;
 
-    const now = Date.now();
-    const activation = activateInvincibility({
+    const result = await activateInvincibility({
+      playerId: currentUser.id,
       role: myRole,
-      invincibleCards: currentUser.invincibleCards ?? 0,
+      cards: currentUser.invincibleCards ?? 0,
       invincibleUntil: currentUser.invincibleUntil,
       phase: gameConfig.gameStatus,
-      now,
-    });
-    if (!activation.allowed) return;
-    if (!confirm('無敵カードを使いますか？（30分間有効）')) return;
-
-    try {
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        invincibleUntil: activation.invincibleUntil,
-        invincibleCards: (currentUser.invincibleCards ?? 0) + activation.cardDelta,
-      });
-      await addGameLog(
-        `${timeStr} Team ${currentUser.team} ${currentUser.name} が無敵カードを使用`,
-        'SYSTEM'
-      );
-      alert('無敵モード発動！');
-    } catch (error) {
-      console.error('Invincibility error:', error);
-      alert('無敵カードの使用に失敗しました。');
+      now: Date.now(),
+    }, firebasePowerupStore);
+    if (result.ok === false) {
+      if (result.reason === 'PERSISTENCE_ERROR') alert('無敵カードの使用に失敗しました。');
+      return;
     }
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    await addGameLog(
+      `${timeStr} Team ${currentUser.team} ${currentUser.name} が無敵カードを使用`,
+      'SYSTEM'
+    );
+    alert('無敵モード発動！');
   }, [currentUser, myRole, gameConfig.gameStatus, addGameLog]);
 
   // 新幹線待機
