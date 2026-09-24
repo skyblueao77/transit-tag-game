@@ -7,7 +7,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "test": "node --test tests/game/roles.test.mjs tests/game/phases.test.mjs tests/game/missions-scoring.test.mjs tests/game/time-powerups.test.mjs tests/game/capture.test.mjs tests/game/reveal.test.mjs tests/application-location.test.mjs",
+    "test": "node --test tests/game/roles.test.mjs tests/game/phases.test.mjs tests/game/missions-scoring.test.mjs tests/game/time-powerups.test.mjs tests/game/capture.test.mjs tests/game/reveal.test.mjs tests/application-location.test.mjs tests/application-gameplay.test.mjs",
     "test:rules": "firebase emulators:exec --project demo-no-project --only auth,firestore \"node --test tests/firestore-rules.test.mjs\"",
     "preview": "vite preview"
   },
