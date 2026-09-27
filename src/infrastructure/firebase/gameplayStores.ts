@@ -1,5 +1,6 @@
 import { doc, increment, updateDoc, writeBatch } from 'firebase/firestore';
-import { db } from '../../../firebase';
+import { db } from './firebaseClient';
+import type { GameLog } from '../../../types';
 import type {
   CaptureStore,
   MissionCompletionStore,
@@ -61,6 +62,14 @@ export const firebasePowerupStore: PowerupStore = {
     await updateDoc(doc(db, 'users', input.playerId), {
       invincibleUntil: input.invincibleUntil,
       invincibleCards: increment(input.cardDelta),
+    });
+  },
+};
+
+export const firebaseGameLogStore = {
+  append: async (log: GameLog, previousLogs: GameLog[]): Promise<void> => {
+    await updateDoc(doc(db, 'game_config', 'current'), {
+      logs: [log, ...previousLogs].slice(0, 200),
     });
   },
 };

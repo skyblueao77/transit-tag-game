@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { TEAM_COLORS } from '../constants';
 import { Users, Train, MapPin } from 'lucide-react';
-import { auth, db } from '../firebase';
-import { signInAnonymously } from 'firebase/auth';
-import { doc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { ensureAnonymousAuthUser } from '../src/infrastructure/firebase/auth';
+import { createPlayerWithPrivateLocation } from '../src/infrastructure/firebase/playerStore';
 
 interface Props {
   onComplete: (user: User) => void;
@@ -38,18 +37,12 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
     if (!name.trim() || isSubmitting) return;
 
     setIsSubmitting(true);
+    let id: string;
     try {
-      if (!auth.currentUser) await signInAnonymously(auth);
+      id = await ensureAnonymousAuthUser();
     } catch (error) {
       console.error('Anonymous authentication failed:', error);
       alert('認証に失敗しました。Firebase Authenticationの匿名ログインを有効にしてください。');
-      setIsSubmitting(false);
-      return;
-    }
-
-    const id = auth.currentUser?.uid;
-    if (!id) {
-      alert('認証ユーザーを取得できませんでした。');
       setIsSubmitting(false);
       return;
     }
@@ -69,14 +62,10 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
     };
 
     try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'users', id), newUser);
-      batch.set(doc(db, 'privateLocations', id), {
+      await createPlayerWithPrivateLocation(newUser, {
         latitude: currentPos.lat,
         longitude: currentPos.lng,
-        updatedAt: serverTimestamp(),
       });
-      await batch.commit();
       onComplete(newUser);
     } catch (error) {
       console.error('Error saving user:', error);

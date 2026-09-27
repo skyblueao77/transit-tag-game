@@ -1,5 +1,5 @@
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { db } from '../../../firebase';
+import { db } from './firebaseClient';
 import type { ExposedLocationStore, PrivateLocationStore } from '../../application';
 
 export const firebasePrivateLocationStore: PrivateLocationStore = {

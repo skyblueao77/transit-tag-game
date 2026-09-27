@@ -32,11 +32,7 @@ import {
   firebaseExposedLocationStore,
   firebasePrivateLocationStore,
 } from './src/infrastructure/firebase/locationStores';
-import {
-  firebaseCaptureStore,
-  firebaseMissionCompletionStore,
-  firebasePowerupStore,
-} from './src/infrastructure/firebase/gameplayStores';
+
 import {
   canRevealLocation,
   getPlayerRole,
@@ -46,9 +42,30 @@ import {
   SHINKANSEN_WAIT_DURATION_MS,
 } from './src/game';
 import { INITIAL_GAME_CONFIG } from './constants';
-import { auth, db } from './firebase';
-import { onAuthStateChanged } from 'firebase/auth';
-import { doc, updateDoc, onSnapshot, collection, setDoc } from 'firebase/firestore';
+import {
+  getCurrentAuthUserId,
+  signOutCurrentUser,
+  subscribeAuthUserId,
+} from './src/infrastructure/firebase/auth';
+import {
+  firebaseGameLogStore,
+  firebaseCaptureStore,
+  firebaseMissionCompletionStore,
+  firebasePowerupStore,
+} from './src/infrastructure/firebase/gameplayStores';
+import {
+  movePlayerToTravelLimitWait,
+  startPlayerTravelWait,
+  updatePlayerStatus,
+} from './src/infrastructure/firebase/playerStore';
+import {
+  subscribeCurrentPlayer,
+  subscribeExposedLocations,
+  subscribeGameConfig,
+  subscribeMissions,
+  subscribePlayers,
+  subscribePrivateLocation,
+} from './src/infrastructure/firebase/subscriptions';
 
 // Views
 import SetupView from './views/SetupView';
@@ -61,7 +78,7 @@ const App: React.FC = () => {
   const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
   const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
 
-  const [authUser, setAuthUser] = useState(auth.currentUser);
+  const [authUserId, setAuthUserId] = useState(getCurrentAuthUserId);
   const [authReady, setAuthReady] = useState(false);
   const [userLoading, setUserLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -71,10 +88,10 @@ const App: React.FC = () => {
   const [lastBroadcastTime, setLastBroadcastTime] = useState(0);
   const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
 
-  useEffect(() => onAuthStateChanged(auth, user => {
-    setAuthUser(user);
+  useEffect(() => subscribeAuthUserId(uid => {
+    setAuthUserId(uid);
     setAuthReady(true);
-    if (!user) {
+    if (!uid) {
       setCurrentUser(null);
       setPrivateLocation(null);
       setUserLoading(false);
@@ -90,11 +107,10 @@ const App: React.FC = () => {
       message,
       type,
     };
-    const configRef = doc(db, 'game_config', 'current');
+
     const currentLogs: GameLog[] = gameConfig.logs ?? [];
-    const updatedLogs = [newLog, ...currentLogs].slice(0, 200);
     try {
-      await updateDoc(configRef, { logs: updatedLogs });
+      await firebaseGameLogStore.append(newLog, currentLogs);
     } catch (error) {
       console.error('Failed to add game log:', error);
     }
@@ -112,61 +128,40 @@ const App: React.FC = () => {
     return getPlayerRole(currentUser, gameConfig);
   }, [currentUser, gameConfig.teamARole, gameConfig.teamBRole, isAdmin]);
 
-  // Auth UIDをキーにPlayer documentを復元し、全Player一覧も購読する
+  // Auth UIDをキーにPlayer documentとrealtime dataを購読する
   useEffect(() => {
-    if (!authUser) return;
+    if (!authUserId) return;
 
-    const unsubscribeCurrentUser = onSnapshot(
-      doc(db, 'users', authUser.uid),
-      snapshot => {
-        if (snapshot.exists()) {
-          setCurrentUser({ id: snapshot.id, ...snapshot.data() } as User);
-        } else {
-          setCurrentUser(null);
-        }
+    const unsubscribeCurrentUser = subscribeCurrentPlayer(
+      authUserId,
+      player => {
+        setCurrentUser(player);
         setUserLoading(false);
       },
       error => {
         console.error('Error fetching current user data:', error);
         setCurrentUser(null);
         setUserLoading(false);
-      }
-    );
-
-    const unsubscribePrivateLocation = onSnapshot(
-      doc(db, 'privateLocations', authUser.uid),
-      snapshot => {
-        setPrivateLocation(snapshot.exists() ? snapshot.data() as PrivateLocation : null);
       },
+    );
+    const unsubscribePrivateLocation = subscribePrivateLocation(
+      authUserId,
+      setPrivateLocation,
       error => {
         console.error('Error fetching private location:', error);
         setPrivateLocation(null);
-      }
-    );
-
-    const unsubscribeExposedLocations = onSnapshot(
-      collection(db, 'exposedLocations'),
-      snapshot => {
-        const locations: Record<string, ExposedLocation> = {};
-        snapshot.docs.forEach(snapshotDoc => {
-          locations[snapshotDoc.id] = snapshotDoc.data() as ExposedLocation;
-        });
-        setExposedLocations(locations);
       },
+    );
+    const unsubscribeExposedLocations = subscribeExposedLocations(
+      setExposedLocations,
       error => {
         console.error('Error fetching exposed locations:', error);
         setExposedLocations({});
-      }
-    );
-
-    const unsubscribeUsers = onSnapshot(
-      collection(db, 'users'),
-      snapshot => {
-        setAllUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as User)));
       },
-      error => {
-        console.error('Error fetching users data:', error);
-      }
+    );
+    const unsubscribeUsers = subscribePlayers(
+      setAllUsers,
+      error => console.error('Error fetching users data:', error),
     );
 
     return () => {
@@ -175,59 +170,38 @@ const App: React.FC = () => {
       unsubscribeExposedLocations();
       unsubscribeUsers();
     };
-  }, [authUser?.uid]);
+  }, [authUserId]);
 
-  // Missions 購読
   useEffect(() => {
-    if (!authUser) return;
-    const unsub = onSnapshot(
-      collection(db, 'missions'),
-      snapshot => {
-        // Firestore ドキュメントIDを id フィールドとして確実にマージ
-        const missionData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Mission));
-        setMissions(missionData);
-      },
-      error => {
-        console.error('Error fetching missions data:', error);
-      }
+    if (!authUserId) return;
+    return subscribeMissions(
+      setMissions,
+      error => console.error('Error fetching missions data:', error),
     );
-    return () => unsub();
-  }, [authUser?.uid]);
+  }, [authUserId]);
 
-  // GameConfig 購読 & 自動更新処理
+  // GameConfig 購読 & 初期ドキュメント作成
   useEffect(() => {
-    if (!authUser) return;
-    const unsub = onSnapshot(
-      doc(db, 'game_config', 'current'),
-      async snapshot => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          const config: GameConfig = { ...INITIAL_GAME_CONFIG, ...data, logs: data.logs ?? [] };
-          setGameConfig(config);
-
-          // ブロードキャスト通知
-          if (config.broadcastTime > lastBroadcastTime && config.broadcastMessage) {
-            setLastBroadcastTime(config.broadcastTime);
-            alert(`【運営からの通知】\n\n${config.broadcastMessage}`);
-          }
-
-          
-        } else {
-          try {
-            await setDoc(doc(db, 'game_config', 'current'), INITIAL_GAME_CONFIG);
-          } catch (error) {
-            console.error('Failed to set initial game config:', error);
-            alert('初期ゲーム設定の保存に失敗しました。通信環境をご確認ください。');
-          }
+    if (!authUserId) return;
+    return subscribeGameConfig(
+      INITIAL_GAME_CONFIG,
+      config => {
+        setGameConfig(config);
+        if (config.broadcastTime > lastBroadcastTime && config.broadcastMessage) {
+          setLastBroadcastTime(config.broadcastTime);
+          alert(`【運営からの通知】\n\n${config.broadcastMessage}`);
         }
       },
       error => {
         console.error('Error fetching game config data:', error);
         alert('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
-      }
+      },
+      error => {
+        console.error('Failed to set initial game config:', error);
+        alert('初期ゲーム設定の保存に失敗しました。通信環境をご確認ください。');
+      },
     );
-    return () => unsub();
-  }, [authUser?.uid, lastBroadcastTime]);
+  }, [authUserId, lastBroadcastTime]);
 
   // 新幹線移動時間超過時の自動待機モード移行
   useEffect(() => {
@@ -242,11 +216,10 @@ const App: React.FC = () => {
 
       (async () => {
         try {
-          await updateDoc(doc(db, 'users', user.id), {
-            status: 'WAITING',
-            waitingUntil: now + SHINKANSEN_WAIT_DURATION_MS,
-            shinkansenStartTime: null,
-          });
+          await movePlayerToTravelLimitWait(
+            user.id,
+            now + SHINKANSEN_WAIT_DURATION_MS,
+          );
           await addGameLog(
             `Team ${user.team} ${user.name} が新幹線移動時間超過のため自動で待機モードに移行しました。`,
             'SYSTEM'
@@ -267,7 +240,7 @@ const App: React.FC = () => {
   );
 
   // 位置公開（スナップショット方式）
-  // 押した瞬間のprivate locationを exposedLocations/{uid} に保存し 5 分間表示。
+  // 押した瞬間のprivate locationをスナップショットとして5分間表示。
   // 本人がその後移動してもピンは動かない。
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
     if (!currentUser || !canRevealLocation(gameConfig.gameStatus)) return;
@@ -383,7 +356,7 @@ const App: React.FC = () => {
       reason === '3' || reason.includes('リタイア') ? 'RETIRED' : 'EMERGENCY';
 
     try {
-      await updateDoc(doc(db, 'users', currentUser.id), { status });
+      await updatePlayerStatus(currentUser.id, status);
       await addGameLog(
         `【緊急】Team ${currentUser.team} ${currentUser.name} が SOS を発信: ${reason}`,
         'EMERGENCY'
@@ -464,11 +437,11 @@ const App: React.FC = () => {
     try {
       const now = Date.now();
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      await updateDoc(doc(db, 'users', currentUser.id), {
-        status: 'WAITING',
-        waitingUntil: now + SHINKANSEN_WAIT_DURATION_MS,
-        shinkansenStartTime: now,
-      });
+      await startPlayerTravelWait(
+        currentUser.id,
+        now + SHINKANSEN_WAIT_DURATION_MS,
+        now,
+      );
       await addGameLog(
         `${timeStr} Team ${currentUser.team} ${currentUser.name} が新幹線待機を開始 (60分)`,
         'SYSTEM'
@@ -546,7 +519,7 @@ const App: React.FC = () => {
         </div>
 
         <button
-          onClick={async () => { await auth.signOut(); window.location.reload(); }}
+          onClick={async () => { await signOutCurrentUser(); window.location.reload(); }}
           className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
         >
           <LogOut size={18} /> 最初に戻る
