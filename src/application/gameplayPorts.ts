@@ -1,8 +1,4 @@
-import type {
-  CaptureInput,
-  CaptureRejectionReason,
-  CaptureSuccess,
-} from '../game/capture.ts';
+import type { CaptureRejectionReason, CaptureSuccess } from '../game/capture.ts';
 import type { GameStatus, Role } from '../game/types';
 import type { MissionReward } from '../game/missions.ts';
 import type { MissionScoreResult } from '../game/scoring.ts';
@@ -38,15 +34,33 @@ export interface MissionCompletionGateway {
   completeMission(input: CompleteMissionInput): Promise<CompleteMissionResult>;
 }
 
-export interface CaptureStore {
-  applyCapture(result: CaptureSuccess): Promise<void>;
+export interface CapturePlayerInput {
+  targetId: string;
 }
 
-export type CapturePlayerInput = CaptureInput;
+export type CaptureFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'INVALID_ARGUMENT'
+  | 'PLAYER_NOT_FOUND'
+  | 'TARGET_NOT_FOUND'
+  | 'INVALID_CAPTOR_TEAM'
+  | 'INVALID_TARGET_TEAM'
+  | 'GAME_CONFIG_NOT_FOUND'
+  | 'INVALID_GAME_STATE'
+  | 'CAPTURE_REJECTED'
+  | 'PERSISTENCE_ERROR';
+
 export type CapturePlayerResult =
   | { ok: true; capture: CaptureSuccess }
-  | { ok: false; reason: 'CAPTURE_REJECTED'; domainReason: CaptureRejectionReason }
-  | { ok: false; reason: 'PERSISTENCE_ERROR' };
+  | {
+      ok: false;
+      reason: CaptureFailureReason;
+      domainReason?: CaptureRejectionReason;
+    };
+
+export interface CaptureGateway {
+  capture(input: CapturePlayerInput): Promise<CapturePlayerResult>;
+}
 
 export interface PowerupStore {
   applyInvincibility(input: {

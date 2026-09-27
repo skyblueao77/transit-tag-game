@@ -1,22 +1,15 @@
-import { resolveCapture } from '../game/capture.ts';
-import type { CapturePlayerInput, CapturePlayerResult, CaptureStore } from './gameplayPorts.ts';
+import type {
+  CaptureGateway,
+  CapturePlayerInput,
+  CapturePlayerResult,
+} from './gameplayPorts.ts';
 
 export async function capturePlayer(
   input: CapturePlayerInput,
-  store: CaptureStore,
+  gateway: CaptureGateway,
 ): Promise<CapturePlayerResult> {
-  const capture = resolveCapture(input);
-  if (capture.allowed === false) {
-    return {
-      ok: false,
-      reason: 'CAPTURE_REJECTED',
-      domainReason: capture.reason,
-    };
-  }
-
   try {
-    await store.applyCapture(capture);
-    return { ok: true, capture };
+    return await gateway.capture({ targetId: input.targetId });
   } catch {
     return { ok: false, reason: 'PERSISTENCE_ERROR' };
   }

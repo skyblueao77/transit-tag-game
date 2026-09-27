@@ -6,9 +6,10 @@ export { updatePrivateLocation } from './updatePrivateLocation.ts';
 export type {
   ActivateInvincibilityInput,
   ActivateInvincibilityResult,
+  CaptureFailureReason,
+  CaptureGateway,
   CapturePlayerInput,
   CapturePlayerResult,
-  CaptureStore,
   CompleteMissionFailureReason,
   CompleteMissionInput,
   CompleteMissionResult,
