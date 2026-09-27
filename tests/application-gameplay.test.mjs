@@ -7,11 +7,14 @@ import {
 } from '../src/application/index.ts';
 import { INVINCIBILITY_DURATION_MS } from '../src/game/time.ts';
 
-function missionStore() {
+function missionGateway(result) {
   const calls = [];
   return {
     calls,
-    applyMissionCompletion: async input => calls.push(structuredClone(input)),
+    completeMission: async input => {
+      calls.push(structuredClone(input));
+      return result;
+    },
   };
 }
 
@@ -31,13 +34,19 @@ function powerupStore() {
   };
 }
 
-const missionInput = overrides => ({
-  mission: { id: 'mission-1', points: 25 },
+const missionInput = overrides => ({ missionId: 'mission-1', ...overrides });
+
+const missionSuccess = overrides => ({
+  ok: true,
+  missionId: 'mission-1',
+  reward: { missionId: 'mission-1', points: 25, isFinalMission: false },
+  score: {
+    teamScoreDelta: 25,
+    playerScoreDelta: 25,
+    invincibleCardDelta: 0,
+    luckyReward: false,
+  },
   isFinalMission: false,
-  phase: 'DAY1_ACTIVE',
-  randomValue: 0.5,
-  playerId: 'runner-1',
-  team: 'B',
   ...overrides,
 });
 
@@ -65,74 +74,46 @@ const powerupInput = overrides => ({
 });
 
 describe('completeMission application use case', () => {
-  test('completes a normal mission and persists the score deltas', async () => {
-    const store = missionStore();
-    const result = await completeMission(missionInput({ randomValue: 0.5 }), store);
-
-    assert.equal(result.ok, true);
-    assert.deepEqual(result.reward, {
-      missionId: 'mission-1', points: 25, isFinalMission: false,
+  test('forwards only missionId and returns the trusted gateway result', async () => {
+    const result = missionSuccess({
+      score: {
+        teamScoreDelta: 25,
+        playerScoreDelta: 25,
+        invincibleCardDelta: 1,
+        luckyReward: true,
+      },
     });
-    assert.deepEqual(result.score, {
-      teamScoreDelta: 25,
-      playerScoreDelta: 25,
-      invincibleCardDelta: 0,
-      luckyReward: false,
-    });
-    assert.deepEqual(store.calls, [{
-      playerId: 'runner-1', team: 'B', teamScoreDelta: 25,
-      playerScoreDelta: 25, invincibleCardDelta: 0,
-    }]);
-  });
-
-  test('completes a final mission in the final phase', async () => {
-    const store = missionStore();
-    const result = await completeMission(missionInput({
-      mission: { id: 'final-1', points: 100 },
-      isFinalMission: true,
-      phase: 'FINAL_MISSION',
-    }), store);
-
-    assert.equal(result.ok, true);
-    assert.equal(result.reward.isFinalMission, true);
-    assert.equal(result.score.teamScoreDelta, 100);
-    assert.equal(store.calls.length, 1);
-  });
-
-  test('rejects an invalid phase without persistence', async () => {
-    const store = missionStore();
-    assert.deepEqual(await completeMission(missionInput({ phase: 'DAY1_PAUSED' }), store), {
-      ok: false, reason: 'MISSION_NOT_ALLOWED',
-    });
-    assert.equal(store.calls.length, 0);
-  });
-
-  test('awards the Lucky card below 0.2 but not at the 0.2 boundary', async () => {
-    const luckyStore = missionStore();
-    const lucky = await completeMission(missionInput({ randomValue: 0.199999 }), luckyStore);
-    assert.equal(lucky.ok, true);
-    assert.equal(lucky.score.invincibleCardDelta, 1);
-    assert.equal(lucky.score.luckyReward, true);
-    assert.equal(luckyStore.calls[0].invincibleCardDelta, 1);
-
-    const boundaryStore = missionStore();
-    const boundary = await completeMission(missionInput({ randomValue: 0.2 }), boundaryStore);
-    assert.equal(boundary.ok, true);
-    assert.equal(boundary.score.invincibleCardDelta, 0);
-    assert.equal(boundary.score.luckyReward, false);
-    assert.equal(boundaryStore.calls[0].invincibleCardDelta, 0);
-  });
-
-  test('does not mutate mission input', async () => {
-    const input = missionInput({ mission: { id: 'mission-1', points: 25 } });
+    const gateway = missionGateway(result);
+    const input = missionInput();
     const before = structuredClone(input);
-    await completeMission(input, missionStore());
+
+    assert.deepEqual(await completeMission(input, gateway), result);
+    assert.deepEqual(gateway.calls, [{ missionId: 'mission-1' }]);
     assert.deepEqual(input, before);
   });
 
-  test('returns persistence errors separately', async () => {
-    const store = { applyMissionCompletion: async () => { throw new Error('offline'); } };
-    assert.deepEqual(await completeMission(missionInput(), store), {
+  test('preserves server determination of a final mission result', async () => {
+    const result = missionSuccess({
+      missionId: 'final-1',
+      reward: { missionId: 'final-1', points: 100, isFinalMission: true },
+      isFinalMission: true,
+    });
+    const gateway = missionGateway(result);
+
+    assert.deepEqual(await completeMission({ missionId: 'final-1' }, gateway), result);
+    assert.deepEqual(gateway.calls, [{ missionId: 'final-1' }]);
+  });
+
+  test('preserves callable domain rejections', async () => {
+    const gateway = missionGateway({ ok: false, reason: 'ALREADY_COMPLETED' });
+    assert.deepEqual(await completeMission(missionInput(), gateway), {
+      ok: false, reason: 'ALREADY_COMPLETED',
+    });
+  });
+
+  test('maps unexpected gateway failures to persistence errors', async () => {
+    const gateway = { completeMission: async () => { throw new Error('offline'); } };
+    assert.deepEqual(await completeMission(missionInput(), gateway), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });

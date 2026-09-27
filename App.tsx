@@ -50,9 +50,9 @@ import {
 import {
   firebaseGameLogStore,
   firebaseCaptureStore,
-  firebaseMissionCompletionStore,
   firebasePowerupStore,
 } from './src/infrastructure/firebase/gameplayStores';
+import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
 import {
   movePlayerToTravelLimitWait,
   startPlayerTravelWait,
@@ -323,27 +323,11 @@ const App: React.FC = () => {
     }
   }, [currentUser, privateLocation, gameConfig.gameStatus, handleUpdatePrivateLocation, addGameLog]);
 
-  // ミッション完了
-  const handleScoreUpdate = useCallback(async (mission: Mission, isFinalMission: boolean): Promise<void> => {
-    if (!currentUser) return;
-
-    const result = await completeMission({
-      mission,
-      isFinalMission,
-      phase: gameConfig.gameStatus,
-      randomValue: Math.random(),
-      playerId: currentUser.id,
-      team: currentUser.team === 'A' ? 'A' : 'B',
-    }, firebaseMissionCompletionStore);
-    if (result.ok === false) throw new Error(result.reason);
-
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const buffMessage = result.score.luckyReward ? '【LUCKY】無敵カード獲得！' : '';
-    await addGameLog(
-      `${timeStr} Team ${currentUser.team} ${currentUser.name} がミッション達成 (+${result.score.playerScoreDelta}pt) ${buffMessage}`.trim(),
-      'MISSION'
-    );
-  }, [currentUser, gameConfig.gameStatus, addGameLog]);
+  // Mission scoring, identity, duplicate enforcement, and logging are server-authoritative.
+  const handleScoreUpdate = useCallback(
+    (missionId: string) => completeMission({ missionId }, firebaseMissionCompletionGateway),
+    [],
+  );
 
   // SOS
   const handleSOS = async (): Promise<void> => {

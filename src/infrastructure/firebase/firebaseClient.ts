@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { getAuth, connectAuthEmulator } from "firebase/auth";
+import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 
 // 1. あなたの環境変数（Config）をここに復活させます
 const firebaseConfig = {
@@ -17,12 +18,14 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const dbInstance = getFirestore(app);
 export const auth = getAuth(app);
+export const functions = getFunctions(app, 'asia-northeast1');
 
 // 3. エミュレータ接続設定
 if (typeof window !== 'undefined' && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
   console.log("🛠️ Admin App connecting to Emulators...");
   connectFirestoreEmulator(dbInstance, '127.0.0.1', 8080);
   connectAuthEmulator(auth, "http://127.0.0.1:9099");
+  connectFunctionsEmulator(functions, '127.0.0.1', 5001);
 }
 
 export const db = dbInstance;

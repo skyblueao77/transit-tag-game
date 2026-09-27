@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { GameConfig, Mission, User } from '../types';
 import { FINAL_MISSIONS } from '../constants';
+import type { CompleteMissionResult } from '../src/application/gameplayPorts';
 import { canCompleteMission, isSameMissionId } from '../src/game';
 import { Target, CheckCircle2, MapPin, Hourglass, Camera, Hash } from 'lucide-react';
 
 interface Props {
   config: GameConfig;
   user: User;
-  onComplete: (mission: Mission, isFinalMission: boolean) => Promise<void>;
+  onComplete: (missionId: string) => Promise<CompleteMissionResult>;
   onExposeLocation: () => Promise<void>;
   missions: Mission[];
 }
@@ -77,14 +78,15 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
 
     setIsSubmitting(true);
     try {
-      await onComplete(mission, isFinalMission);
+      const result = await onComplete(mission.id);
+      if (result.ok === false) throw new Error(result.reason);
 
-      if (config.isFinalMissionActive) {
+      if (isFinalMission) {
         setIsFinalReported(true);
         alert('最終ミッション達成！おめでとうございます！\n写真をLINEで送るのを忘れずに！');
       } else {
         setLastCompletedMissionId(mission.id);
-        alert(`ミッション完了！ +${mission.points}pt 加算されました。\n写真をLINEで送るのを忘れずに！`);
+        alert(`ミッション完了！ +${result.reward.points}pt 加算されました。\n写真をLINEで送るのを忘れずに！`);
       }
     } catch (error) {
       console.error('Mission error:', error);
