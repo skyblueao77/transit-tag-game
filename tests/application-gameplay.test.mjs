@@ -18,13 +18,6 @@ function missionGateway(result) {
   };
 }
 
-function captureStore() {
-  const calls = [];
-  return {
-    calls,
-    applyCapture: async result => calls.push(structuredClone(result)),
-  };
-}
 
 function powerupStore() {
   const calls = [];
@@ -54,15 +47,6 @@ function player(id, team, overrides = {}) {
   return { id, team, status: 'ACTIVE', invincibleCards: 0, ...overrides };
 }
 
-const captureInput = overrides => ({
-  captorId: 'oni-1',
-  targetId: 'runner-1',
-  players: [player('oni-1', 'A'), player('runner-1', 'B')],
-  teamRoles: { teamARole: 'ONI', teamBRole: 'RUNNER' },
-  phase: 'DAY1_ACTIVE',
-  now: 1_000_000,
-  ...overrides,
-});
 
 const powerupInput = overrides => ({
   playerId: 'runner-1',
@@ -120,67 +104,47 @@ describe('completeMission application use case', () => {
 });
 
 describe('capturePlayer application use case', () => {
-  test('persists exactly once for the explicitly supplied target', async () => {
-    const store = captureStore();
-    const result = await capturePlayer(captureInput(), store);
-
-    assert.equal(result.ok, true);
-    assert.equal(store.calls.length, 1);
-    assert.equal(store.calls[0].event.targetId, 'runner-1');
-    assert.deepEqual(result.capture, store.calls[0]);
-  });
-
-  test('rejects invalid, invincible, and same-player captures without persistence', async () => {
-    const cases = [
-      [captureInput({ phase: 'DAY1_PAUSED' }), 'PHASE'],
-      [captureInput({ players: [player('oni-1', 'A'), player('runner-1', 'B', { status: 'WAITING' })] }), 'TARGET_STATUS'],
-      [captureInput({ players: [player('oni-1', 'A'), player('runner-1', 'B', { invincibleUntil: 1_000_001 })] }), 'TARGET_INVINCIBLE'],
-      [captureInput({ targetId: 'oni-1' }), 'SAME_PLAYER'],
-    ];
-    for (const [input, expectedReason] of cases) {
-      const store = captureStore();
-      const result = await capturePlayer(input, store);
-      assert.equal(result.ok, false);
-      assert.equal(result.reason, 'CAPTURE_REJECTED');
-      assert.equal(result.domainReason, expectedReason);
-      assert.equal(store.calls.length, 0);
-    }
-  });
-
-  test('preserves Core reward, role changes, player changes, deadline, and event', async () => {
-    const store = captureStore();
-    const result = await capturePlayer(captureInput({
-      players: [player('oni-1', 'A'), player('oni-2', 'A'), player('runner-1', 'B')],
-    }), store);
-
-    assert.equal(result.ok, true);
-    assert.deepEqual(result.capture.reward, { team: 'A', scoreDelta: 50 });
-    assert.deepEqual(result.capture.teamRoles, { teamARole: 'RUNNER', teamBRole: 'ONI' });
-    assert.equal(result.capture.nextRevealTime, 1_000_000 + 30 * 60 * 1000);
-    assert.deepEqual(result.capture.event, {
-      type: 'CAPTURE', captorId: 'oni-1', targetId: 'runner-1',
-    });
-    assert.deepEqual(result.capture.playerChanges, [
-      { playerId: 'oni-1', status: 'ACTIVE', waitingUntil: 0, invincibleCardsDelta: 1 },
-      { playerId: 'oni-2', status: 'ACTIVE', waitingUntil: 0, invincibleCardsDelta: 1 },
-      {
-        playerId: 'runner-1', status: 'WAITING', waitingUntil: 1_000_000 + 30 * 60 * 1000,
-        invincibleUntil: 0, invincibleCardsDelta: 0,
+  test('forwards only the explicit targetId and returns the trusted gateway result', async () => {
+    const calls = [];
+    const capture = {
+      allowed: true,
+      reward: { team: 'A', scoreDelta: 50 },
+      teamRoles: { teamARole: 'RUNNER', teamBRole: 'ONI' },
+      playerChanges: [],
+      nextRevealTime: 1_900_000,
+      waitingDuration: 1_800_000,
+      event: { type: 'CAPTURE', captorId: 'server-captor', targetId: 'runner-1' },
+    };
+    const gateway = {
+      capture: async input => {
+        calls.push(structuredClone(input));
+        return { ok: true, capture };
       },
-    ]);
-    assert.deepEqual(store.calls[0], result.capture);
+    };
+    const input = { targetId: 'runner-1' };
+    const before = structuredClone(input);
+
+    assert.deepEqual(await capturePlayer(input, gateway), { ok: true, capture });
+    assert.deepEqual(calls, [{ targetId: 'runner-1' }]);
+    assert.deepEqual(input, before);
   });
 
-  test('does not mutate input players', async () => {
-    const input = captureInput();
-    const before = structuredClone(input.players);
-    await capturePlayer(input, captureStore());
-    assert.deepEqual(input.players, before);
+  test('preserves server domain rejections', async () => {
+    const gateway = {
+      capture: async () => ({
+        ok: false,
+        reason: 'CAPTURE_REJECTED',
+        domainReason: 'TARGET_INVINCIBLE',
+      }),
+    };
+    assert.deepEqual(await capturePlayer({ targetId: 'runner-1' }, gateway), {
+      ok: false, reason: 'CAPTURE_REJECTED', domainReason: 'TARGET_INVINCIBLE',
+    });
   });
 
-  test('returns persistence errors separately', async () => {
-    const store = { applyCapture: async () => { throw new Error('offline'); } };
-    assert.deepEqual(await capturePlayer(captureInput(), store), {
+  test('maps unexpected gateway failures to persistence errors', async () => {
+    const gateway = { capture: async () => { throw new Error('offline'); } };
+    assert.deepEqual(await capturePlayer({ targetId: 'runner-1' }, gateway), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });

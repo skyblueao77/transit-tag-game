@@ -49,9 +49,9 @@ import {
 } from './src/infrastructure/firebase/auth';
 import {
   firebaseGameLogStore,
-  firebaseCaptureStore,
   firebasePowerupStore,
 } from './src/infrastructure/firebase/gameplayStores';
+import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
 import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
 import {
   movePlayerToTravelLimitWait,
@@ -351,41 +351,20 @@ const App: React.FC = () => {
     }
   };
 
-  // 捕獲処理
+  // Capture validation, state changes, reward, and logging are server-authoritative.
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {
     if (!currentUser) return;
 
     const target = allUsers.find(user => user.id === targetId);
     if (!target || !confirm(`${target.name} を捕獲しましたか？`)) return;
 
-    const result = await capturePlayer({
-      captorId: currentUser.id,
-      targetId,
-      players: allUsers.map(user => ({
-        id: user.id,
-        team: user.team,
-        status: user.status,
-        invincibleUntil: user.invincibleUntil,
-        invincibleCards: user.invincibleCards ?? 0,
-      })),
-      teamRoles: gameConfig,
-      phase: gameConfig.gameStatus,
-      now: Date.now(),
-    }, firebaseCaptureStore);
-
+    const result = await capturePlayer({ targetId }, firebaseCaptureGateway);
     if (result.ok === false) {
       alert(result.reason === 'CAPTURE_REJECTED'
         ? 'このプレイヤーは捕獲できません。'
         : '捕獲処理に失敗しました。');
-      return;
     }
-
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    await addGameLog(
-      `${timeStr} Team ${currentUser.team} が捕獲成功！攻守交代 (+${result.capture.reward.scoreDelta}pt)`,
-      'CAPTURE'
-    );
-  }, [currentUser, allUsers, gameConfig, addGameLog]);
+  }, [currentUser, allUsers]);
 
   // 無敵カード使用
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {

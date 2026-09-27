@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test:unit": "npm run build && node --test test/missionService.test.mjs",
+    "test:unit": "npm run build && node --test test/missionService.test.mjs test/captureService.test.mjs",
     "test:integration": "node --test test/mission.integration.test.mjs"
   },
   "dependencies": {

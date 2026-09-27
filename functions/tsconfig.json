@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "CommonJS",
     "moduleResolution": "Node",
+    "rewriteRelativeImportExtensions": true,
     "rootDir": "..",
     "outDir": "lib",
     "strict": true,
@@ -13,8 +14,12 @@
   },
   "include": [
     "src/**/*.ts",
+    "../src/game/capture.ts",
     "../src/game/missions.ts",
+    "../src/game/phases.ts",
+    "../src/game/roles.ts",
     "../src/game/scoring.ts",
+    "../src/game/time.ts",
     "../src/game/types.ts"
   ]
 }
