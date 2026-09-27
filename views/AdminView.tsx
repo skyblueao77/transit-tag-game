@@ -6,8 +6,9 @@ import {
   AlertTriangle, Shuffle, XCircle, Flag, MapPin,
   RefreshCw 
 } from 'lucide-react';
-import { auth, db } from '../firebase';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { isCurrentAuthUserAdmin, signInAdmin } from '../src/infrastructure/firebase/auth';
+import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
+import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 interface Props {
@@ -48,9 +49,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
         message,
         type,
       };
-      await updateDoc(doc(db, 'game_config', 'current'), {
-        logs: [newLog, ...(config.logs ?? [])].slice(0, 200),
-      });
+      await firebaseGameLogStore.append(newLog, config.logs ?? []);
     } catch (error) {
       console.error('Log error:', error);
     }
@@ -277,7 +276,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleResetAllData = async (): Promise<void> => {
     if (!confirm('【⚠️警告】全データを消去しますか？')) return;
-    if (!auth.currentUser || !(await getDoc(doc(db, 'admins', auth.currentUser.uid))).exists()) {
+    if (!(await isCurrentAuthUserAdmin())) {
       alert('管理者権限が確認できません。');
       return;
     }
@@ -310,10 +309,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
           <form onSubmit={async e => {
             e.preventDefault();
             try {
-              const credential = await signInWithEmailAndPassword(auth, emailInput, passwordInput);
-              const adminDoc = await getDoc(doc(db, 'admins', credential.user.uid));
-              if (!adminDoc.exists()) {
-                await auth.signOut();
+              const authorized = await signInAdmin(emailInput, passwordInput);
+              if (!authorized) {
                 alert('このアカウントには管理者権限がありません');
                 return;
               }
