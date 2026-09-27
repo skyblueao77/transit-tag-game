@@ -40,5 +40,8 @@ repomix-output.xml
 .env.*
 !.env.example
 
+# Cloud Functions build output
+/functions/lib
+
 # OS files
 Thumbs.db

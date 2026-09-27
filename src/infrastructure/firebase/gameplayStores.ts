@@ -3,28 +3,9 @@ import { db } from './firebaseClient';
 import type { GameLog } from '../../../types';
 import type {
   CaptureStore,
-  MissionCompletionStore,
   PowerupStore,
 } from '../../application';
 
-export const firebaseMissionCompletionStore: MissionCompletionStore = {
-  applyMissionCompletion: async input => {
-    const batch = writeBatch(db);
-    const configRef = doc(db, 'game_config', 'current');
-    const playerRef = doc(db, 'users', input.playerId);
-    const teamScoreField = input.team === 'A' ? 'teamAScore' : 'teamBScore';
-
-    batch.update(configRef, { [teamScoreField]: increment(input.teamScoreDelta) });
-    const playerUpdate: Record<string, unknown> = {
-      score: increment(input.playerScoreDelta),
-    };
-    if (input.invincibleCardDelta !== 0) {
-      playerUpdate.invincibleCards = increment(input.invincibleCardDelta);
-    }
-    batch.update(playerRef, playerUpdate);
-    await batch.commit();
-  },
-};
 
 export const firebaseCaptureStore: CaptureStore = {
   applyCapture: async result => {

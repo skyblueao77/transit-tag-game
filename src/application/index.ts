@@ -9,9 +9,10 @@ export type {
   CapturePlayerInput,
   CapturePlayerResult,
   CaptureStore,
+  CompleteMissionFailureReason,
   CompleteMissionInput,
   CompleteMissionResult,
-  MissionCompletionStore,
+  MissionCompletionGateway,
   PowerupStore,
 } from './gameplayPorts.ts';
 export type {

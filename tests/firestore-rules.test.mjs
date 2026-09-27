@@ -96,9 +96,16 @@ before(async () => {
   userDUid = userD.localId;
   adminToken = (await auth('signUp', { email: 'admin@example.test', password: 'test-password-123' })).idToken;
 
-  await seed(`users/${userAUid}`, { id: userAUid, team: 'A', name: 'User A' });
-  await seed(`users/${userBUid}`, { id: userBUid, team: 'B', name: 'User B' });
+  await seed(`users/${userAUid}`, {
+    id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0, invincibleCards: 1, invincibleUntil: 0,
+  });
+  await seed(`users/${userBUid}`, {
+    id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0,
+  });
   await seed('missions/mission-1', { title: 'Test mission' });
+  await seed('missionCompletions/seed-team-mission', {
+    missionId: 'mission-1', team: 'A', completedBy: userAUid, points: 15,
+  });
   await seed('game_config/current', { status: 'WAITING' });
 
   adminUid = (await auth('lookup', { idToken: adminToken })).users[0].localId;
@@ -121,7 +128,10 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(`users/${userAUid}`, {
       token: userAToken,
       method: 'PATCH',
-      body: fields({ id: userAUid, team: 'A', name: 'Updated A' }),
+      body: fields({
+        id: userAUid, team: 'A', name: 'Updated A', status: 'ACTIVE', score: 0,
+        invincibleCards: 1, invincibleUntil: 0,
+      }),
     })).status, 200);
   });
 
@@ -130,6 +140,91 @@ describe('Firestore Security Rules', () => {
       token: userAToken,
       method: 'PATCH',
       body: fields({ id: userBUid, team: 'A', name: 'Tampered' }),
+    })).status, 403);
+  });
+
+  test('prevents owners from changing their team after setup', async () => {
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        id: userAUid, team: 'B', name: 'User A', status: 'ACTIVE', score: 0,
+        invincibleCards: 1, invincibleUntil: 0,
+      }),
+    })).status, 403);
+  });
+
+  test('prevents owner and other-player score writes', async () => {
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ score: 1000 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ score: 1000 }),
+    })).status, 403);
+    assert.equal((await firestore('game_config/current', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ teamAScore: 1000 }),
+    })).status, 403);
+  });
+
+  test('allows only the existing single-card consumption write shape', async () => {
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0,
+        invincibleCards: 2, invincibleUntil: 0,
+      }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0,
+        invincibleCards: 0, invincibleUntil: 1,
+      }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: userBToken,
+      method: 'PATCH',
+      body: fields({
+        id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0,
+        invincibleCards: -1, invincibleUntil: Date.now() + 30 * 60 * 1000,
+      }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0,
+        invincibleCards: 0, invincibleUntil: Date.now() + 30 * 60 * 1000,
+      }),
+    })).status, 200);
+  });
+
+  test('mission completion records are readable by participants and never client-writable', async () => {
+    assert.equal((await firestore('missionCompletions/seed-team-mission')).status, 403);
+    assert.equal((await firestore('missionCompletions/seed-team-mission', {
+      token: userAToken,
+    })).status, 200);
+    assert.equal((await firestore('missionCompletions/new-record', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ missionId: 'mission-1', team: 'A' }),
+    })).status, 403);
+    assert.equal((await firestore('missionCompletions/seed-team-mission', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ points: 999 }),
+    })).status, 403);
+    assert.equal((await firestore('missionCompletions/seed-team-mission', {
+      token: userAToken,
+      method: 'DELETE',
     })).status, 403);
   });
 
