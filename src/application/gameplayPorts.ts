@@ -93,3 +93,39 @@ export type ActivateInvincibilityResult =
 export interface InvincibilityGateway {
   activate(input: ActivateInvincibilityInput): Promise<ActivateInvincibilityResult>;
 }
+
+export type StartWaitingInput = Record<string, never>;
+export type ResumeWaitingInput = Record<string, never>;
+
+export type WaitingFailureReason =
+  | 'INVALID_ARGUMENT'
+  | 'PLAYER_NOT_FOUND'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_PLAYER_STATE'
+  | 'INVALID_GAME_CONFIG'
+  | 'INVALID_TEAM'
+  | 'PERSISTENCE_ERROR'
+  | 'INVALID_STATUS'
+  | 'INVALID_PHASE'
+  | 'PHASE'
+  | 'WRONG_ROLE'
+  | 'INVALID_WAITING_STATE'
+  | 'INVALID_SHINKANSEN_START'
+  | 'SHINKANSEN_LIMIT_NOT_REACHED'
+  | 'NOT_WAITING'
+  | 'INVALID_WAITING_DEADLINE'
+  | 'WAITING_NOT_EXPIRED'
+  | 'INVALID_TIME';
+
+export type StartWaitingResult =
+  | { ok: true; waitingUntil: number; duration: number }
+  | { ok: false; reason: WaitingFailureReason };
+
+export type ResumeWaitingResult =
+  | { ok: true; resumed: boolean }
+  | { ok: false; reason: WaitingFailureReason };
+
+export interface WaitingGateway {
+  startWaiting(input: StartWaitingInput): Promise<StartWaitingResult>;
+  resumeWaiting(input: ResumeWaitingInput): Promise<ResumeWaitingResult>;
+}

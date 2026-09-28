@@ -58,6 +58,18 @@ export {
   remainingWaitingSeconds,
 } from './waiting';
 export {
+  resumeExpiredWaiting,
+  startManualWaiting,
+  startShinkansenLimitWaiting,
+} from './waitingLifecycle';
+export type {
+  WaitingActionKind,
+  WaitingLifecycleInput,
+  WaitingLifecycleResult,
+  WaitingRejectionReason,
+  WaitingStatus,
+} from './waitingLifecycle';
+export {
   CAPTURE_REWARD_POINTS,
   resolveCapture,
   validateCapture,
