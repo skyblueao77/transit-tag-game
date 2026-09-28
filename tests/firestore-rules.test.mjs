@@ -14,6 +14,8 @@ let userCToken;
 let userCUid;
 let userDToken;
 let userDUid;
+let userEToken;
+let userEUid;
 let adminToken;
 let adminUid;
 
@@ -100,6 +102,9 @@ before(async () => {
   const userD = await auth('signUp', {});
   userDToken = userD.idToken;
   userDUid = userD.localId;
+  const userE = await auth('signUp', {});
+  userEToken = userE.idToken;
+  userEUid = userE.localId;
   adminToken = (await auth('signUp', { email: 'admin@example.test', password: 'test-password-123' })).idToken;
 
   await seed(`users/${userAUid}`, {
@@ -130,7 +135,41 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore('game_config/current', { token: anonymousToken })).status, 200);
   });
 
-  test('allows a user to create and update their own valid user document', async () => {
+  test('rejects unauthenticated user creation and coordinate fields in public user documents', async () => {
+    const validCreate = {
+      id: userDUid, team: 'A', name: 'User D', status: 'ACTIVE', score: 0, invincibleCards: 0,
+    };
+    assert.equal((await firestore(`users/${userDUid}`, {
+      method: 'PATCH',
+      body: fields(validCreate),
+    })).status, 403);
+
+    for (const coordinateFields of [
+      { privateLatitude: 35 },
+      { privateLongitude: 139 },
+      { privateLatitude: 35, privateLongitude: 139 },
+      { latitude: 35 },
+      { longitude: 139 },
+      { lastLat: 35 },
+      { lastLng: 139 },
+    ]) {
+      assert.equal((await firestore(`users/${userDUid}`, {
+        token: userDToken,
+        method: 'PATCH',
+        body: fields({ ...validCreate, ...coordinateFields }),
+      })).status, 403);
+    }
+
+    assert.equal((await firestore(`users/${userCUid}`, {
+      token: userCToken,
+      method: 'PATCH',
+      body: fields({
+        id: userCUid, team: 'A', name: 'User C', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      }),
+    })).status, 200);
+  });
+
+  test('allows a user to update their own valid user document', async () => {
     assert.equal((await firestore(`users/${userAUid}`, {
       token: userAToken,
       method: 'PATCH',
@@ -138,6 +177,46 @@ describe('Firestore Security Rules', () => {
         id: userAUid, team: 'A', name: 'Updated A', status: 'ACTIVE', score: 0,
         invincibleCards: 1, invincibleUntil: 0,
       }),
+    })).status, 200);
+  });
+
+  test('blocks private coordinates in owner and administrator user writes', async () => {
+    for (const coordinateFields of [
+      { privateLatitude: 35 },
+      { privateLongitude: 139 },
+      { privateLatitude: 35, privateLongitude: 139 },
+      { latitude: 35 },
+      { longitude: 139 },
+    ]) {
+      assert.equal((await firestore(`users/${userAUid}`, {
+        token: userAToken,
+        method: 'PATCH',
+        body: fields(coordinateFields),
+      })).status, 403);
+      assert.equal((await firestore(`users/${userBUid}`, {
+        token: adminToken,
+        method: 'PATCH',
+        body: fields(coordinateFields),
+      })).status, 403);
+    }
+
+    await seed(`users/${userEUid}`, {
+      id: userEUid, team: 'A', name: 'User E', status: 'ACTIVE', score: 0,
+      invincibleCards: 0, privateLatitude: 35,
+    });
+    assert.equal((await firestore(`users/${userEUid}`, {
+      token: userEToken,
+      method: 'PATCH',
+      body: fields({
+        id: userEUid, team: 'A', name: 'User E', status: 'ACTIVE', score: 0,
+        invincibleCards: 0, privateLatitude: 36,
+      }),
+    })).status, 403);
+
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ name: 'Updated by admin' }),
     })).status, 200);
   });
 
@@ -431,6 +510,16 @@ describe('Firestore Security Rules', () => {
       token: userAToken,
       method: 'PATCH',
       body: fields({ lastLng: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ latitude: 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({ longitude: 1 }),
     })).status, 403);
   });
 

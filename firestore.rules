@@ -20,6 +20,13 @@ service cloud.firestore {
         || request.resource.data.status in ['EMERGENCY', 'RETIRED'];
     }
 
+    function userDocumentHasNoCoordinateFields() {
+      return !request.resource.data.keys().hasAny([
+        'privateLatitude', 'privateLongitude', 'latitude', 'longitude',
+        'lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil'
+      ]);
+    }
+
     match /admins/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
@@ -73,17 +80,17 @@ service cloud.firestore {
           || request.resource.data.waitingUntil == 0)
         && (!request.resource.data.keys().hasAny(['shinkansenStartTime'])
           || request.resource.data.shinkansenStartTime == null)
-        && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']);
+        && userDocumentHasNoCoordinateFields();
       // This preserves the current client architecture while protecting
       // game-wide configuration and other players from non-admin writes.
-      allow update: if (isAdmin() && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']))
+      allow update: if (isAdmin() && userDocumentHasNoCoordinateFields())
         || (signedIn() && request.auth.uid == uid
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'score', 'team', 'invincibleCards', 'invincibleUntil',
             'waitingUntil', 'shinkansenStartTime'
           ])
           && ownerStatusChangeIsValid()
-          && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']));
+          && userDocumentHasNoCoordinateFields());
       allow delete: if isAdmin();
     }
 
