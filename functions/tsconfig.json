@@ -21,6 +21,7 @@
     "../src/game/roles.ts",
     "../src/game/scoring.ts",
     "../src/game/time.ts",
+    "../src/game/waitingLifecycle.ts",
     "../src/game/types.ts"
   ]
 }

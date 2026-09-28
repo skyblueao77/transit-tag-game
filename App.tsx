@@ -27,6 +27,8 @@ import {
   completeMission,
   exposeLocation,
   updatePrivateLocation,
+  resumeWaiting,
+  startWaiting,
 } from './src/application';
 import {
   firebaseExposedLocationStore,
@@ -38,8 +40,6 @@ import {
   getPlayerRole,
   getRoleForTeam,
   isGamePaused,
-  SHINKANSEN_LIMIT_DURATION_MS,
-  SHINKANSEN_WAIT_DURATION_MS,
 } from './src/game';
 import { INITIAL_GAME_CONFIG } from './constants';
 import {
@@ -51,11 +51,8 @@ import { firebaseGameLogStore } from './src/infrastructure/firebase/gameplayStor
 import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
 import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
 import { firebaseInvincibilityGateway } from './src/infrastructure/firebase/powerupActions';
-import {
-  movePlayerToTravelLimitWait,
-  startPlayerTravelWait,
-  updatePlayerStatus,
-} from './src/infrastructure/firebase/playerStore';
+import { firebaseWaitingGateway } from './src/infrastructure/firebase/waitingActions';
+import { updatePlayerStatus } from './src/infrastructure/firebase/playerStore';
 import {
   subscribeCurrentPlayer,
   subscribeExposedLocations,
@@ -201,36 +198,6 @@ const App: React.FC = () => {
     );
   }, [authUserId, lastBroadcastTime]);
 
-  // 新幹線移動時間超過時の自動待機モード移行
-  useEffect(() => {
-    if (isGamePaused(gameConfig.gameStatus)) return;
-
-    const now = Date.now();
-    const TWO_POINT_FIVE_HOURS = SHINKANSEN_LIMIT_DURATION_MS;
-
-    allUsers.forEach(user => {
-      if (!user.shinkansenStartTime || user.status !== 'ACTIVE') return;
-      if (now - user.shinkansenStartTime <= TWO_POINT_FIVE_HOURS) return;
-
-      (async () => {
-        try {
-          await movePlayerToTravelLimitWait(
-            user.id,
-            now + SHINKANSEN_WAIT_DURATION_MS,
-          );
-          await addGameLog(
-            `Team ${user.team} ${user.name} が新幹線移動時間超過のため自動で待機モードに移行しました。`,
-            'SYSTEM'
-          );
-          if (user.id === currentUser?.id) {
-            alert('新幹線移動時間（2.5時間）を超過したため、自動的に待機モードに移行しました。1時間後に解除されます。');
-          }
-        } catch (error) {
-          console.error('Failed to auto-transition user to waiting status:', error);
-        }
-      })();
-    });
-  }, [allUsers, gameConfig.gameStatus, currentUser?.id, addGameLog]);
 
   const handleUpdatePrivateLocation = useCallback(
     (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebasePrivateLocationStore),
@@ -379,30 +346,22 @@ const App: React.FC = () => {
     alert('無敵モード発動！');
   }, [currentUser]);
 
-  // 新幹線待機
+  // Waiting eligibility, deadline, persistence, and logging are server-authoritative.
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
-    if (!currentUser || (isGamePaused(gameConfig.gameStatus) && !isAdmin)) return;
+    if (!currentUser || !confirm('新幹線移動（1時間待機）を開始しますか？')) return;
 
-    if (!confirm('新幹線移動（1時間待機）を開始しますか？')) return;
-
-    try {
-      const now = Date.now();
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      await startPlayerTravelWait(
-        currentUser.id,
-        now + SHINKANSEN_WAIT_DURATION_MS,
-        now,
-      );
-      await addGameLog(
-        `${timeStr} Team ${currentUser.team} ${currentUser.name} が新幹線待機を開始 (60分)`,
-        'SYSTEM'
-      );
-      alert('待機モードに入りました。お疲れ様でした。');
-    } catch (error) {
-      console.error('Shinkansen wait error:', error);
-      alert('通信エラー：新幹線モードへの切り替えに失敗しました。トンネルを抜けてから再度お試しください。');
+    const result = await startWaiting({}, firebaseWaitingGateway);
+    if (!result.ok) {
+      alert('現在の状態では待機を開始できません。');
+      return;
     }
-  }, [currentUser, gameConfig.gameStatus, isAdmin, addGameLog]);
+    alert('待機モードに入りました。お疲れ様でした。');
+  }, [currentUser]);
+
+  const handleResumeWaiting = useCallback(async (): Promise<void> => {
+    const result = await resumeWaiting({}, firebaseWaitingGateway);
+    if (result.ok === false) console.error('Waiting resume request was rejected:', result.reason);
+  }, []);
 
   // ---- 画面分岐 ----
 
@@ -599,6 +558,7 @@ const App: React.FC = () => {
                     onCapture={handleCapture}
                     onActivateInvincibility={handleActivateInvincibility}
                     onStartShinkansenWait={handleStartShinkansenWait}
+                    onResumeWaiting={handleResumeWaiting}
                   />
                 }
               />

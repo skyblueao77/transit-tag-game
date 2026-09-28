@@ -27,26 +27,3 @@ export async function updatePlayerStatus(
 ): Promise<void> {
   await updateDoc(doc(db, 'users', playerId), { status });
 }
-
-export async function movePlayerToTravelLimitWait(
-  playerId: string,
-  waitingUntil: number,
-): Promise<void> {
-  await updateDoc(doc(db, 'users', playerId), {
-    status: 'WAITING',
-    waitingUntil,
-    shinkansenStartTime: null,
-  });
-}
-
-export async function startPlayerTravelWait(
-  playerId: string,
-  waitingUntil: number,
-  startedAt: number,
-): Promise<void> {
-  await updateDoc(doc(db, 'users', playerId), {
-    status: 'WAITING',
-    waitingUntil,
-    shinkansenStartTime: startedAt,
-  });
-}

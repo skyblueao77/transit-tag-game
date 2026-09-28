@@ -44,7 +44,13 @@ function fields(values) {
     fields: Object.fromEntries(
       Object.entries(values).map(([key, value]) => [
         key,
-        typeof value === 'number' ? { integerValue: value } : { stringValue: value },
+        value === null
+          ? { nullValue: null }
+          : typeof value === 'number'
+            ? { integerValue: value }
+            : typeof value === 'boolean'
+              ? { booleanValue: value }
+              : { stringValue: value },
       ]),
     ),
   };
@@ -150,6 +156,46 @@ describe('Firestore Security Rules', () => {
       body: fields({
         id: userAUid, team: 'B', name: 'User A', status: 'ACTIVE', score: 0,
         invincibleCards: 1, invincibleUntil: 0,
+      }),
+    })).status, 403);
+  });
+
+  test('blocks owner Waiting authority while retaining temporary SOS status writes', async () => {
+    const futureDeadline = Date.now() + 60 * 60 * 1000;
+    for (const body of [
+      fields({ status: 'WAITING' }),
+      fields({ waitingUntil: futureDeadline }),
+      fields({ shinkansenStartTime: Date.now() }),
+      fields({ status: 'EMERGENCY', waitingUntil: futureDeadline }),
+      fields({ status: 'RETIRED', shinkansenStartTime: Date.now() }),
+    ]) {
+      assert.equal((await firestore(`users/${userAUid}`, {
+        token: userAToken, method: 'PATCH', body,
+      })).status, 403);
+    }
+
+    const ownerStatusDocument = status => fields({
+      id: userAUid,
+      team: 'A',
+      name: 'Updated A',
+      status,
+      score: 0,
+      invincibleCards: 1,
+      invincibleUntil: 0,
+    });
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken, method: 'PATCH', body: ownerStatusDocument('EMERGENCY'),
+    })).status, 200);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken, method: 'PATCH', body: ownerStatusDocument('RETIRED'),
+    })).status, 200);
+
+    assert.equal((await firestore(`users/${userCUid}`, {
+      token: userCToken,
+      method: 'PATCH',
+      body: fields({
+        id: userCUid, team: 'A', name: 'New player', status: 'ACTIVE', score: 0,
+        invincibleCards: 0, waitingUntil: futureDeadline, shinkansenStartTime: Date.now(),
       }),
     })).status, 403);
   });
@@ -424,6 +470,11 @@ describe('Firestore Security Rules', () => {
       token: adminToken,
       method: 'PATCH',
       body: fields({ title: 'Updated mission' }),
+    })).status, 200);
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ status: 'WAITING', waitingUntil: Date.now() + 60 * 60 * 1000, shinkansenStartTime: null }),
     })).status, 200);
     assert.equal((await firestore(`users/${userBUid}`, {
       token: adminToken,

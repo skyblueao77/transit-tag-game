@@ -4,6 +4,8 @@ import {
   activateInvincibility,
   capturePlayer,
   completeMission,
+  resumeWaiting,
+  startWaiting,
 } from '../src/application/index.ts';
 
 
@@ -128,6 +130,40 @@ describe('capturePlayer application use case', () => {
   test('maps unexpected gateway failures to persistence errors', async () => {
     const gateway = { capture: async () => { throw new Error('offline'); } };
     assert.deepEqual(await capturePlayer({ targetId: 'runner-1' }, gateway), {
+      ok: false, reason: 'PERSISTENCE_ERROR',
+    });
+  });
+});
+
+describe('Waiting application use cases', () => {
+  test('startWaiting sends only an empty intent and returns the trusted result', async () => {
+    const calls = [];
+    const trusted = { ok: true, waitingUntil: 1_900_000, duration: 3_600_000 };
+    const gateway = { startWaiting: async input => { calls.push(structuredClone(input)); return trusted; } };
+    assert.deepEqual(await startWaiting({}, gateway), trusted);
+    assert.deepEqual(calls, [{}]);
+  });
+
+  test('startWaiting preserves server rejection and maps transport failure', async () => {
+    const rejection = { ok: false, reason: 'WRONG_ROLE' };
+    assert.deepEqual(await startWaiting({}, { startWaiting: async () => rejection }), rejection);
+    assert.deepEqual(await startWaiting({}, { startWaiting: async () => { throw new Error('offline'); } }), {
+      ok: false, reason: 'PERSISTENCE_ERROR',
+    });
+  });
+
+  test('resumeWaiting sends only an empty intent and returns the server result', async () => {
+    const calls = [];
+    const trusted = { ok: true, resumed: true };
+    const gateway = { resumeWaiting: async input => { calls.push(structuredClone(input)); return trusted; } };
+    assert.deepEqual(await resumeWaiting({}, gateway), trusted);
+    assert.deepEqual(calls, [{}]);
+  });
+
+  test('resumeWaiting preserves rejection and maps gateway failures', async () => {
+    const rejection = { ok: false, reason: 'WAITING_NOT_EXPIRED' };
+    assert.deepEqual(await resumeWaiting({}, { resumeWaiting: async () => rejection }), rejection);
+    assert.deepEqual(await resumeWaiting({}, { resumeWaiting: async () => { throw new Error('offline'); } }), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });

@@ -5,6 +5,7 @@ import {
   canUpdatePrivateLocation,
   getPlayerRole,
   isActiveUntil,
+  isGameActive,
   isGamePaused,
   resolveLocationVisibility,
   isWaitingActive,
@@ -28,10 +29,11 @@ interface Props {
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
+  onResumeWaiting: () => Promise<void>;
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait
+  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting
 }) => {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -45,6 +47,7 @@ const MapView: React.FC<Props> = ({
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
+  const resumeRequestedUntil = useRef<number | null>(null);
 
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
   const captureCandidates = currentRole === 'ONI'
@@ -125,8 +128,14 @@ const MapView: React.FC<Props> = ({
   // タイマー
   useEffect(() => {
     const timer = setInterval(() => {
-      if (isGamePaused(gameConfig.gameStatus)) return;
       const now = Date.now();
+      if (isGamePaused(gameConfig.gameStatus)) {
+        const waiting = isWaitingActive(currentUser.status, currentUser.waitingUntil, now)
+          ? remainingSeconds(currentUser.waitingUntil, now)
+          : 0;
+        setTimeLeft(previous => ({ ...previous, waiting }));
+        return;
+      }
 
       // 管理者強制開示の残り時間を計算
       const forceReveal = remainingSeconds(gameConfig.locationRevealUntil, now);
@@ -156,6 +165,20 @@ const MapView: React.FC<Props> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, [currentUser, gameConfig, currentRole]);
+
+  useEffect(() => {
+    const deadline = currentUser.waitingUntil;
+    if (currentUser.status !== 'WAITING'
+      || typeof deadline !== 'number'
+      || !Number.isFinite(deadline)
+      || Date.now() < deadline
+      || resumeRequestedUntil.current === deadline) return;
+
+    resumeRequestedUntil.current = deadline;
+    void onResumeWaiting().catch(error => {
+      console.error('Waiting resume request failed:', error);
+    });
+  }, [currentUser.id, currentUser.status, currentUser.waitingUntil, timeLeft, onResumeWaiting]);
 
   // 地図初期化
   useEffect(() => {
@@ -396,7 +419,7 @@ const MapView: React.FC<Props> = ({
                 catch { alert('失敗しました'); }
                 finally { setIsProcessing(false); }
               }}
-              disabled={isProcessing || gameConfig.gameStatus.includes('_PAUSED') || timeLeft.shinkansenRemaining > 0}
+              disabled={isProcessing || currentUser.status !== 'ACTIVE' || !isGameActive(gameConfig.gameStatus) || timeLeft.shinkansenRemaining > 0}
               className="px-4 py-3 bg-white text-slate-700 rounded-2xl font-bold text-sm shadow-xl border border-slate-200 disabled:bg-slate-50 active:scale-95 transition-all"
             >
               新幹線待機
