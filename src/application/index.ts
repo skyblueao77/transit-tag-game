@@ -4,6 +4,7 @@ export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
 export { updatePrivateLocation } from './updatePrivateLocation.ts';
 export type {
+  ActivateInvincibilityFailureReason,
   ActivateInvincibilityInput,
   ActivateInvincibilityResult,
   CaptureFailureReason,
@@ -13,8 +14,8 @@ export type {
   CompleteMissionFailureReason,
   CompleteMissionInput,
   CompleteMissionResult,
+  InvincibilityGateway,
   MissionCompletionGateway,
-  PowerupStore,
 } from './gameplayPorts.ts';
 export type {
   Coordinates,

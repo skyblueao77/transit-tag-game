@@ -5,7 +5,7 @@ import {
   capturePlayer,
   completeMission,
 } from '../src/application/index.ts';
-import { INVINCIBILITY_DURATION_MS } from '../src/game/time.ts';
+
 
 function missionGateway(result) {
   const calls = [];
@@ -18,14 +18,6 @@ function missionGateway(result) {
   };
 }
 
-
-function powerupStore() {
-  const calls = [];
-  return {
-    calls,
-    applyInvincibility: async input => calls.push(structuredClone(input)),
-  };
-}
 
 const missionInput = overrides => ({ missionId: 'mission-1', ...overrides });
 
@@ -47,15 +39,6 @@ function player(id, team, overrides = {}) {
   return { id, team, status: 'ACTIVE', invincibleCards: 0, ...overrides };
 }
 
-
-const powerupInput = overrides => ({
-  playerId: 'runner-1',
-  role: 'RUNNER',
-  cards: 2,
-  phase: 'DAY1_ACTIVE',
-  now: 1_000_000,
-  ...overrides,
-});
 
 describe('completeMission application use case', () => {
   test('forwards only missionId and returns the trusted gateway result', async () => {
@@ -151,40 +134,45 @@ describe('capturePlayer application use case', () => {
 });
 
 describe('activateInvincibility application use case', () => {
-  test('persists the Core card delta and calculated expiration', async () => {
-    const store = powerupStore();
-    const result = await activateInvincibility(powerupInput(), store);
+  test('sends an empty intent without client authority values', async () => {
+    const calls = [];
+    const trustedResult = {
+      ok: true,
+      remainingCards: 1,
+      invincibleUntil: 1_801_000,
+      duration: 1_800_000,
+    };
+    const gateway = {
+      activate: async input => {
+        calls.push(structuredClone(input));
+        return trustedResult;
+      },
+    };
 
-    assert.equal(result.ok, true);
-    assert.equal(result.activation.cardDelta, -1);
-    assert.equal(result.activation.invincibleUntil, 1_000_000 + INVINCIBILITY_DURATION_MS);
-    assert.deepEqual(store.calls, [{
-      playerId: 'runner-1',
-      cardDelta: -1,
-      invincibleUntil: 1_000_000 + INVINCIBILITY_DURATION_MS,
-    }]);
+    assert.deepEqual(await activateInvincibility({}, gateway), trustedResult);
+    assert.deepEqual(calls, [{}]);
   });
 
-  test('rejects ONI, zero cards, denied phase, and already-active state', async () => {
-    const cases = [
-      [powerupInput({ role: 'ONI' }), 'ROLE'],
-      [powerupInput({ cards: 0 }), 'NO_CARDS'],
-      [powerupInput({ phase: 'DAY1_PAUSED' }), 'PHASE'],
-      [powerupInput({ invincibleUntil: 1_000_001 }), 'ALREADY_ACTIVE'],
-    ];
-    for (const [input, expectedReason] of cases) {
-      const store = powerupStore();
-      const result = await activateInvincibility(input, store);
-      assert.equal(result.ok, false);
-      assert.equal(result.reason, 'INVINCIBILITY_REJECTED');
-      assert.equal(result.domainReason, expectedReason);
-      assert.equal(store.calls.length, 0);
-    }
+  test('returns the trusted server result unchanged', async () => {
+    const trustedResult = {
+      ok: true,
+      remainingCards: 0,
+      invincibleUntil: 2_500_000,
+      duration: 1_800_000,
+    };
+    const gateway = { activate: async () => trustedResult };
+    assert.deepEqual(await activateInvincibility({}, gateway), trustedResult);
   });
 
-  test('returns persistence errors separately', async () => {
-    const store = { applyInvincibility: async () => { throw new Error('offline'); } };
-    assert.deepEqual(await activateInvincibility(powerupInput(), store), {
+  test('preserves server domain rejection', async () => {
+    const rejection = { ok: false, reason: 'POWERUP_NOT_ALLOWED', domainReason: 'PHASE' };
+    const gateway = { activate: async () => rejection };
+    assert.deepEqual(await activateInvincibility({}, gateway), rejection);
+  });
+
+  test('maps unexpected gateway failures to persistence errors', async () => {
+    const gateway = { activate: async () => { throw new Error('offline'); } };
+    assert.deepEqual(await activateInvincibility({}, gateway), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });

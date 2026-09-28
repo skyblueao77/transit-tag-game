@@ -47,12 +47,10 @@ import {
   signOutCurrentUser,
   subscribeAuthUserId,
 } from './src/infrastructure/firebase/auth';
-import {
-  firebaseGameLogStore,
-  firebasePowerupStore,
-} from './src/infrastructure/firebase/gameplayStores';
+import { firebaseGameLogStore } from './src/infrastructure/firebase/gameplayStores';
 import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
 import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
+import { firebaseInvincibilityGateway } from './src/infrastructure/firebase/powerupActions';
 import {
   movePlayerToTravelLimitWait,
   startPlayerTravelWait,
@@ -370,26 +368,16 @@ const App: React.FC = () => {
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {
     if (!currentUser || !confirm('無敵カードを使いますか？（30分間有効）')) return;
 
-    const result = await activateInvincibility({
-      playerId: currentUser.id,
-      role: myRole,
-      cards: currentUser.invincibleCards ?? 0,
-      invincibleUntil: currentUser.invincibleUntil,
-      phase: gameConfig.gameStatus,
-      now: Date.now(),
-    }, firebasePowerupStore);
+    const result = await activateInvincibility({}, firebaseInvincibilityGateway);
     if (result.ok === false) {
-      if (result.reason === 'PERSISTENCE_ERROR') alert('無敵カードの使用に失敗しました。');
+      alert(result.reason === 'NO_CARDS'
+        ? '無敵カードがありません。'
+        : '現在の状態では無敵カードを使用できません。');
       return;
     }
 
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    await addGameLog(
-      `${timeStr} Team ${currentUser.team} ${currentUser.name} が無敵カードを使用`,
-      'SYSTEM'
-    );
     alert('無敵モード発動！');
-  }, [currentUser, myRole, gameConfig.gameStatus, addGameLog]);
+  }, [currentUser]);
 
   // 新幹線待機
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
