@@ -334,3 +334,154 @@ describe('capturePlayer callable emulator integration', () => {
     assert.equal(field(documents[1], 'invincibleCards'), 1);
   });
 });
+
+let powerupSequence = 0;
+
+async function callPowerup(token, data = {}) {
+  const response = await fetch(
+    `http://127.0.0.1:5001/${projectId}/asia-northeast1/activateInvincibility`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ data }),
+    },
+  );
+  return { status: response.status, body: await response.json() };
+}
+
+async function setupPowerup({ team = 'A', role = 'RUNNER', status = 'ACTIVE', cards = 2, phase = 'DAY1_ACTIVE' } = {}) {
+  powerupSequence += 1;
+  const user = await createAuthUser();
+  await seedDocument(`users/${user.localId}`, {
+    id: user.localId,
+    team,
+    name: `Powerup Player ${powerupSequence}`,
+    status,
+    score: 73,
+    invincibleCards: cards,
+    invincibleUntil: 0,
+    waitingUntil: 1_800_000_000_000,
+  });
+  await seedDocument('game_config/current', {
+    gameStatus: phase,
+    teamARole: team === 'A' ? role : 'ONI',
+    teamBRole: team === 'B' ? role : 'ONI',
+    teamAScore: 41,
+    teamBScore: 52,
+    logs: [],
+  });
+  return user;
+}
+
+function firstSystemLog(config) {
+  const log = config.fields.logs.arrayValue.values[0].mapValue.fields;
+  return {
+    id: log.id.stringValue,
+    timestamp: Number(log.timestamp.integerValue ?? log.timestamp.doubleValue),
+    message: log.message.stringValue,
+    type: log.type.stringValue,
+  };
+}
+
+describe('activateInvincibility callable emulator integration', () => {
+  test('authenticated activation persists one card, deadline, and trusted SYSTEM log atomically', async () => {
+    const user = await setupPowerup();
+    const startedAt = Date.now();
+    const response = await callPowerup(user.idToken);
+    const finishedAt = Date.now();
+    assert.equal(response.body.result.ok, true);
+    assert.equal(response.body.result.remainingCards, 1);
+    assert.equal(response.body.result.duration, 30 * 60 * 1000);
+
+    const [player, config] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+    ]);
+    assert.equal(field(player, 'invincibleCards'), 1);
+    assert.equal(field(player, 'invincibleUntil'), response.body.result.invincibleUntil);
+    assert.ok(field(player, 'invincibleUntil') >= startedAt + 30 * 60 * 1000);
+    assert.ok(field(player, 'invincibleUntil') <= finishedAt + 30 * 60 * 1000);
+    assert.equal(field(player, 'score'), 73);
+    assert.equal(field(player, 'status'), 'ACTIVE');
+    assert.equal(field(player, 'waitingUntil'), 1_800_000_000_000);
+    assert.equal(field(config, 'teamAScore'), 41);
+    assert.equal(field(config, 'teamBScore'), 52);
+    assert.equal(field(config, 'logs').length, 1);
+    const log = firstSystemLog(config);
+    assert.equal(log.type, 'SYSTEM');
+    assert.ok(log.timestamp >= startedAt && log.timestamp <= finishedAt);
+    assert.match(log.message, /Team A Powerup Player/);
+    assert.match(log.message, /無敵カードを使用/);
+  });
+
+  test('rejects unauthenticated requests and non-empty request bodies', async () => {
+    const user = await setupPowerup();
+    const unauthenticated = await callPowerup(null);
+    const extraField = await callPowerup(user.idToken, { role: 'RUNNER' });
+    assert.equal(unauthenticated.body.error.status, 'UNAUTHENTICATED');
+    assert.equal(extraField.body.error.status, 'INVALID_ARGUMENT');
+
+    const player = await readDocument(`users/${user.localId}`, user.idToken);
+    const config = await readDocument('game_config/current', user.idToken);
+    assert.equal(field(player, 'invincibleCards'), 2);
+    assert.equal(field(player, 'invincibleUntil'), 0);
+    assert.equal(field(config, 'logs').length, 0);
+  });
+
+  test('rejects no cards, wrong role, paused phase, and non-ACTIVE status without writes', async () => {
+    const cases = [
+      { cards: 0 },
+      { role: 'ONI' },
+      { phase: 'DAY1_PAUSED' },
+      { status: 'WAITING' },
+    ];
+    for (const options of cases) {
+      const user = await setupPowerup(options);
+      const response = await callPowerup(user.idToken);
+      assert.ok(response.body.error);
+      const [player, config] = await Promise.all([
+        readDocument(`users/${user.localId}`, user.idToken),
+        readDocument('game_config/current', user.idToken),
+      ]);
+      assert.equal(field(player, 'invincibleCards'), options.cards ?? 2);
+      assert.equal(field(player, 'invincibleUntil'), 0);
+      assert.equal(field(config, 'logs').length, 0);
+    }
+  });
+
+  test('sequential second activation is rejected and consumes one card and log only once', async () => {
+    const user = await setupPowerup();
+    const first = await callPowerup(user.idToken);
+    const second = await callPowerup(user.idToken);
+    assert.equal(first.body.result.ok, true);
+    assert.ok(second.body.error);
+
+    const [player, config] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+    ]);
+    assert.equal(field(player, 'invincibleCards'), 1);
+    assert.equal(field(player, 'invincibleUntil'), first.body.result.invincibleUntil);
+    assert.equal(field(config, 'logs').length, 1);
+  });
+
+  test('concurrent activation requests commit one card consumption and one log', async () => {
+    const user = await setupPowerup();
+    const responses = await Promise.all([
+      callPowerup(user.idToken),
+      callPowerup(user.idToken),
+    ]);
+    assert.equal(responses.filter(response => response.body.result?.ok === true).length, 1);
+    assert.equal(responses.filter(response => Boolean(response.body.error)).length, 1);
+
+    const [player, config] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+    ]);
+    assert.equal(field(player, 'invincibleCards'), 1);
+    assert.equal(field(config, 'logs').length, 1);
+  });
+});

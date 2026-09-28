@@ -13,18 +13,6 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
-    function ownerPowerupChangeIsValid() {
-      let changed = request.resource.data.diff(resource.data).affectedKeys();
-      return !changed.hasAny(['invincibleCards', 'invincibleUntil'])
-        || (changed.hasAll(['invincibleCards', 'invincibleUntil'])
-          && resource.data.invincibleCards is int
-          && request.resource.data.invincibleCards is int
-          && request.resource.data.invincibleCards >= 0
-          && request.resource.data.invincibleCards == resource.data.invincibleCards - 1
-          && request.resource.data.invincibleUntil is number
-          && request.resource.data.invincibleUntil > request.time.toMillis()
-          && request.resource.data.invincibleUntil <= request.time.toMillis() + 1860000);
-    }
 
     function ownerStatusChangeIsValid() {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
@@ -86,9 +74,10 @@ service cloud.firestore {
       // game-wide configuration and other players from non-admin writes.
       allow update: if (isAdmin() && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']))
         || (signedIn() && request.auth.uid == uid
-          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['score', 'team'])
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'score', 'team', 'invincibleCards', 'invincibleUntil'
+          ])
           && ownerStatusChangeIsValid()
-          && ownerPowerupChangeIsValid()
           && !request.resource.data.keys().hasAny(['lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil']));
       allow delete: if isAdmin();
     }

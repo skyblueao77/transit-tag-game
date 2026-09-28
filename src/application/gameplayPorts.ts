@@ -1,8 +1,8 @@
 import type { CaptureRejectionReason, CaptureSuccess } from '../game/capture.ts';
-import type { GameStatus, Role } from '../game/types';
+
 import type { MissionReward } from '../game/missions.ts';
 import type { MissionScoreResult } from '../game/scoring.ts';
-import type { InvincibilityActivationResult } from '../game/powerups.ts';
+
 
 export interface CompleteMissionInput {
   missionId: string;
@@ -62,28 +62,34 @@ export interface CaptureGateway {
   capture(input: CapturePlayerInput): Promise<CapturePlayerResult>;
 }
 
-export interface PowerupStore {
-  applyInvincibility(input: {
-    playerId: string;
-    cardDelta: -1;
-    invincibleUntil: number;
-  }): Promise<void>;
-}
+export type ActivateInvincibilityInput = Record<string, never>;
 
-export interface ActivateInvincibilityInput {
-  playerId: string;
-  role: Role;
-  cards: number;
-  invincibleUntil?: number;
-  phase: GameStatus;
-  now: number;
-}
+export type ActivateInvincibilityFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'INVALID_ARGUMENT'
+  | 'PLAYER_NOT_FOUND'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_PLAYER_STATE'
+  | 'INVALID_GAME_CONFIG'
+  | 'POWERUP_NOT_ALLOWED'
+  | 'WRONG_ROLE'
+  | 'NO_CARDS'
+  | 'ALREADY_ACTIVE'
+  | 'PERSISTENCE_ERROR';
 
 export type ActivateInvincibilityResult =
-  | { ok: true; activation: Extract<InvincibilityActivationResult, { allowed: true }> }
+  | {
+      ok: true;
+      remainingCards: number;
+      invincibleUntil: number;
+      duration: number;
+    }
   | {
       ok: false;
-      reason: 'INVINCIBILITY_REJECTED';
-      domainReason: Extract<InvincibilityActivationResult, { allowed: false }>['reason'];
-    }
-  | { ok: false; reason: 'PERSISTENCE_ERROR' };
+      reason: ActivateInvincibilityFailureReason;
+      domainReason?: 'PHASE';
+    };
+
+export interface InvincibilityGateway {
+  activate(input: ActivateInvincibilityInput): Promise<ActivateInvincibilityResult>;
+}

@@ -172,38 +172,23 @@ describe('Firestore Security Rules', () => {
     })).status, 403);
   });
 
-  test('allows only the existing single-card consumption write shape', async () => {
-    assert.equal((await firestore(`users/${userAUid}`, {
-      token: userAToken,
-      method: 'PATCH',
-      body: fields({
-        id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0,
-        invincibleCards: 2, invincibleUntil: 0,
-      }),
-    })).status, 403);
-    assert.equal((await firestore(`users/${userAUid}`, {
-      token: userAToken,
-      method: 'PATCH',
-      body: fields({
-        id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0,
-        invincibleCards: 0, invincibleUntil: 1,
-      }),
-    })).status, 403);
+  test('denies all owner Powerup field writes and preserves Admin writes', async () => {
+    const futureDeadline = Date.now() + 30 * 60 * 1000;
+    for (const [token, path, body] of [
+      [userAToken, `users/${userAUid}`, fields({ invincibleCards: 0 })],
+      [userAToken, `users/${userAUid}`, fields({ invincibleUntil: futureDeadline })],
+      [userAToken, `users/${userAUid}`, fields({ invincibleCards: 0, invincibleUntil: futureDeadline })],
+      [userAToken, `users/${userAUid}`, fields({ invincibleCards: 2 })],
+      [userBToken, `users/${userBUid}`, fields({ invincibleCards: -1 })],
+      [userAToken, `users/${userBUid}`, fields({ invincibleCards: 1, invincibleUntil: futureDeadline })],
+    ]) {
+      assert.equal((await firestore(path, { token, method: 'PATCH', body })).status, 403);
+    }
+
     assert.equal((await firestore(`users/${userBUid}`, {
-      token: userBToken,
+      token: adminToken,
       method: 'PATCH',
-      body: fields({
-        id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0,
-        invincibleCards: -1, invincibleUntil: Date.now() + 30 * 60 * 1000,
-      }),
-    })).status, 403);
-    assert.equal((await firestore(`users/${userAUid}`, {
-      token: userAToken,
-      method: 'PATCH',
-      body: fields({
-        id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0,
-        invincibleCards: 0, invincibleUntil: Date.now() + 30 * 60 * 1000,
-      }),
+      body: fields({ invincibleCards: 2, invincibleUntil: futureDeadline }),
     })).status, 200);
   });
 
