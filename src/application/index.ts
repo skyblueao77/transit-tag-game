@@ -1,5 +1,6 @@
 export { activateInvincibility } from './activateInvincibility.ts';
 export { resumeWaiting, startWaiting } from './waitingActions.ts';
+export { requestSafetyAction } from './requestSafetyAction.ts';
 export { capturePlayer } from './capturePlayer.ts';
 export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
@@ -23,6 +24,10 @@ export type {
   StartWaitingResult,
   WaitingFailureReason,
   WaitingGateway,
+  SafetyActionFailureReason,
+  SafetyActionGateway,
+  SafetyActionInput,
+  SafetyActionResult,
 } from './gameplayPorts.ts';
 export type {
   Coordinates,

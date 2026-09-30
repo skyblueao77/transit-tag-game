@@ -15,9 +15,7 @@ service cloud.firestore {
 
 
     function ownerStatusChangeIsValid() {
-      let changed = request.resource.data.diff(resource.data).affectedKeys();
-      return !changed.hasAny(['status'])
-        || request.resource.data.status in ['EMERGENCY', 'RETIRED'];
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']);
     }
 
     function userDocumentHasNoCoordinateFields() {
@@ -81,8 +79,8 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAny(['shinkansenStartTime'])
           || request.resource.data.shinkansenStartTime == null)
         && userDocumentHasNoCoordinateFields();
-      // This preserves the current client architecture while protecting
-      // game-wide configuration and other players from non-admin writes.
+      // Player-owned profile updates remain available, but status and
+      // authoritative gameplay fields are writable only by trusted actions.
       allow update: if (isAdmin() && userDocumentHasNoCoordinateFields())
         || (signedIn() && request.auth.uid == uid
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny([

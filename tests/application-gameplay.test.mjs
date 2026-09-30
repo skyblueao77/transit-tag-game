@@ -6,6 +6,7 @@ import {
   completeMission,
   resumeWaiting,
   startWaiting,
+  requestSafetyAction,
 } from '../src/application/index.ts';
 
 
@@ -166,6 +167,32 @@ describe('Waiting application use cases', () => {
     assert.deepEqual(await resumeWaiting({}, { resumeWaiting: async () => { throw new Error('offline'); } }), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
+  });
+});
+
+describe('Safety Action application use case', () => {
+  test('forwards the explicit action and reason code and returns trusted idempotent result', async () => {
+    const calls = [];
+    const trusted = { ok: true, changed: false, status: 'EMERGENCY' };
+    const gateway = {
+      requestSafetyAction: async input => { calls.push(structuredClone(input)); return trusted; },
+    };
+    const input = { action: 'EMERGENCY', reasonCode: 'OTHER' };
+    const before = structuredClone(input);
+
+    assert.deepEqual(await requestSafetyAction(input, gateway), trusted);
+    assert.deepEqual(calls, [input]);
+    assert.deepEqual(input, before);
+  });
+
+  test('preserves server rejection and maps transport failure', async () => {
+    const rejection = { ok: false, reason: 'RETIRED_TERMINAL' };
+    assert.deepEqual(await requestSafetyAction({ action: 'EMERGENCY', reasonCode: 'OTHER' }, {
+      requestSafetyAction: async () => rejection,
+    }), rejection);
+    assert.deepEqual(await requestSafetyAction({ action: 'RETIRE', reasonCode: 'RETIREMENT_REQUEST' }, {
+      requestSafetyAction: async () => { throw new Error('offline'); },
+    }), { ok: false, reason: 'PERSISTENCE_ERROR' });
   });
 });
 

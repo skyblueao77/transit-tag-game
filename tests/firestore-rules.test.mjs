@@ -239,7 +239,37 @@ describe('Firestore Security Rules', () => {
     })).status, 403);
   });
 
-  test('blocks owner Waiting authority while retaining temporary SOS status writes', async () => {
+  test('blocks owner direct status writes while preserving Admin status operations', async () => {
+    const ownerStatuses = ['ACTIVE', 'WAITING', 'EMERGENCY', 'RETIRED', 'CAPTURED'];
+    for (const status of ownerStatuses) {
+      assert.equal((await firestore(`users/${userAUid}`, {
+        token: userAToken, method: 'PATCH', body: fields({ status }),
+      })).status, 403, `Owner status ${status} should be denied`);
+    }
+    const adminUser = status => fields({
+      id: userBUid, team: 'B', name: 'User B', status, score: 0,
+      invincibleCards: 0, invincibleUntil: 0,
+    });
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: adminToken, method: 'PATCH', body: adminUser('EMERGENCY'),
+    })).status, 200);
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: adminToken, method: 'PATCH', body: adminUser('RETIRED'),
+    })).status, 200);
+    assert.equal((await firestore(`users/${userBUid}`, {
+      token: adminToken, method: 'PATCH', body: adminUser('ACTIVE'),
+    })).status, 200);
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        id: userAUid, team: 'A', name: 'Still editable', status: 'ACTIVE', score: 0,
+        invincibleCards: 1, invincibleUntil: 0,
+      }),
+    })).status, 200);
+  });
+
+  test('blocks owner Waiting authority while keeping status unchanged', async () => {
     const futureDeadline = Date.now() + 60 * 60 * 1000;
     for (const body of [
       fields({ status: 'WAITING' }),
@@ -253,21 +283,6 @@ describe('Firestore Security Rules', () => {
       })).status, 403);
     }
 
-    const ownerStatusDocument = status => fields({
-      id: userAUid,
-      team: 'A',
-      name: 'Updated A',
-      status,
-      score: 0,
-      invincibleCards: 1,
-      invincibleUntil: 0,
-    });
-    assert.equal((await firestore(`users/${userAUid}`, {
-      token: userAToken, method: 'PATCH', body: ownerStatusDocument('EMERGENCY'),
-    })).status, 200);
-    assert.equal((await firestore(`users/${userAUid}`, {
-      token: userAToken, method: 'PATCH', body: ownerStatusDocument('RETIRED'),
-    })).status, 200);
 
     assert.equal((await firestore(`users/${userCUid}`, {
       token: userCToken,

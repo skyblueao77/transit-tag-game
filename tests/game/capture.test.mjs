@@ -158,6 +158,39 @@ describe('capture result', () => {
     ]);
   });
 
+  test('preserves Emergency and Retired roster status while applying other Capture changes', () => {
+    const players = [
+      player('oni-1', 'A'),
+      player('runner-1', 'B'),
+      player('emergency-a', 'A', 'EMERGENCY', { invincibleCards: 4 }),
+      player('retired-b', 'B', 'RETIRED', { invincibleCards: 5 }),
+      player('waiting-a', 'A', 'WAITING'),
+    ];
+    const input = validInput({ players });
+    const before = structuredClone(input);
+    const result = resolveCapture(input);
+
+    assert.equal(result.allowed, true);
+    assert.equal(result.playerChanges.some(change => change.playerId === 'emergency-a'), false);
+    assert.equal(result.playerChanges.some(change => change.playerId === 'retired-b'), false);
+    assert.deepEqual(result.playerChanges.find(change => change.playerId === 'oni-1'), {
+      playerId: 'oni-1', status: 'ACTIVE', waitingUntil: 0, invincibleCardsDelta: 1,
+    });
+    assert.deepEqual(result.playerChanges.find(change => change.playerId === 'runner-1'), {
+      playerId: 'runner-1', status: 'WAITING',
+      waitingUntil: now + CAPTURE_WAIT_DURATION_MS,
+      invincibleUntil: 0, invincibleCardsDelta: 0,
+    });
+    assert.deepEqual(result.playerChanges.find(change => change.playerId === 'waiting-a'), {
+      playerId: 'waiting-a', status: 'ACTIVE', waitingUntil: 0, invincibleCardsDelta: 1,
+    });
+    assert.deepEqual(result.reward, { team: 'A', scoreDelta: CAPTURE_REWARD_POINTS });
+    assert.deepEqual(result.teamRoles, { teamARole: 'RUNNER', teamBRole: 'ONI' });
+    assert.equal(result.nextRevealTime, now + CAPTURE_WAIT_DURATION_MS);
+    assert.deepEqual(result.event, { type: 'CAPTURE', captorId: 'oni-1', targetId: 'runner-1' });
+    assert.deepEqual(input, before);
+  });
+
   test('does not mutate the input players', () => {
     const input = validInput();
     const before = structuredClone(input.players);
