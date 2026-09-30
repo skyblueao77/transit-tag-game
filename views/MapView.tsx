@@ -14,6 +14,7 @@ import {
   SHINKANSEN_LIMIT_DURATION_MS,
 } from '../src/game';
 import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
+import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
 
 
 
@@ -248,21 +249,23 @@ const MapView: React.FC<Props> = ({
         fillOpacity: isSelf ? 0.95 : isEmergency ? 0.9 : isTeamSearchActive ? 0.9 : 0.7,
       }).addTo(mapRef.current);
 
-      let popupContent: string;
+      let popupVariant: PlayerMapPopupVariant;
+      let remainingTime: string | undefined;
       if (isSelf) {
-        popupContent = `<b>【自分】${user.name} (Team ${user.team})</b><br/>現在地`;
+        popupVariant = 'SELF';
       } else if (isEmergency) {
-        popupContent = `<b style="color:red">【緊急:${user.status}】${user.name}</b>`;
+        popupVariant = 'EMERGENCY';
       } else if (isTeamSearchActive) {
-        popupContent = `<b>${user.name} (Team ${user.team})</b><br/><span style="color:red; font-weight:bold;">🚨 チーム個別サーチ中 (リアルタイム)</span>`;
+        popupVariant = 'TEAM_SEARCH';
       } else if (isGlobalForceReveal) {
-        popupContent = `<b>${user.name} (Team ${user.team})</b><br/><span style="color:orange; font-weight:bold;">📸 全員スナップショット公開中</span>`;
+        popupVariant = 'GLOBAL_REVEAL';
       } else {
+        popupVariant = 'EXPOSED';
         const remainSec = remainingSeconds(visibility.expiresAt, now);
-        popupContent = `<b>${user.name} (Team ${user.team})</b><br/><small>📍 公開中の位置 (残り ${formatTime(remainSec)})</small>`;
+        remainingTime = formatTime(remainSec);
       }
 
-      marker.bindPopup(popupContent);
+      marker.bindPopup(createPlayerMapPopup(document, user, popupVariant, remainingTime));
       if (isEmergency) marker.openPopup();
       markersRef.current[user.id] = marker;
     });
