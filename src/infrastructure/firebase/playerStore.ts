@@ -1,4 +1,4 @@
-import { doc, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 
@@ -19,11 +19,4 @@ export async function createPlayerWithPrivateLocation(
     updatedAt: serverTimestamp(),
   });
   await batch.commit();
-}
-
-export async function updatePlayerStatus(
-  playerId: string,
-  status: User['status'],
-): Promise<void> {
-  await updateDoc(doc(db, 'users', playerId), { status });
 }

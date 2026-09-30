@@ -1,5 +1,6 @@
 import type { CaptureRejectionReason, CaptureSuccess } from '../game/capture.ts';
 
+import type { SafetyAction, SafetyReasonCode } from '../game/playerSafety.ts';
 import type { MissionReward } from '../game/missions.ts';
 import type { MissionScoreResult } from '../game/scoring.ts';
 
@@ -128,4 +129,32 @@ export type ResumeWaitingResult =
 export interface WaitingGateway {
   startWaiting(input: StartWaitingInput): Promise<StartWaitingResult>;
   resumeWaiting(input: ResumeWaitingInput): Promise<ResumeWaitingResult>;
+}
+
+export interface SafetyActionInput {
+  action: SafetyAction;
+  reasonCode: SafetyReasonCode;
+}
+
+export type SafetyActionFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'INVALID_ARGUMENT'
+  | 'PLAYER_NOT_FOUND'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_PLAYER_STATE'
+  | 'INVALID_GAME_CONFIG'
+  | 'INVALID_TEAM'
+  | 'INVALID_ACTION'
+  | 'INVALID_REASON_CODE'
+  | 'REASON_ACTION_MISMATCH'
+  | 'INVALID_STATUS'
+  | 'RETIRED_TERMINAL'
+  | 'PERSISTENCE_ERROR';
+
+export type SafetyActionResult =
+  | { ok: true; changed: boolean; status: 'EMERGENCY' | 'RETIRED' }
+  | { ok: false; reason: SafetyActionFailureReason };
+
+export interface SafetyActionGateway {
+  requestSafetyAction(input: SafetyActionInput): Promise<SafetyActionResult>;
 }

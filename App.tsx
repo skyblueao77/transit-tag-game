@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { HashRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import {
   Map as MapIcon,
@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
+import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
   activateInvincibility,
   capturePlayer,
@@ -29,6 +30,7 @@ import {
   updatePrivateLocation,
   resumeWaiting,
   startWaiting,
+  requestSafetyAction,
 } from './src/application';
 import {
   firebaseExposedLocationStore,
@@ -52,7 +54,7 @@ import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureAct
 import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
 import { firebaseInvincibilityGateway } from './src/infrastructure/firebase/powerupActions';
 import { firebaseWaitingGateway } from './src/infrastructure/firebase/waitingActions';
-import { updatePlayerStatus } from './src/infrastructure/firebase/playerStore';
+import { firebaseSafetyActionGateway } from './src/infrastructure/firebase/safetyActions';
 import {
   subscribeCurrentPlayer,
   subscribeExposedLocations,
@@ -81,6 +83,9 @@ const App: React.FC = () => {
   const [gameConfig, setGameConfig] = useState<GameConfig>(INITIAL_GAME_CONFIG);
   const [locationLogs] = useState<LocationLog[]>([]);
   const [lastBroadcastTime, setLastBroadcastTime] = useState(0);
+  const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
+  const [safetyActionBusy, setSafetyActionBusy] = useState(false);
+  const safetyActionBusyRef = useRef(false);
   const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
 
   useEffect(() => subscribeAuthUserId(uid => {
@@ -294,27 +299,32 @@ const App: React.FC = () => {
     [],
   );
 
-  // SOS
-  const handleSOS = async (): Promise<void> => {
-    const reason = prompt(
-      '緊急連絡の内容を選択してください：\n1: 急病・怪我\n2: 機材トラブル\n3: リタイア希望\n(番号または内容を入力)'
-    );
-    if (!reason || !currentUser) return;
+  const handleSafetyAction = useCallback(async (
+    action: SafetyAction,
+    reasonCode: SafetyReasonCode,
+  ): Promise<void> => {
+    if (!currentUser || safetyActionBusyRef.current) return;
+    if (action === 'RETIRE' && !confirm('リタイアしますか？この操作は管理者のみが解除できます。')) return;
 
-    const status: User['status'] =
-      reason === '3' || reason.includes('リタイア') ? 'RETIRED' : 'EMERGENCY';
-
+    safetyActionBusyRef.current = true;
+    setSafetyActionBusy(true);
     try {
-      await updatePlayerStatus(currentUser.id, status);
-      await addGameLog(
-        `【緊急】Team ${currentUser.team} ${currentUser.name} が SOS を発信: ${reason}`,
-        'EMERGENCY'
-      );
-      alert('SOSを送信しました。運営からの連絡を待ってください。');
-    } catch {
-      alert('送信に失敗しました。LINE等で直接連絡してください。');
+      const result = await requestSafetyAction({ action, reasonCode }, firebaseSafetyActionGateway);
+      setSafetyDialogOpen(false);
+      if (result.ok === false) {
+        alert(result.reason === 'RETIRED_TERMINAL'
+          ? 'リタイア確定後はEmergencyへ変更できません。必要な場合はLINE等で管理者へ直接連絡してください。'
+          : '送信に失敗しました。緊急の場合はLINE等で直接連絡してください。');
+        return;
+      }
+      alert(result.changed
+        ? '送信しました。運営からの連絡を待ってください。'
+        : 'このSafety Actionはすでに反映されています。');
+    } finally {
+      safetyActionBusyRef.current = false;
+      setSafetyActionBusy(false);
     }
-  };
+  }, [currentUser]);
 
   // Capture validation, state changes, reward, and logging are server-authoritative.
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {
@@ -429,6 +439,20 @@ const App: React.FC = () => {
         </div>
 
         <button
+          onClick={() => setSafetyDialogOpen(true)}
+          className="mt-4 rounded-2xl bg-red-600 px-6 py-4 font-black text-white shadow-lg"
+        >
+          SOS / リタイア
+        </button>
+        {safetyDialogOpen && (
+          <SafetyActionDialog
+            busy={safetyActionBusy}
+            onClose={() => setSafetyDialogOpen(false)}
+            onChoose={handleSafetyAction}
+          />
+        )}
+
+        <button
           onClick={async () => { await signOutCurrentUser(); window.location.reload(); }}
           className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
         >
@@ -454,7 +478,20 @@ const App: React.FC = () => {
             <div className="bg-white/20 p-4 rounded-2xl text-sm font-bold">
               スコア加算、タイマー、無敵時間等は<br />すべて停止しています。
             </div>
+            <button
+              onClick={() => setSafetyDialogOpen(true)}
+              className="pointer-events-auto mt-6 rounded-2xl bg-white px-6 py-4 font-black text-red-700 shadow-lg"
+            >
+              SOS / リタイア
+            </button>
           </div>
+        )}
+        {safetyDialogOpen && (
+          <SafetyActionDialog
+            busy={safetyActionBusy}
+            onClose={() => setSafetyDialogOpen(false)}
+            onChoose={handleSafetyAction}
+          />
         )}
 
         {/* 役割バナー */}
@@ -485,7 +522,8 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             <button
-              onClick={handleSOS}
+              onClick={() => setSafetyDialogOpen(true)}
+              aria-label="SOS / リタイア"
               className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center border border-red-100 active:scale-90 transition-all shadow-sm"
             >
               <Phone size={20} />
@@ -608,6 +646,32 @@ const App: React.FC = () => {
     </HashRouter>
   );
 };
+
+const SafetyActionDialog: React.FC<{
+  busy: boolean;
+  onClose: () => void;
+  onChoose: (action: SafetyAction, reasonCode: SafetyReasonCode) => Promise<void>;
+}> = ({ busy, onClose, onChoose }) => (
+  <div className="fixed inset-0 z-3000 flex items-center justify-center bg-slate-950/80 p-5" role="dialog" aria-modal="true" aria-label="Safety Action">
+    <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-black text-slate-900">緊急連絡 / リタイア</h2>
+        <button onClick={onClose} disabled={busy} aria-label="閉じる" className="rounded-lg p-2 text-slate-500 disabled:opacity-50">
+          <XCircle size={22} />
+        </button>
+      </div>
+      <p className="mb-4 text-sm font-medium text-slate-600">該当する内容を選択してください。詳細な個人情報は記録されません。</p>
+      <div className="grid gap-2">
+        <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'ILLNESS_OR_INJURY')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">急病・怪我</button>
+        <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'EQUIPMENT_ISSUE')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">機材トラブル</button>
+        <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'OTHER')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">その他の緊急事態</button>
+        <button disabled={busy} onClick={() => void onChoose('RETIRE', 'RETIREMENT_REQUEST')} className="mt-2 rounded-xl bg-slate-900 px-4 py-3 text-left font-bold text-white disabled:opacity-50">リタイア</button>
+      </div>
+      {busy && <p className="mt-4 text-center text-sm font-bold text-slate-500">送信中...</p>}
+      <p className="mt-4 text-xs text-slate-500">送信できない場合はLINE等で運営へ直接連絡してください。</p>
+    </div>
+  </div>
+);
 
 const NavAnchor: React.FC<{ to: string; icon: React.ReactNode; label: string }> = ({
   to,

@@ -105,7 +105,9 @@ export function resolveCapture(input: CaptureInput): CaptureResult {
   const waitingUntil = input.now + CAPTURE_WAIT_DURATION_MS;
 
   const playerChanges = input.players
-    .filter(player => player.team === 'A' || player.team === 'B')
+    .filter(player => (player.team === 'A' || player.team === 'B')
+      && player.status !== 'EMERGENCY'
+      && player.status !== 'RETIRED')
     .map(player => {
       if (player.team === newOniTeam) {
         return {

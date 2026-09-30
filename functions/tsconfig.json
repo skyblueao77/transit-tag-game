@@ -17,6 +17,7 @@
     "../src/game/capture.ts",
     "../src/game/missions.ts",
     "../src/game/phases.ts",
+    "../src/game/playerSafety.ts",
     "../src/game/powerups.ts",
     "../src/game/roles.ts",
     "../src/game/scoring.ts",
