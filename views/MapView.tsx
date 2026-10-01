@@ -228,33 +228,28 @@ const MapView: React.FC<Props> = ({
       if (visibility.mode === 'HIDDEN' || visibility.latitude === undefined || visibility.longitude === undefined) return;
 
       const isSelf = visibility.mode === 'SELF_PRIVATE';
-      const isEmergency = visibility.mode === 'EMERGENCY_REALTIME';
       const isTeamSearchActive = visibility.mode === 'TEAM_REALTIME';
       const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
       const isIndividualExposed = visibility.mode === 'INDIVIDUAL_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
       const marker = L.circleMarker([visibility.latitude, visibility.longitude], {
-        radius: isSelf || isEmergency ? 10 : 8,
-        fillColor: isEmergency
+        radius: isSelf ? 10 : 8,
+        fillColor: isTeamSearchActive
           ? '#ef4444'
-          : isTeamSearchActive
-            ? '#ef4444'
-            : isGlobalForceReveal
-              ? '#f59e0b'
-              : user.color,
-        color: isEmergency ? '#000' : isInvincible ? '#fbbf24' : '#fff',
-        weight: isEmergency ? 5 : isInvincible ? 4 : 3,
+          : isGlobalForceReveal
+            ? '#f59e0b'
+            : user.color,
+        color: isInvincible ? '#fbbf24' : '#fff',
+        weight: isInvincible ? 4 : 3,
         opacity: 1,
-        fillOpacity: isSelf ? 0.95 : isEmergency ? 0.9 : isTeamSearchActive ? 0.9 : 0.7,
+        fillOpacity: isSelf ? 0.95 : isTeamSearchActive ? 0.9 : 0.7,
       }).addTo(mapRef.current);
 
       let popupVariant: PlayerMapPopupVariant;
       let remainingTime: string | undefined;
       if (isSelf) {
         popupVariant = 'SELF';
-      } else if (isEmergency) {
-        popupVariant = 'EMERGENCY';
       } else if (isTeamSearchActive) {
         popupVariant = 'TEAM_SEARCH';
       } else if (isGlobalForceReveal) {
@@ -266,7 +261,6 @@ const MapView: React.FC<Props> = ({
       }
 
       marker.bindPopup(createPlayerMapPopup(document, user, popupVariant, remainingTime));
-      if (isEmergency) marker.openPopup();
       markersRef.current[user.id] = marker;
     });
   }, [

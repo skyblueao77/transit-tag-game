@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { GameConfig, User, GameLog, GameStatus, Mission , Role} from '../types';
 import { INITIAL_GAME_CONFIG, MISSIONS, FINAL_MISSIONS, getRandomFinalMission } from '../constants';
 import {
@@ -9,6 +9,9 @@ import {
 import { isCurrentAuthUserAdmin, signInAdmin } from '../src/infrastructure/firebase/auth';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
+import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
+import type { EmergencyLocationProjection } from '../types';
+import EmergencyProjectionMap from './EmergencyProjectionMap';
 import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 interface Props {
@@ -27,6 +30,32 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const [isProcessing, setIsProcessing] = useState(false);
   const [searchDuration, setSearchDuration] = useState(10); 
   const [manualMissionId, setManualMissionId] = useState('');
+  const [emergencyProjections, setEmergencyProjections] = useState<EmergencyLocationProjection[]>([]);
+  const [projectionUnavailable, setProjectionUnavailable] = useState(false);
+  const emergencyPlayerIds = useMemo(
+    () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id),
+    [users],
+  );
+
+  useEffect(() => {
+    if (!isAuthorized) {
+      setEmergencyProjections([]);
+      setProjectionUnavailable(false);
+      return;
+    }
+    return subscribeEmergencyLocationProjections(
+      emergencyPlayerIds,
+      projections => {
+        setEmergencyProjections(projections);
+        setProjectionUnavailable(false);
+      },
+      error => {
+        console.error('Emergency location projection subscription failed:', error);
+        setEmergencyProjections([]);
+        setProjectionUnavailable(true);
+      },
+    );
+  }, [isAuthorized, emergencyPlayerIds]);
 
   const PENALTY_LIST = [
     "次の新幹線の乗車可能時間を「1時間30分」に短縮せよ",
@@ -490,6 +519,13 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
         </div>
       </section>
 
+
+      {projectionUnavailable && (
+        <p role="status" className="rounded-2xl bg-amber-100 p-4 text-sm font-bold text-amber-900">
+          Emergency位置を読み込めません。最新位置は管理画面で確認できない場合があります。
+        </p>
+      )}
+      <EmergencyProjectionMap projections={emergencyProjections} users={users} />
 
       {/* 3. プレイヤー管理 */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">

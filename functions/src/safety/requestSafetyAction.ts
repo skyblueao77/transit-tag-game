@@ -12,6 +12,7 @@ import type {
   SafetyStore,
   SafetyTransaction,
 } from './safetyService';
+import { refreshEmergencyLocationProjection } from '../emergencyLocation/emergencyLocationActions';
 
 if (getApps().length === 0) {
   const projectId = process.env.GCLOUD_PROJECT ?? process.env.GOOGLE_CLOUD_PROJECT;
@@ -70,12 +71,22 @@ export const requestSafetyAction = onCall(
     }
 
     try {
-      return await requestSafetyActionForPlayer(
+      const result = await requestSafetyActionForPlayer(
         request.auth.uid,
         request.data,
         safetyStore,
         { now: Date.now, createLogId: randomUUID },
       );
+      try {
+        const projection = await refreshEmergencyLocationProjection(request.auth.uid);
+        return { ...result, projectionStatus: projection.status };
+      } catch (error) {
+        logger.warn('Safety Action committed but Emergency location was unavailable.', {
+          uid: request.auth.uid,
+          error,
+        });
+        return { ...result, projectionStatus: 'UNAVAILABLE' as const };
+      }
     } catch (error) {
       if (error instanceof SafetyServiceError) {
         throw new HttpsError(callableCode(error.reason), error.reason, { reason: error.reason });

@@ -56,6 +56,10 @@ import { firebaseInvincibilityGateway } from './src/infrastructure/firebase/powe
 import { firebaseWaitingGateway } from './src/infrastructure/firebase/waitingActions';
 import { firebaseSafetyActionGateway } from './src/infrastructure/firebase/safetyActions';
 import {
+  createEmergencyLocationHeartbeatController,
+  updateEmergencyLocationOnce,
+} from './src/infrastructure/emergencyLocationHeartbeat';
+import {
   subscribeCurrentPlayer,
   subscribeExposedLocations,
   subscribeGameConfig,
@@ -76,6 +80,8 @@ const App: React.FC = () => {
   const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
 
   const [authUserId, setAuthUserId] = useState(getCurrentAuthUserId);
+  const authUserIdRef = useRef(authUserId);
+  const emergencyHeartbeat = useRef(createEmergencyLocationHeartbeatController());
   const [authReady, setAuthReady] = useState(false);
   const [userLoading, setUserLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -89,6 +95,7 @@ const App: React.FC = () => {
   const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
 
   useEffect(() => subscribeAuthUserId(uid => {
+    authUserIdRef.current = uid;
     setAuthUserId(uid);
     setAuthReady(true);
     if (!uid) {
@@ -209,6 +216,20 @@ const App: React.FC = () => {
     [],
   );
 
+  useEffect(() => {
+    emergencyHeartbeat.current.sync({
+      status: currentUser?.status,
+      playerId: currentUser?.id,
+      authUserId,
+      geolocation: 'geolocation' in navigator ? navigator.geolocation : null,
+      updatePrivateLocation: handleUpdatePrivateLocation,
+      isCurrentPlayer: () => Boolean(currentUser?.id) && authUserIdRef.current === currentUser?.id,
+      isOnline: () => navigator.onLine,
+    });
+  }, [authUserId, currentUser?.id, currentUser?.status, handleUpdatePrivateLocation]);
+
+  useEffect(() => () => emergencyHeartbeat.current.stop(), []);
+
   // 位置公開（スナップショット方式）
   // 押した瞬間のprivate locationをスナップショットとして5分間表示。
   // 本人がその後移動してもピンは動かない。
@@ -317,14 +338,38 @@ const App: React.FC = () => {
           : '送信に失敗しました。緊急の場合はLINE等で直接連絡してください。');
         return;
       }
-      alert(result.changed
+
+      const locationUpdated = action === 'EMERGENCY'
+        ? await updateEmergencyLocationOnce({
+            status: 'EMERGENCY',
+            playerId: currentUser.id,
+            authUserId: currentUser.id,
+            geolocation: 'geolocation' in navigator ? navigator.geolocation : null,
+            updatePrivateLocation: handleUpdatePrivateLocation,
+            isCurrentPlayer: () => authUserIdRef.current === currentUser.id,
+            isOnline: () => navigator.onLine,
+          })
+        : false;
+      const message = result.changed
         ? '送信しました。運営からの連絡を待ってください。'
-        : 'このSafety Actionはすでに反映されています。');
+        : 'このSafety Actionはすでに反映されています。';
+      if (action === 'EMERGENCY') {
+        const existingProjectionAvailable = result.projectionStatus === 'CREATED'
+          || result.projectionStatus === 'REFRESHED';
+        const locationMessage = locationUpdated
+          ? '現在位置を更新しました。管理者向け地図への反映には少し時間がかかる場合があります。'
+          : existingProjectionAvailable
+            ? '既存の位置共有は有効ですが、現在位置を更新できませんでした。'
+            : '現在位置を更新できませんでした。位置を伝える必要がある場合はLINE等で運営へ直接連絡してください。';
+        alert(`${message}\n${locationMessage}`);
+      } else {
+        alert(message);
+      }
     } finally {
       safetyActionBusyRef.current = false;
       setSafetyActionBusy(false);
     }
-  }, [currentUser]);
+  }, [currentUser, handleUpdatePrivateLocation]);
 
   // Capture validation, state changes, reward, and logging are server-authoritative.
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {
@@ -660,7 +705,7 @@ const SafetyActionDialog: React.FC<{
           <XCircle size={22} />
         </button>
       </div>
-      <p className="mb-4 text-sm font-medium text-slate-600">該当する内容を選択してください。詳細な個人情報は記録されません。</p>
+      <p className="mb-4 text-sm font-medium text-slate-600">該当する内容を選択してください。詳細な個人情報は記録されません。Emergencyを選ぶと、最新の位置情報がある場合に限り、正確な位置を管理者だけに最大2分間共有します。リタイアでは位置を共有しません。</p>
       <div className="grid gap-2">
         <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'ILLNESS_OR_INJURY')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">急病・怪我</button>
         <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'EQUIPMENT_ISSUE')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">機材トラブル</button>

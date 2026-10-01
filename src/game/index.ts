@@ -37,6 +37,14 @@ export {
 } from './time';
 export type { GameClockState } from './time';
 export { resolveLocationVisibility } from './reveal';
+export {
+  EMERGENCY_LOCATION_FRESHNESS_MS,
+  resolveEmergencyLocationProjection,
+} from './emergencyLocationProjection';
+export type {
+  EmergencyLocationProjectionDecision,
+  EmergencyLocationProjectionInput,
+} from './emergencyLocationProjection';
 export type {
   LocationVisibilityInput,
   LocationVisibilityMode,

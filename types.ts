@@ -40,6 +40,17 @@ export interface ExposedLocation {
   expiresAt: number;
 }
 
+export interface EmergencyLocationProjection {
+  playerId: string;
+  latitude: number;
+  longitude: number;
+  projectedAt: number;
+  sourceLocationUpdatedAt: number;
+  expiresAt: number;
+  safetyStatus: 'EMERGENCY';
+  projectionKind: 'EMERGENCY';
+}
+
 export interface Mission {
   id: string;
   area: string;

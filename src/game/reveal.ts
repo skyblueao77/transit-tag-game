@@ -5,7 +5,6 @@ import { isActiveUntil } from './time.ts';
 
 export type LocationVisibilityMode =
   | 'SELF_PRIVATE'
-  | 'EMERGENCY_REALTIME'
   | 'TEAM_REALTIME'
   | 'GLOBAL_SNAPSHOT'
   | 'INDIVIDUAL_SNAPSHOT'
@@ -49,7 +48,7 @@ function hasCoordinates(
 }
 
 function visibleRealtime(
-  mode: 'SELF_PRIVATE' | 'EMERGENCY_REALTIME' | 'TEAM_REALTIME',
+  mode: 'SELF_PRIVATE' | 'TEAM_REALTIME',
   player: LocationVisibilityPlayer,
   expiresAt?: number,
 ): LocationVisibilityResult {
@@ -80,7 +79,8 @@ function visibleSnapshot(
 
 /**
  * Resolves which location, if any, a viewer may use for a player's marker.
- * Self and emergency locations are independent of public reveal phase policy.
+ * Emergency locations use a separately authorized projection and are never
+ * resolved from public player fields here.
  */
 export function resolveLocationVisibility(
   input: LocationVisibilityInput,
@@ -92,7 +92,7 @@ export function resolveLocationVisibility(
   }
 
   if (player.status === 'EMERGENCY' || player.status === 'RETIRED') {
-    return visibleRealtime('EMERGENCY_REALTIME', player);
+    return { mode: 'HIDDEN' };
   }
 
   if (!canRevealLocation(input.phase)) {

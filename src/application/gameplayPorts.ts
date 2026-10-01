@@ -152,7 +152,12 @@ export type SafetyActionFailureReason =
   | 'PERSISTENCE_ERROR';
 
 export type SafetyActionResult =
-  | { ok: true; changed: boolean; status: 'EMERGENCY' | 'RETIRED' }
+  | {
+      ok: true;
+      changed: boolean;
+      status: 'EMERGENCY' | 'RETIRED';
+      projectionStatus: 'CREATED' | 'REFRESHED' | 'UNAVAILABLE' | 'STALE' | 'NOT_REQUIRED';
+    }
   | { ok: false; reason: SafetyActionFailureReason };
 
 export interface SafetyActionGateway {

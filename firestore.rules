@@ -63,6 +63,42 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    function validEmergencyProjection(uid) {
+      return resource.data.keys().hasOnly([
+          'playerId', 'latitude', 'longitude', 'projectedAt',
+          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
+        ])
+        && resource.data.keys().hasAll([
+          'playerId', 'latitude', 'longitude', 'projectedAt',
+          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
+        ])
+        && resource.data.playerId == uid
+        && resource.data.latitude is number
+        && resource.data.latitude >= -90
+        && resource.data.latitude <= 90
+        && resource.data.longitude is number
+        && resource.data.longitude >= -180
+        && resource.data.longitude <= 180
+        && resource.data.projectedAt is timestamp
+        && resource.data.sourceLocationUpdatedAt is timestamp
+        && resource.data.expiresAt is timestamp
+        && resource.data.sourceLocationUpdatedAt <= resource.data.projectedAt
+        && resource.data.expiresAt > resource.data.projectedAt
+        && resource.data.expiresAt > request.time
+        && resource.data.safetyStatus == 'EMERGENCY'
+        && resource.data.projectionKind == 'EMERGENCY'
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY';
+    }
+
+    match /emergencyLocationProjections/{uid} {
+      allow get: if isAdmin()
+        && (!exists(/databases/$(database)/documents/emergencyLocationProjections/$(uid))
+          || validEmergencyProjection(uid));
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if signedIn()
