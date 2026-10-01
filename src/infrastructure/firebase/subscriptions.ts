@@ -6,8 +6,9 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebaseClient';
-import type { ExposedLocation, GameConfig, Mission, PrivateLocation, User } from '../../../types';
+import type { EmergencyLocationProjection, ExposedLocation, GameConfig, Mission, PrivateLocation, User } from '../../../types';
 import {
+  mapEmergencyLocationProjection,
   mapExposedLocationDocuments,
   mapGameConfigDocument,
   mapMissionDocuments,
@@ -70,6 +71,38 @@ export function subscribeExposedLocations(
       data: document.data(),
     }))));
   }, onError);
+}
+
+export function subscribeEmergencyLocationProjections(
+  playerIds: readonly string[],
+  onValue: (projections: EmergencyLocationProjection[]) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  let active = true;
+  const values = new Map<string, EmergencyLocationProjection>();
+  const publish = () => {
+    if (!active) return;
+    const now = Date.now();
+    onValue([...values.values()].filter(projection => projection.expiresAt > now));
+  };
+  const unsubscribes = [...new Set(playerIds)].map(playerId => onSnapshot(
+    doc(db, 'emergencyLocationProjections', playerId),
+    snapshot => {
+      const projection = mapEmergencyLocationProjection(
+        snapshot.id,
+        snapshot.exists() ? snapshot.data() : null,
+      );
+      if (projection) values.set(playerId, projection);
+      else values.delete(playerId);
+      publish();
+    },
+    onError,
+  ));
+  publish();
+  return () => {
+    active = false;
+    unsubscribes.forEach(unsubscribe => unsubscribe());
+  };
 }
 
 export function subscribeGameConfig(

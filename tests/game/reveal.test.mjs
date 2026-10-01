@@ -42,10 +42,14 @@ describe('location visibility rules', () => {
   });
 
   for (const status of ['EMERGENCY', 'RETIRED']) {
-    test(`${status} opponent uses realtime coordinates`, () => {
-      assert.deepEqual(resolve({ status, exposedLocation: undefined }), {
-        mode: 'EMERGENCY_REALTIME', latitude: 35.1, longitude: 139.1,
-      });
+    test(`${status} coordinates are not projected to participants`, () => {
+      assert.deepEqual(resolve({ status }), { mode: 'HIDDEN' });
+      assert.deepEqual(resolve({
+        status,
+        privateLatitude: undefined,
+        privateLongitude: undefined,
+        exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000 },
+      }), { mode: 'HIDDEN' });
     });
   }
 

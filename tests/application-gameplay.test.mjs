@@ -173,7 +173,9 @@ describe('Waiting application use cases', () => {
 describe('Safety Action application use case', () => {
   test('forwards the explicit action and reason code and returns trusted idempotent result', async () => {
     const calls = [];
-    const trusted = { ok: true, changed: false, status: 'EMERGENCY' };
+    const trusted = {
+      ok: true, changed: false, status: 'EMERGENCY', projectionStatus: 'STALE',
+    };
     const gateway = {
       requestSafetyAction: async input => { calls.push(structuredClone(input)); return trusted; },
     };

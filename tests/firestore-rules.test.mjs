@@ -79,6 +79,22 @@ function exposedLocationFields(latitude = 35.6812, longitude = 139.7671) {
   };
 }
 
+function emergencyProjectionFields(playerId, { expiresAt = Date.now() + 60_000 } = {}) {
+  const projectedAt = Date.now();
+  return {
+    fields: {
+      playerId: { stringValue: playerId },
+      latitude: { doubleValue: 35.6812 },
+      longitude: { doubleValue: 139.7671 },
+      projectedAt: { timestampValue: new Date(projectedAt).toISOString() },
+      sourceLocationUpdatedAt: { timestampValue: new Date(projectedAt - 1_000).toISOString() },
+      expiresAt: { timestampValue: new Date(expiresAt).toISOString() },
+      safetyStatus: { stringValue: 'EMERGENCY' },
+      projectionKind: { stringValue: 'EMERGENCY' },
+    },
+  };
+}
+
 async function seed(path, values) {
   const response = await firestore(path, {
     token: 'owner',
@@ -562,6 +578,57 @@ describe('Firestore Security Rules', () => {
       method: 'PATCH',
       body: fields({ role: 'admin' }),
     })).status, 403);
+  });
+
+  test('restricts Emergency projections to Admin reads while active and denies every client write', async () => {
+    assert.equal((await firestore(`users/${userDUid}`, {
+      token: userDToken,
+      method: 'PATCH',
+      body: fields({
+        id: userDUid, team: 'A', name: 'Projection Player', status: 'ACTIVE', score: 0,
+        invincibleCards: 0,
+      }),
+    })).status, 200);
+    assert.equal((await firestore(`users/${userDUid}`, {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ status: 'EMERGENCY' }),
+    })).status, 200);
+
+    const path = `emergencyLocationProjections/${userDUid}`;
+    const freshProjection = emergencyProjectionFields(userDUid);
+    assert.equal((await firestore(path, { method: 'PATCH', body: freshProjection })).status, 403);
+    assert.equal((await firestore(path, { token: userDToken, method: 'PATCH', body: freshProjection })).status, 403);
+    assert.equal((await firestore(path, { token: adminToken, method: 'PATCH', body: freshProjection })).status, 403);
+
+    assert.equal((await firestore(path, { token: 'owner', method: 'PATCH', body: freshProjection })).status, 200);
+    for (const token of [userDToken, adminToken]) {
+      assert.equal((await firestore(path, {
+        token,
+        method: 'PATCH',
+        body: emergencyProjectionFields(userDUid),
+      })).status, 403);
+    }
+    assert.equal((await firestore(path)).status, 403);
+    assert.equal((await firestore(path, { token: userDToken })).status, 403);
+    assert.equal((await firestore(path, { token: adminToken })).status, 200);
+    for (const token of [userDToken, adminToken]) {
+      assert.equal((await firestore(path, { token, method: 'DELETE' })).status, 403);
+    }
+
+    await firestore(path, {
+      token: 'owner',
+      method: 'PATCH',
+      body: emergencyProjectionFields(userDUid, { expiresAt: Date.now() - 1 }),
+    });
+    assert.equal((await firestore(path, { token: adminToken })).status, 403);
+
+    await firestore(`users/${userDUid}`, {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ status: 'RETIRED' }),
+    });
+    assert.equal((await firestore(path, { token: adminToken })).status, 403);
   });
 
   test('allows an administrator to perform management writes', async () => {

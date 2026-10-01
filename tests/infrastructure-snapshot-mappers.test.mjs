@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
+  mapEmergencyLocationProjection,
   mapExposedLocationDocuments,
   mapGameConfigDocument,
   mapMissionDocuments,
@@ -34,6 +35,29 @@ describe('Firebase snapshot mappers', () => {
     assert.deepEqual(mapPrivateLocation({ latitude: 35, longitude: 139 }), {
       latitude: 35, longitude: 139,
     });
+  });
+
+  test('maps only valid Emergency projection fields to plain numeric timestamps', () => {
+    const timestamp = millis => ({ toMillis: () => millis });
+    assert.deepEqual(mapEmergencyLocationProjection('uid-1', {
+      playerId: 'uid-1', latitude: 35, longitude: 139,
+      projectedAt: timestamp(200), sourceLocationUpdatedAt: timestamp(100), expiresAt: timestamp(300),
+      safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY', ignored: 'not mapped',
+    }), {
+      playerId: 'uid-1', latitude: 35, longitude: 139,
+      projectedAt: 200, sourceLocationUpdatedAt: 100, expiresAt: 300,
+      safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
+    });
+    assert.equal(mapEmergencyLocationProjection('other', {
+      playerId: 'uid-1', latitude: 35, longitude: 139,
+      projectedAt: timestamp(200), sourceLocationUpdatedAt: timestamp(100), expiresAt: timestamp(300),
+      safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
+    }), null);
+    assert.equal(mapEmergencyLocationProjection('uid-1', {
+      playerId: 'uid-1', latitude: 91, longitude: 139,
+      projectedAt: timestamp(200), sourceLocationUpdatedAt: timestamp(100), expiresAt: timestamp(300),
+      safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
+    }), null);
   });
 
   test('maps exposed location documents by UID', () => {
