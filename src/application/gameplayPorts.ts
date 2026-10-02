@@ -163,3 +163,45 @@ export type SafetyActionResult =
 export interface SafetyActionGateway {
   requestSafetyAction(input: SafetyActionInput): Promise<SafetyActionResult>;
 }
+
+export interface SwapTeamRolesInput {
+  requestId: string;
+}
+
+export interface ResumePlayerInput {
+  targetId: string;
+}
+
+export type AdminGameStateFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'PERMISSION_DENIED'
+  | 'INVALID_ARGUMENT'
+  | 'PLAYER_NOT_FOUND'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_PLAYER_STATE'
+  | 'INVALID_TEAM'
+  | 'INVALID_GAME_CONFIG'
+  | 'INVALID_ROSTER'
+  | 'INVALID_STATUS'
+  | 'ROSTER_TOO_LARGE'
+  | 'PERSISTENCE_ERROR';
+
+export type SwapTeamRolesResult =
+  | {
+      ok: true;
+      replayed: boolean;
+      teamARole: 'ONI' | 'RUNNER';
+      teamBRole: 'ONI' | 'RUNNER';
+      nextRevealTime: number;
+      newOniTeam: 'A' | 'B';
+    }
+  | { ok: false; reason: AdminGameStateFailureReason };
+
+export type ResumePlayerResult =
+  | { ok: true; resumed: boolean; status: 'ACTIVE' }
+  | { ok: false; reason: AdminGameStateFailureReason };
+
+export interface AdminGameStateGateway {
+  swapTeamRoles(input: SwapTeamRolesInput): Promise<SwapTeamRolesResult>;
+  resumePlayer(input: ResumePlayerInput): Promise<ResumePlayerResult>;
+}
