@@ -1,4 +1,14 @@
 export type { GameStatus, PlayerTeam, Role, Team, TeamRoles } from './types';
+export { resolveAdminPlayerResume, resolveAdminRoleSwap } from './adminGameState';
+export type {
+  AdminPlayerResumeInput,
+  AdminPlayerResumeResult,
+  AdminPlayerStatus,
+  AdminRoleSwapInput,
+  AdminRoleSwapPlayer,
+  AdminRoleSwapPlayerChange,
+  AdminRoleSwapResult,
+} from './adminGameState';
 export { getPlayerRole, getRoleForTeam, getTeamRole } from './roles';
 export {
   canCapture,

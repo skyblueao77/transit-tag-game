@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { GameConfig, User, GameLog, GameStatus, Mission , Role} from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { GameConfig, User, GameLog, GameStatus, Mission } from '../types';
 import { INITIAL_GAME_CONFIG, MISSIONS, FINAL_MISSIONS, getRandomFinalMission } from '../constants';
 import {
   Users, Lock, Trash2, Save, Shield, Trophy, Play,
@@ -7,6 +7,8 @@ import {
   RefreshCw 
 } from 'lucide-react';
 import { isCurrentAuthUserAdmin, signInAdmin } from '../src/infrastructure/firebase/auth';
+import { resumePlayer, swapTeamRoles } from '../src/application/adminGameStateActions';
+import { firebaseAdminGameStateGateway } from '../src/infrastructure/firebase/adminActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
@@ -32,6 +34,10 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const [manualMissionId, setManualMissionId] = useState('');
   const [emergencyProjections, setEmergencyProjections] = useState<EmergencyLocationProjection[]>([]);
   const [projectionUnavailable, setProjectionUnavailable] = useState(false);
+  const [resumingPlayerIds, setResumingPlayerIds] = useState<Set<string>>(new Set());
+  const roleSwapBusyRef = useRef(false);
+  const roleSwapRequestIdRef = useRef<string | null>(null);
+  const resumeBusyRef = useRef(new Set<string>());
   const emergencyPlayerIds = useMemo(
     () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id),
     [users],
@@ -137,56 +143,44 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   };
   // AdminView.tsx の内部に追加
 
-  const handleForceRoleSwap = async () => {
-  if (!confirm("Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※鬼側は30分間の待機状態になります。")) return;
-  
-  setIsProcessing(true);
-  try {
-    const now = Date.now();
-    const thirtyMinutes = 30 * 60 * 1000;
+  const handleForceRoleSwap = async (): Promise<void> => {
+    if (roleSwapBusyRef.current || isProcessing) return;
+    if (!confirm('Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※鬼側は30分間の待機状態になります。')) return;
 
-    // 現在の役割を反転
-    const newRoleA: Role = config.teamARole === 'ONI' ? 'RUNNER' : 'ONI';
-    const newRoleB: Role = newRoleA === 'ONI' ? 'RUNNER' : 'ONI';
-
-    // 1. GameConfig の更新
-    await updateDoc(doc(db, 'game_config', 'current'), {
-      teamARole: newRoleA,
-      teamBRole: newRoleB,
-      nextRevealTime: now + thirtyMinutes,
-    });
-
-    // 2. 全ユーザーのステータスを一括更新（Batch処理）
-    const batch = writeBatch(db);
-    const oniTeam = newRoleA === 'ONI' ? 'A' : 'B';
-
-    users.forEach(u => {
-      if (u.team === oniTeam) {
-        // 新しく鬼になったチーム：待機モードへ
-        batch.update(doc(db, 'users', u.id), {
-          status: 'WAITING',
-          waitingUntil: now + thirtyMinutes,
-          invincibleUntil: 0, // 無敵解除
-        });
-      } else if (u.team !== 'ADMIN') {
-        // 新しく逃走者になったチーム：アクティブへ
-        batch.update(doc(db, 'users', u.id), {
-          status: 'ACTIVE',
-          waitingUntil: 0,
-        });
+    roleSwapBusyRef.current = true;
+    setIsProcessing(true);
+    const requestId = roleSwapRequestIdRef.current ?? crypto.randomUUID();
+    roleSwapRequestIdRef.current = requestId;
+    try {
+      const result = await swapTeamRoles({ requestId }, firebaseAdminGameStateGateway);
+      if (result.ok === false) {
+        alert('交代に失敗しました。通信状態を確認して再試行してください。');
+        return;
       }
-    });
+      roleSwapRequestIdRef.current = null;
+      alert(`交代完了。Team ${result.newOniTeam} が鬼になりました。`);
+    } finally {
+      roleSwapBusyRef.current = false;
+      setIsProcessing(false);
+    }
+  };
 
-    await batch.commit();
-    await addGameLog(`【運営操作】攻守を強制的に交代しました (新・鬼: Team ${oniTeam})`, 'SYSTEM');
-    alert(`交代完了。Team ${oniTeam} が鬼になりました。`);
-  } catch (error) {
-    console.error(error);
-    alert('交代に失敗しました');
-  } finally {
-    setIsProcessing(false);
-  }
-};
+  const handleResumePlayer = async (user: User): Promise<void> => {
+    if (resumeBusyRef.current.has(user.id)) return;
+    if (!confirm(`${user.name} をすべての待機状態から復帰させますか？`)) return;
+
+    resumeBusyRef.current.add(user.id);
+    setResumingPlayerIds(new Set(resumeBusyRef.current));
+    try {
+      const result = await resumePlayer({ targetId: user.id }, firebaseAdminGameStateGateway);
+      if (result.ok === false) {
+        alert('Playerの復帰に失敗しました。権限と通信状態を確認してください。');
+      }
+    } finally {
+      resumeBusyRef.current.delete(user.id);
+      setResumingPlayerIds(new Set(resumeBusyRef.current));
+    }
+  };
   const handleForceLocationReveal = async () => {
     if (!confirm(`全員を ${searchDuration} 分間、固定公開しますか？`)) return;
     setIsProcessing(true);
@@ -555,17 +549,10 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
                 </button>
 
                 {/* 2. すべての待機状態から復帰させるボタン */}
-                <button 
-                  onClick={async () => { 
-                    if (confirm(`${u.name} をすべての待機状態から復帰させますか？`)) { 
-                      await setDoc(doc(db, 'users', u.id), { 
-                        status: 'ACTIVE', 
-                        waitingUntil: 0,           
-                        shinkansenStartTime: null  
-                      }, { merge: true }); 
-                    } 
-                  }} 
-                  className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 active:bg-emerald-100"
+                <button
+                  onClick={() => void handleResumePlayer(u)}
+                  disabled={resumingPlayerIds.has(u.id)}
+                  className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 active:bg-emerald-100 disabled:opacity-50"
                 >
                   <RefreshCw size={16} />
                 </button>
