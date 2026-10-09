@@ -46,10 +46,56 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    match /exposedLocations/{uid} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
-        && (request.auth.uid == uid || isAdmin())
+    function isRevealViewer() {
+      return signedIn() && (isAdmin()
+        || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.team in ['A', 'B']));
+    }
+
+    function validExposedLocation(uid) {
+      let data = resource.data;
+      let playerPath = /databases/$(database)/documents/users/$(uid);
+      let configPath = /databases/$(database)/documents/game_config/current;
+      return exists(configPath)
+        && get(configPath).data.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && data.keys().hasOnly([
+          'playerId', 'latitude', 'longitude', 'capturedAt', 'expiresAt', 'revealScope'
+        ])
+        && data.keys().hasAll(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && data.latitude is number
+        && data.latitude >= -90
+        && data.latitude <= 90
+        && data.longitude is number
+        && data.longitude >= -180
+        && data.longitude <= 180
+        && data.capturedAt is timestamp
+        && data.expiresAt is timestamp
+        && request.time < data.expiresAt
+        && (!data.keys().hasAny(['playerId']) || data.playerId == uid)
+        && exists(playerPath)
+        && get(playerPath).data.team in ['A', 'B']
+        && get(playerPath).data.status != 'EMERGENCY'
+        && get(playerPath).data.status != 'RETIRED'
+        && ((!data.keys().hasAny(['revealScope']))
+          || (data.revealScope == 'GLOBAL'
+            && exists(configPath)
+            && get(configPath).data.locationRevealUntil is timestamp
+            && request.time < get(configPath).data.locationRevealUntil)
+          || (data.revealScope == 'TEAM_A'
+            && get(playerPath).data.team == 'A'
+            && exists(configPath)
+            && get(configPath).data.teamARevealUntil is timestamp
+            && request.time < get(configPath).data.teamARevealUntil)
+          || (data.revealScope == 'TEAM_B'
+            && get(playerPath).data.team == 'B'
+            && exists(configPath)
+            && get(configPath).data.teamBRevealUntil is timestamp
+            && request.time < get(configPath).data.teamBRevealUntil));
+    }
+
+    function validOwnerExposedLocationWrite(uid) {
+      return signedIn()
+        && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
         && request.resource.data.keys().hasAll(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
         && request.resource.data.latitude is number
@@ -59,7 +105,31 @@ service cloud.firestore {
         && request.resource.data.longitude >= -180
         && request.resource.data.longitude <= 180
         && request.resource.data.capturedAt is timestamp
-        && request.resource.data.expiresAt is number;
+        && request.resource.data.expiresAt is timestamp
+        && request.time < request.resource.data.expiresAt
+        && request.resource.data.expiresAt <= request.time + duration.value(5, 'm')
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
+        && get(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY'
+        && get(/databases/$(database)/documents/users/$(uid)).data.status != 'RETIRED'
+        && exists(/databases/$(database)/documents/game_config/current)
+        && get(/databases/$(database)/documents/game_config/current).data.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE'];
+    }
+
+    function ownerMayReplaceSnapshot() {
+      return !resource.data.keys().hasAny(['revealScope'])
+        || resource.data.revealScope == 'INDIVIDUAL'
+        || !(resource.data.expiresAt is timestamp)
+        || resource.data.expiresAt <= request.time;
+    }
+
+    match /exposedLocations/{uid} {
+      allow get: if isRevealViewer()
+        && (!exists(/databases/$(database)/documents/exposedLocations/$(uid))
+          || validExposedLocation(uid));
+      allow list: if false;
+      allow create: if validOwnerExposedLocationWrite(uid);
+      allow update: if validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot();
       allow delete: if false;
     }
 
@@ -138,9 +208,34 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    function revealDeadlinesAreClear(data) {
+      return (!data.keys().hasAny(['locationRevealUntil'])
+          || data.locationRevealUntil == null || data.locationRevealUntil == 0)
+        && (!data.keys().hasAny(['teamARevealUntil'])
+          || data.teamARevealUntil == null || data.teamARevealUntil == 0)
+        && (!data.keys().hasAny(['teamBRevealUntil'])
+          || data.teamBRevealUntil == null || data.teamBRevealUntil == 0);
+    }
+
+    function revealDeadlineIsUnchangedOrClear(oldData, newData, field) {
+      return !newData.keys().hasAny([field])
+        || newData[field] == null
+        || newData[field] == 0
+        || (oldData.keys().hasAny([field]) && newData[field] == oldData[field]);
+    }
+
+    function revealDeadlinesAreUnchangedOrClear(oldData, newData) {
+      return revealDeadlineIsUnchangedOrClear(oldData, newData, 'locationRevealUntil')
+        && revealDeadlineIsUnchangedOrClear(oldData, newData, 'teamARevealUntil')
+        && revealDeadlineIsUnchangedOrClear(oldData, newData, 'teamBRevealUntil');
+    }
+
     match /game_config/{configId} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow create: if isAdmin() && revealDeadlinesAreClear(request.resource.data);
+      allow update: if isAdmin()
+        && revealDeadlinesAreUnchangedOrClear(resource.data, request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /{document=**} {

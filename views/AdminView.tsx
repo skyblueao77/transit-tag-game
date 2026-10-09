@@ -8,13 +8,16 @@ import {
 } from 'lucide-react';
 import { isCurrentAuthUserAdmin, signInAdmin } from '../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../src/application/adminGameStateActions';
+import { revealPlayerLocations } from '../src/application/adminReveal';
+import type { AdminRevealScope } from '../src/game/adminReveal';
 import { firebaseAdminGameStateGateway } from '../src/infrastructure/firebase/adminActions';
+import { firebaseAdminRevealGateway } from '../src/infrastructure/firebase/adminRevealActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
 import type { EmergencyLocationProjection } from '../types';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
-import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc } from 'firebase/firestore';
 
 interface Props {
   config: GameConfig;
@@ -38,6 +41,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const roleSwapBusyRef = useRef(false);
   const roleSwapRequestIdRef = useRef<string | null>(null);
   const resumeBusyRef = useRef(new Set<string>());
+  const revealBusyRef = useRef(false);
+  const revealRequestIdsRef = useRef<Partial<Record<AdminRevealScope, string>>>({});
   const emergencyPlayerIds = useMemo(
     () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id),
     [users],
@@ -181,51 +186,28 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       setResumingPlayerIds(new Set(resumeBusyRef.current));
     }
   };
-  const handleForceLocationReveal = async () => {
-    if (!confirm(`全員を ${searchDuration} 分間、固定公開しますか？`)) return;
-    setIsProcessing(true);
-    try {
-      const revealUntil = Date.now() + searchDuration * 60 * 1000;
-      const batch = writeBatch(db);
-      const privateLocations = await Promise.all(users.map(async user => {
-        const snapshot = await getDoc(doc(db, 'privateLocations', user.id));
-        if (!snapshot.exists()) return null;
-        const location = snapshot.data();
-        if (!Number.isFinite(location.latitude) || !Number.isFinite(location.longitude)) return null;
-        return { userId: user.id, latitude: location.latitude as number, longitude: location.longitude as number };
-      }));
-      privateLocations.forEach(location => {
-        if (!location) return;
-        batch.set(doc(db, 'exposedLocations', location.userId), {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          capturedAt: serverTimestamp(),
-          expiresAt: revealUntil,
-        });
-      });
-      batch.update(doc(db, 'game_config', 'current'), { locationRevealUntil: revealUntil });
-      await batch.commit();
-      await addGameLog(`一斉スナップショット（${searchDuration}分間）`, 'SYSTEM');
-      alert("公開しました");
-    } catch (error) { 
-      console.error(error); 
-    } finally { 
-      setIsProcessing(false); 
-    }
-  };
+  const handleLocationReveal = async (scope: AdminRevealScope): Promise<void> => {
+    if (revealBusyRef.current || isProcessing) return;
+    const target = scope === 'GLOBAL' ? '全員' : `Team ${scope === 'TEAM_A' ? 'A' : 'B'}`;
+    if (!confirm(`${target}の最新位置を ${searchDuration} 分間、スナップショット公開しますか？`)) return;
 
-  const handleTeamLocationReveal = async (targetTeam: 'A' | 'B') => {
-    if (!confirm(`Team ${targetTeam} を ${searchDuration} 分間、リアルタイム開示しますか？`)) return;
+    revealBusyRef.current = true;
     setIsProcessing(true);
+    const requestId = revealRequestIdsRef.current[scope] ?? crypto.randomUUID();
+    revealRequestIdsRef.current[scope] = requestId;
     try {
-      const revealUntil = Date.now() + searchDuration * 60 * 1000;
-      await updateDoc(doc(db, 'game_config', 'current'), { [`team${targetTeam}RevealUntil`]: revealUntil });
-      await addGameLog(`Team ${targetTeam} リアルタイムサーチ（${searchDuration}分）`, 'SYSTEM');
-      alert("サーチ開始");
-    } catch (error) { 
-      alert('失敗'); 
-    } finally { 
-      setIsProcessing(false); 
+      const result = await revealPlayerLocations({ scope, durationMinutes: searchDuration, requestId }, firebaseAdminRevealGateway);
+      if (result.ok === false) {
+        alert(result.reason === 'ZERO_VALID_LOCATIONS'
+          ? '最新の有効な位置情報がありません。Playerの位置更新後に再試行してください。'
+          : '位置公開に失敗しました。権限と通信状態を確認して再試行してください。');
+        return;
+      }
+      delete revealRequestIdsRef.current[scope];
+      alert(`${result.duplicate ? '既に実行済みです。' : '公開しました。'}\n公開: ${result.projectedCount}名 / 除外: ${result.skippedCount}名`);
+    } finally {
+      revealBusyRef.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -427,14 +409,14 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
           </div>
         <div className="bg-white/10 p-3 rounded-2xl border border-white/20">
             <label htmlFor="duration-input" className="block text-[9px] font-black uppercase opacity-70 mb-1">Search Duration (Min)</label>            <div className="flex items-center gap-3">
-              <input id="duration-input" type="number" value={searchDuration} onChange={(e) => setSearchDuration(Math.max(1, parseInt(e.target.value) || 1))} className="w-20 bg-white text-amber-600 font-black px-3 py-2 rounded-xl outline-none text-center" />
+              <input id="duration-input" type="number" min={1} max={30} step={1} value={searchDuration} onChange={(e) => setSearchDuration(Math.min(30, Math.max(1, parseInt(e.target.value) || 1)))} className="w-20 bg-white text-amber-600 font-black px-3 py-2 rounded-xl outline-none text-center" />
               <span className="font-black text-xs">分間に設定中</span>
             </div>
           </div>
-          <button onClick={handleForceLocationReveal} disabled={isProcessing} className="w-full py-4 bg-white text-amber-600 rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2">全員スナップショット公開</button>
+          <button onClick={() => void handleLocationReveal('GLOBAL')} disabled={isProcessing} className="w-full py-4 bg-white text-amber-600 rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2">全員スナップショット公開</button>
           <div className="grid grid-cols-2 gap-3 pt-2 border-t border-white/20">
-            <button onClick={() => handleTeamLocationReveal('A')} disabled={isProcessing} className="py-3 bg-red-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team A サーチ</button>
-            <button onClick={() => handleTeamLocationReveal('B')} disabled={isProcessing} className="py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team B サーチ</button>
+            <button onClick={() => void handleLocationReveal('TEAM_A')} disabled={isProcessing} className="py-3 bg-red-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team A サーチ</button>
+            <button onClick={() => void handleLocationReveal('TEAM_B')} disabled={isProcessing} className="py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team B サーチ</button>
           </div>
         </div>
       </section>

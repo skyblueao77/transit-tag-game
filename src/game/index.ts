@@ -47,6 +47,16 @@ export {
 } from './time';
 export type { GameClockState } from './time';
 export { resolveLocationVisibility } from './reveal';
+export { resolveAdminRevealPlan } from './adminReveal';
+export type {
+  AdminRevealConfigField,
+  AdminRevealInput,
+  AdminRevealPlan,
+  AdminRevealPlayer,
+  AdminRevealScope,
+  AdminRevealSnapshot,
+  AdminRevealSkipReason,
+} from './adminReveal';
 export {
   EMERGENCY_LOCATION_FRESHNESS_MS,
   resolveEmergencyLocationProjection,

@@ -3,6 +3,7 @@ import type { CaptureRejectionReason, CaptureSuccess } from '../game/capture.ts'
 import type { SafetyAction, SafetyReasonCode } from '../game/playerSafety.ts';
 import type { MissionReward } from '../game/missions.ts';
 import type { MissionScoreResult } from '../game/scoring.ts';
+import type { AdminRevealScope } from '../game/adminReveal.ts';
 
 
 export interface CompleteMissionInput {
@@ -204,4 +205,36 @@ export type ResumePlayerResult =
 export interface AdminGameStateGateway {
   swapTeamRoles(input: SwapTeamRolesInput): Promise<SwapTeamRolesResult>;
   resumePlayer(input: ResumePlayerInput): Promise<ResumePlayerResult>;
+}
+
+export interface AdminRevealInput {
+  scope: AdminRevealScope;
+  durationMinutes: number;
+  requestId: string;
+}
+
+export type AdminRevealFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'PERMISSION_DENIED'
+  | 'INVALID_ARGUMENT'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_GAME_CONFIG'
+  | 'INVALID_ROSTER'
+  | 'ZERO_VALID_LOCATIONS'
+  | 'WRITE_LIMIT_EXCEEDED'
+  | 'PERSISTENCE_ERROR';
+
+export type AdminRevealResult =
+  | {
+      ok: true;
+      scope: AdminRevealScope;
+      expiresAt: number;
+      projectedCount: number;
+      skippedCount: number;
+      duplicate: boolean;
+    }
+  | { ok: false; reason: AdminRevealFailureReason };
+
+export interface AdminRevealGateway {
+  revealPlayerLocations(input: AdminRevealInput): Promise<AdminRevealResult>;
 }

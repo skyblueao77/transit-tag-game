@@ -53,35 +53,49 @@ describe('location visibility rules', () => {
     });
   }
 
-  test('team realtime reveal wins over snapshot modes', () => {
-    assert.deepEqual(resolve({}, {
+  test('team reveal uses only its scoped snapshot rather than private realtime coordinates', () => {
+    assert.deepEqual(resolve({
+      exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000, revealScope: 'TEAM_B' },
+    }, {
       teamBRevealUntil: now + 10_000,
       globalRevealUntil: now + 20_000,
     }), {
-      mode: 'TEAM_REALTIME', latitude: 35.1, longitude: 139.1, expiresAt: now + 10_000,
+      mode: 'TEAM_SNAPSHOT', latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000,
     });
   });
 
-  test('team realtime reveal expires exactly at its deadline', () => {
-    assert.equal(resolve({}, { teamBRevealUntil: now }).mode, 'INDIVIDUAL_SNAPSHOT');
+  test('team reveal expires at its deadline and cannot expose a different scope snapshot', () => {
+    assert.equal(resolve({
+      exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'TEAM_B' },
+    }, { teamBRevealUntil: now }).mode, 'HIDDEN');
+    assert.equal(resolve({
+      exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'TEAM_A' },
+    }, { teamBRevealUntil: now + 10_000 }).mode, 'HIDDEN');
   });
 
-  test('global reveal uses exposed snapshot coordinates, never private coordinates', () => {
-    assert.deepEqual(resolve({}, {
-      globalRevealUntil: now + 10_000,
+  test('global reveal uses a GLOBAL exposed snapshot, never private coordinates', () => {
+    assert.deepEqual(resolve({
+      exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'GLOBAL' },
+    }, {
+      globalRevealUntil: now + 20_000,
     }), {
       mode: 'GLOBAL_SNAPSHOT', latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000,
     });
   });
 
   test('global snapshot wins over individual snapshot', () => {
-    assert.equal(resolve({}, { globalRevealUntil: now + 10_000 }).mode, 'GLOBAL_SNAPSHOT');
+    assert.equal(resolve({
+      exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'GLOBAL' },
+    }, { globalRevealUntil: now + 10_000 }).mode, 'GLOBAL_SNAPSHOT');
   });
 
-  test('global reveal expires exactly at its deadline', () => {
-    assert.deepEqual(resolve({ exposedLocation: undefined }, {
-      globalRevealUntil: now,
-    }), { mode: 'HIDDEN' });
+  test('global reveal expiry is enforced by both deadline and snapshot expiry', () => {
+    assert.deepEqual(resolve({
+      exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000, revealScope: 'GLOBAL' },
+    }, { globalRevealUntil: now }), { mode: 'HIDDEN' });
+    assert.deepEqual(resolve({
+      exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now, revealScope: 'GLOBAL' },
+    }, { globalRevealUntil: now + 10_000 }), { mode: 'HIDDEN' });
   });
 
   test('individual snapshot uses exposed coordinates and expires exactly at deadline', () => {
@@ -93,7 +107,7 @@ describe('location visibility rules', () => {
 
   test('public reveal is denied outside active public phases', () => {
     for (const phase of ['PRE_GAME', 'DAY1_PAUSED', 'DAY1_ENDED', 'DAY2_PAUSED', 'FINAL_MISSION', 'GAME_OVER']) {
-      assert.deepEqual(resolve({ exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: now + 10_000 } }, {
+      assert.deepEqual(resolve({ exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'GLOBAL' } }, {
         phase,
         globalRevealUntil: now + 10_000,
         teamBRevealUntil: now + 10_000,
@@ -113,8 +127,15 @@ describe('location visibility rules', () => {
     assert.deepEqual(resolve({ exposedLocation: undefined }), { mode: 'HIDDEN' });
   });
 
-  test('unknown teams do not inherit team B reveal', () => {
-    assert.equal(resolve({ team: 'ADMIN' }, { teamBRevealUntil: now + 10_000 }).mode, 'INDIVIDUAL_SNAPSHOT');
+  test('unknown teams are hidden even with an active GLOBAL snapshot and deadline', () => {
+    assert.deepEqual(resolve({
+      team: 'ADMIN',
+      exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'GLOBAL' },
+    }, { globalRevealUntil: now + 10_000 }), { mode: 'HIDDEN' });
+    assert.deepEqual(resolve({
+      team: 'unknown',
+      exposedLocation: { ...basePlayer.exposedLocation, revealScope: 'INDIVIDUAL' },
+    }), { mode: 'HIDDEN' });
   });
 
   test('input objects are not mutated', () => {

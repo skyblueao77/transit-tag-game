@@ -93,6 +93,10 @@ const App: React.FC = () => {
   const [safetyActionBusy, setSafetyActionBusy] = useState(false);
   const safetyActionBusyRef = useRef(false);
   const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
+  const exposedPlayerIdsJson = useMemo(
+    () => JSON.stringify(allUsers.filter(user => user.team === 'A' || user.team === 'B').map(user => user.id)),
+    [allUsers],
+  );
 
   useEffect(() => subscribeAuthUserId(uid => {
     authUserIdRef.current = uid;
@@ -159,13 +163,7 @@ const App: React.FC = () => {
         setPrivateLocation(null);
       },
     );
-    const unsubscribeExposedLocations = subscribeExposedLocations(
-      setExposedLocations,
-      error => {
-        console.error('Error fetching exposed locations:', error);
-        setExposedLocations({});
-      },
-    );
+
     const unsubscribeUsers = subscribePlayers(
       setAllUsers,
       error => console.error('Error fetching users data:', error),
@@ -174,10 +172,23 @@ const App: React.FC = () => {
     return () => {
       unsubscribeCurrentUser();
       unsubscribePrivateLocation();
-      unsubscribeExposedLocations();
       unsubscribeUsers();
     };
   }, [authUserId]);
+
+  useEffect(() => {
+    if (!authUserId) {
+      setExposedLocations({});
+      return;
+    }
+    const playerIds = JSON.parse(exposedPlayerIdsJson) as string[];
+    setExposedLocations({});
+    return subscribeExposedLocations(
+      playerIds,
+      setExposedLocations,
+      error => console.error('Error fetching exposed locations:', error),
+    );
+  }, [authUserId, exposedPlayerIdsJson]);
 
   useEffect(() => {
     if (!authUserId) return;

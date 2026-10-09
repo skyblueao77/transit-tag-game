@@ -228,7 +228,7 @@ const MapView: React.FC<Props> = ({
       if (visibility.mode === 'HIDDEN' || visibility.latitude === undefined || visibility.longitude === undefined) return;
 
       const isSelf = visibility.mode === 'SELF_PRIVATE';
-      const isTeamSearchActive = visibility.mode === 'TEAM_REALTIME';
+      const isTeamSearchActive = visibility.mode === 'TEAM_SNAPSHOT';
       const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
       const isIndividualExposed = visibility.mode === 'INDIVIDUAL_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
@@ -312,7 +312,7 @@ const MapView: React.FC<Props> = ({
   {timeLeft.teamSearchRemaining > 0 ? (
     /* 🚨 チーム別サーチ中（ペナルティ等）の表示：最優先・赤色 */
     <div className="z-[1001] px-4 py-2 bg-red-600 text-white text-center text-xs font-black animate-pulse flex items-center justify-center gap-2">
-      <AlertCircle size={14} /> 【警告】現在地が相手にリアルタイム公開中！ 残り {formatTime(timeLeft.teamSearchRemaining)}
+      <AlertCircle size={14} /> 【警告】チーム位置スナップショット公開中！ 残り {formatTime(timeLeft.teamSearchRemaining)}
     </div>
   ) : timeLeft.forceReveal > 0 ? (
     /* ⚠️ 管理者による全員スナップショット公開中の表示：オレンジ */

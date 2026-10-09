@@ -60,18 +60,46 @@ export function mapEmergencyLocationProjection(
 export function mapExposedLocationDocuments(
   documents: readonly { id: string; data: Record<string, unknown> }[],
 ): Record<string, ExposedLocation> {
-  return Object.fromEntries(
-    documents.map(document => [document.id, document.data as unknown as ExposedLocation]),
-  );
+  const mapped: Record<string, ExposedLocation> = {};
+  for (const document of documents) {
+    const data = document.data;
+    if (typeof data.latitude !== 'number' || !Number.isFinite(data.latitude)
+      || data.latitude < -90 || data.latitude > 90
+      || typeof data.longitude !== 'number' || !Number.isFinite(data.longitude)
+      || data.longitude < -180 || data.longitude > 180
+      || (data.playerId !== undefined && data.playerId !== document.id)) continue;
+    const capturedAt = firestoreTimestampMillis(data.capturedAt);
+    const expiresAt = firestoreTimestampMillis(data.expiresAt);
+    if (capturedAt === null || expiresAt === null) continue;
+    const revealScope = data.revealScope;
+    if (revealScope !== undefined
+      && revealScope !== 'GLOBAL' && revealScope !== 'TEAM_A'
+      && revealScope !== 'TEAM_B') continue;
+    mapped[document.id] = {
+      latitude: data.latitude,
+      longitude: data.longitude,
+      capturedAt,
+      expiresAt,
+      revealScope: (revealScope ?? 'INDIVIDUAL') as ExposedLocation['revealScope'],
+    };
+  }
+  return mapped;
 }
 
 export function mapGameConfigDocument(
   data: Record<string, unknown>,
   defaults: GameConfig,
 ): GameConfig {
-  return {
+  const config = {
     ...defaults,
     ...data,
     logs: (data.logs as GameLog[] | undefined) ?? [],
   } as GameConfig;
+  for (const field of ['locationRevealUntil', 'teamARevealUntil', 'teamBRevealUntil'] as const) {
+    const value = data[field];
+    if (value === undefined) continue;
+    const timestamp = firestoreTimestampMillis(value);
+    config[field] = timestamp ?? (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  }
+  return config;
 }

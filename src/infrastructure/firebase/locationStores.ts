@@ -1,4 +1,4 @@
-import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { ExposedLocationStore, PrivateLocationStore } from '../../application';
 
@@ -18,7 +18,7 @@ export const firebaseExposedLocationStore: ExposedLocationStore = {
       latitude: snapshot.latitude,
       longitude: snapshot.longitude,
       capturedAt: serverTimestamp(),
-      expiresAt: snapshot.expiresAt,
+      expiresAt: Timestamp.fromMillis(snapshot.expiresAt),
     });
   },
 };
