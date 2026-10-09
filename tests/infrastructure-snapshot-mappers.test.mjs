@@ -60,11 +60,35 @@ describe('Firebase snapshot mappers', () => {
     }), null);
   });
 
-  test('maps exposed location documents by UID', () => {
+  test('maps only valid exposed snapshot fields and converts Firestore timestamps', () => {
+    const timestamp = millis => ({ toMillis: () => millis });
     assert.deepEqual(mapExposedLocationDocuments([
-      { id: 'uid-1', data: { latitude: 35, longitude: 139, expiresAt: 100 } },
+      { id: 'uid-1', data: {
+        playerId: 'uid-1', latitude: 35, longitude: 139,
+        capturedAt: timestamp(50), expiresAt: timestamp(100), revealScope: 'TEAM_A', ignored: 'field',
+      } },
+      { id: 'uid-2', data: {
+        latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100),
+      } },
+      { id: 'uid-3', data: {
+        latitude: 91, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100),
+      } },
+      { id: 'uid-4', data: {
+        latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100), revealScope: 'INDIVIDUAL',
+      } },
+      { id: 'uid-5', data: {
+        latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100), revealScope: 'UNKNOWN',
+      } },
+      { id: 'uid-6', data: {
+        latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: 100,
+      } },
     ]), {
-      'uid-1': { latitude: 35, longitude: 139, expiresAt: 100 },
+      'uid-1': {
+        latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'TEAM_A',
+      },
+      'uid-2': {
+        latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'INDIVIDUAL',
+      },
     });
   });
 
@@ -76,5 +100,10 @@ describe('Firebase snapshot mappers', () => {
     assert.deepEqual(mapGameConfigDocument({ logs: [{ id: 'log-1' }] }, defaults).logs, [
       { id: 'log-1' },
     ]);
+    const config = mapGameConfigDocument({
+      locationRevealUntil: { toMillis: () => 200 }, teamARevealUntil: 300,
+    }, defaults);
+    assert.equal(config.locationRevealUntil, 200);
+    assert.equal(config.teamARevealUntil, 300);
   });
 });

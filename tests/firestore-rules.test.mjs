@@ -16,6 +16,8 @@ let userDToken;
 let userDUid;
 let userEToken;
 let userEUid;
+let unknownViewerToken;
+let unknownViewerUid;
 let adminToken;
 let adminUid;
 
@@ -48,11 +50,15 @@ function fields(values) {
         key,
         value === null
           ? { nullValue: null }
-          : typeof value === 'number'
-            ? { integerValue: value }
-            : typeof value === 'boolean'
-              ? { booleanValue: value }
-              : { stringValue: value },
+          : value instanceof Date
+            ? { timestampValue: value.toISOString() }
+            : typeof value === 'number'
+              ? Number.isInteger(value)
+                ? { integerValue: String(value) }
+                : { doubleValue: value }
+              : typeof value === 'boolean'
+                ? { booleanValue: value }
+                : { stringValue: value },
       ]),
     ),
   };
@@ -68,15 +74,16 @@ function privateLocationFields(latitude = 35.6812, longitude = 139.7671) {
   };
 }
 
-function exposedLocationFields(latitude = 35.6812, longitude = 139.7671) {
-  return {
-    fields: {
-      latitude: { doubleValue: latitude },
-      longitude: { doubleValue: longitude },
-      capturedAt: { timestampValue: '2026-01-01T00:00:00Z' },
-      expiresAt: { integerValue: 1_000_000 },
-    },
-  };
+function exposedLocationFields(latitude = 35.6812, longitude = 139.7671, extras = {}) {
+  const now = Date.now();
+  return fields({
+    latitude,
+    longitude,
+    capturedAt: new Date(now - 1_000),
+    expiresAt: new Date(extras.expiresAt ?? now + 5 * 60 * 1000),
+    ...(extras.revealScope ? { revealScope: extras.revealScope } : {}),
+    ...(extras.playerId ? { playerId: extras.playerId } : {}),
+  });
 }
 
 function emergencyProjectionFields(playerId, { expiresAt = Date.now() + 60_000 } = {}) {
@@ -121,6 +128,9 @@ before(async () => {
   const userE = await auth('signUp', {});
   userEToken = userE.idToken;
   userEUid = userE.localId;
+  const unknownViewer = await auth('signUp', {});
+  unknownViewerToken = unknownViewer.idToken;
+  unknownViewerUid = unknownViewer.localId;
   adminToken = (await auth('signUp', { email: 'admin@example.test', password: 'test-password-123' })).idToken;
 
   await seed(`users/${userAUid}`, {
@@ -134,6 +144,9 @@ before(async () => {
     missionId: 'mission-1', team: 'A', completedBy: userAUid, points: 15,
   });
   await seed('game_config/current', { status: 'WAITING' });
+  await seed(`users/${unknownViewerUid}`, {
+    id: unknownViewerUid, team: 'ADMIN', name: 'Unknown viewer', status: 'ACTIVE', score: 0, invincibleCards: 0,
+  });
 
   adminUid = (await auth('lookup', { idToken: adminToken })).users[0].localId;
   await seed(`admins/${adminUid}`, { role: 'admin' });
@@ -447,11 +460,16 @@ describe('Firestore Security Rules', () => {
   });
 
   test('protects exposed location snapshots and rejects legacy snapshot fields', async () => {
+    await seed(`users/${userAUid}`, {
+      id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0, invincibleCards: 1, invincibleUntil: 0,
+    });
+    await seed(`users/${userBUid}`, {
+      id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0,
+    });
+    await seed('game_config/current', { gameStatus: 'DAY1_ACTIVE' });
     assert.equal((await firestore(`exposedLocations/${userAUid}`)).status, 403);
-    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
-      method: 'PATCH',
-      body: exposedLocationFields(),
-    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userAToken })).status, 404);
+
     assert.equal((await firestore(`exposedLocations/${userAUid}`, {
       token: userAToken,
       method: 'PATCH',
@@ -462,12 +480,16 @@ describe('Firestore Security Rules', () => {
       method: 'PATCH',
       body: exposedLocationFields(1, 1),
     })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userAToken })).status, 200);
     assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userBToken })).status, 200);
+    assert.equal((await firestore('exposedLocations', { token: userAToken })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: adminToken })).status, 200);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: unknownViewerToken })).status, 403);
     assert.equal((await firestore(`exposedLocations/${userAUid}`, {
       token: adminToken,
       method: 'PATCH',
       body: exposedLocationFields(2, 2),
-    })).status, 200);
+    })).status, 403);
     for (const [latitude, longitude] of [[91, 0], [-91, 0], [0, 181], [0, -181]]) {
       assert.equal((await firestore(`exposedLocations/${userAUid}`, {
         token: userAToken,
@@ -485,15 +507,25 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(`exposedLocations/${userAUid}`, {
       token: userAToken,
       method: 'PATCH',
-      body: {
-        fields: {
-          latitude: { doubleValue: 1 },
-          longitude: { doubleValue: 1 },
-          capturedAt: { timestampValue: '2026-01-01T00:00:00Z' },
-          expiresAt: { integerValue: 1_000_000 },
-          role: { stringValue: 'ONI' },
-        },
-      },
+      body: fields({
+        latitude: 1, longitude: 1, capturedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000), role: 'ONI',
+      }),
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(1, 1, { expiresAt: Date.now() - 1 }),
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(1, 1, { expiresAt: Date.now() + 6 * 60_000 }),
+    })).status, 403);
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(1, 1, { revealScope: 'GLOBAL' }),
     })).status, 403);
     assert.equal((await firestore(`exposedLocations/${userAUid}`, {
       token: userAToken,
@@ -519,6 +551,63 @@ describe('Firestore Security Rules', () => {
       method: 'PATCH',
       body: fields({ locationExposedUntil: 1 }),
     })).status, 403);
+
+    await seed('users/' + userBUid, {
+      id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0,
+    });
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', teamARevealUntil: new Date(Date.now() + 60_000),
+    });
+    await seed(`exposedLocations/${userAUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userAUid,
+      capturedAt: new Date(), expiresAt: new Date(Date.now() + 60_000), revealScope: 'TEAM_A',
+    });
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userBToken })).status, 200);
+    await seed(`exposedLocations/${userBUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userBUid,
+      capturedAt: new Date(), expiresAt: new Date(Date.now() + 60_000), revealScope: 'TEAM_A',
+    });
+    assert.equal((await firestore(`exposedLocations/${userBUid}`, { token: userAToken })).status, 403);
+
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(2, 2),
+    })).status, 403, 'Owner cannot replace a live Admin-scoped snapshot');
+    await seed(`exposedLocations/${userAUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userAUid,
+      capturedAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1), revealScope: 'TEAM_A',
+    });
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(2, 2),
+    })).status, 200, 'Owner can replace an expired Admin snapshot');
+
+    await seed(`users/${userEUid}`, {
+      id: userEUid, team: 'A', name: 'User E', status: 'ACTIVE', score: 0, invincibleCards: 0,
+    });
+    await seed(`exposedLocations/${userEUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userEUid,
+      capturedAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1), revealScope: 'TEAM_A',
+    });
+    assert.equal((await firestore(`exposedLocations/${userEUid}`, { token: userAToken })).status, 403);
+    await seed(`exposedLocations/${userEUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userEUid,
+      capturedAt: new Date(), expiresAt: Date.now() + 60_000, revealScope: 'TEAM_A',
+    });
+    assert.equal((await firestore(`exposedLocations/${userEUid}`, { token: userAToken })).status, 403);
+    await seed(`exposedLocations/${userEUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userEUid,
+      capturedAt: new Date(Date.now() - 1_000), revealScope: 'TEAM_A',
+    });
+    assert.equal((await firestore(`exposedLocations/${userEUid}`, { token: userAToken })).status, 403);
+    await seed(`exposedLocations/${userEUid}`, {
+      latitude: 35.1, longitude: 139.1, playerId: userEUid,
+      capturedAt: new Date(Date.now() - 1_000), expiresAt: new Date(Date.now() + 60_000),
+      revealScope: 'INDIVIDUAL',
+    });
+    assert.equal((await firestore(`exposedLocations/${userEUid}`, { token: userAToken })).status, 403);
   });
 
   test('rejects legacy private GPS fields in public user documents', async () => {
@@ -631,11 +720,61 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(path, { token: adminToken })).status, 403);
   });
 
+  test('Admin client cannot set or extend Reveal deadlines and may clear them for Reset', async () => {
+    const initial = Date.now() + 120_000;
+    const later = Date.now() + 300_000;
+    const deadlineFields = {
+      locationRevealUntil: new Date(initial),
+      teamARevealUntil: new Date(initial + 1_000),
+      teamBRevealUntil: new Date(initial + 2_000),
+    };
+
+    for (const field of Object.keys(deadlineFields)) {
+      await seed('game_config/current', { gameStatus: 'DAY1_ACTIVE' });
+      assert.equal((await firestore('game_config/current', {
+        token: adminToken,
+        method: 'PATCH',
+        body: fields({ [field]: new Date(later) }),
+      })).status, 403, `Admin cannot set ${field}`);
+    }
+
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', ...deadlineFields,
+    });
+    assert.equal((await firestore('game_config/current', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ locationRevealUntil: new Date(later) }),
+    })).status, 403, 'Admin cannot extend an existing Reveal deadline');
+
+    assert.equal((await firestore('game_config/current', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ gameStatus: 'DAY1_ACTIVE', announcement: 'ordinary update', ...deadlineFields }),
+    })).status, 200, 'Admin may update unrelated Config fields with unchanged deadlines');
+
+    const reset = await firestore('game_config/current', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ gameStatus: 'PRE_GAME' }),
+    });
+    assert.equal(reset.status, 200, 'Reset may clear Reveal deadlines');
+    const resetConfig = await reset.json();
+    for (const field of Object.keys(deadlineFields)) {
+      assert.equal(resetConfig.fields?.[field], undefined, `Reset removes ${field}`);
+    }
+  });
+
   test('allows an administrator to perform management writes', async () => {
     assert.equal((await firestore('game_config/current', {
       token: adminToken,
       method: 'PATCH',
       body: fields({ status: 'RUNNING' }),
+    })).status, 200);
+    assert.equal((await firestore('game_config/current', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ announcement: 'Updated by Admin' }),
     })).status, 200);
     assert.equal((await firestore('missions/mission-1', {
       token: adminToken,

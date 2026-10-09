@@ -86,7 +86,7 @@ describe('Leaflet player popup text rendering', () => {
 
     assert.equal(emergency.textContent, '【緊急:EMERGENCY】さくら');
     assert.equal(emergency.children[0].style.color, 'red');
-    assert.match(search.textContent, /🚨 チーム個別サーチ中 \(リアルタイム\)/);
+    assert.match(search.textContent, /🚨 チーム個別サーチ中 \(位置スナップショット公開\)/);
     assert.match(reveal.textContent, /📸 全員スナップショット公開中/);
   });
 });

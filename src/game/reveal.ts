@@ -5,7 +5,7 @@ import { isActiveUntil } from './time.ts';
 
 export type LocationVisibilityMode =
   | 'SELF_PRIVATE'
-  | 'TEAM_REALTIME'
+  | 'TEAM_SNAPSHOT'
   | 'GLOBAL_SNAPSHOT'
   | 'INDIVIDUAL_SNAPSHOT'
   | 'HIDDEN';
@@ -20,6 +20,7 @@ export interface LocationVisibilityPlayer {
     latitude: number | null;
     longitude: number | null;
     expiresAt?: number;
+    revealScope?: 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL';
   };
 }
 
@@ -48,7 +49,7 @@ function hasCoordinates(
 }
 
 function visibleRealtime(
-  mode: 'SELF_PRIVATE' | 'TEAM_REALTIME',
+  mode: 'SELF_PRIVATE',
   player: LocationVisibilityPlayer,
   expiresAt?: number,
 ): LocationVisibilityResult {
@@ -62,18 +63,21 @@ function visibleRealtime(
 }
 
 function visibleSnapshot(
-  mode: 'GLOBAL_SNAPSHOT' | 'INDIVIDUAL_SNAPSHOT',
+  mode: 'TEAM_SNAPSHOT' | 'GLOBAL_SNAPSHOT' | 'INDIVIDUAL_SNAPSHOT',
   player: LocationVisibilityPlayer,
-  expiresAt?: number,
+  now: number,
+  deadline?: number,
 ): LocationVisibilityResult {
-  if (!player.exposedLocation || !hasCoordinates(player.exposedLocation.latitude, player.exposedLocation.longitude)) {
-    return { mode: 'HIDDEN' };
-  }
+  const snapshot = player.exposedLocation;
+  if (!snapshot || !hasCoordinates(snapshot.latitude, snapshot.longitude)
+    || !isActiveUntil(snapshot.expiresAt, now)) return { mode: 'HIDDEN' };
+  const expiresAt = deadline === undefined ? snapshot.expiresAt : Math.min(snapshot.expiresAt as number, deadline);
+  if (!isActiveUntil(expiresAt, now)) return { mode: 'HIDDEN' };
   return {
     mode,
-    latitude: player.exposedLocation.latitude,
-    longitude: player.exposedLocation.longitude,
-    ...(expiresAt === undefined ? {} : { expiresAt }),
+    latitude: snapshot.latitude,
+    longitude: snapshot.longitude,
+    expiresAt,
   };
 }
 
@@ -95,6 +99,10 @@ export function resolveLocationVisibility(
     return { mode: 'HIDDEN' };
   }
 
+  if (player.team !== 'A' && player.team !== 'B') {
+    return { mode: 'HIDDEN' };
+  }
+
   if (!canRevealLocation(input.phase)) {
     return { mode: 'HIDDEN' };
   }
@@ -105,17 +113,21 @@ export function resolveLocationVisibility(
       ? input.teamBRevealUntil
       : undefined;
 
-  if (isActiveUntil(teamRevealUntil, now)) {
-    return visibleRealtime('TEAM_REALTIME', player, teamRevealUntil);
+  const expectedTeamScope = player.team === 'A' ? 'TEAM_A' : player.team === 'B' ? 'TEAM_B' : undefined;
+  if (expectedTeamScope
+    && isActiveUntil(teamRevealUntil, now)
+    && player.exposedLocation?.revealScope === expectedTeamScope) {
+    return visibleSnapshot('TEAM_SNAPSHOT', player, now, teamRevealUntil);
   }
 
-  if (isActiveUntil(input.globalRevealUntil, now)) {
-    return visibleSnapshot('GLOBAL_SNAPSHOT', player, input.globalRevealUntil);
+  if (isActiveUntil(input.globalRevealUntil, now)
+    && player.exposedLocation?.revealScope === 'GLOBAL') {
+    return visibleSnapshot('GLOBAL_SNAPSHOT', player, now, input.globalRevealUntil);
   }
 
-  const individualExpiresAt = player.exposedLocation?.expiresAt;
-  if (isActiveUntil(individualExpiresAt, now)) {
-    return visibleSnapshot('INDIVIDUAL_SNAPSHOT', player, individualExpiresAt);
+  const scope = player.exposedLocation?.revealScope;
+  if (scope === undefined || scope === 'INDIVIDUAL') {
+    return visibleSnapshot('INDIVIDUAL_SNAPSHOT', player, now);
   }
 
   return { mode: 'HIDDEN' };

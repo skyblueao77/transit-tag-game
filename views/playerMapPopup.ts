@@ -56,7 +56,7 @@ export function createPlayerMapPopup(
   if (variant === 'TEAM_SEARCH') {
     detail.style.color = 'red';
     detail.style.fontWeight = 'bold';
-    appendText(document, detail, '🚨 チーム個別サーチ中 (リアルタイム)');
+    appendText(document, detail, '🚨 チーム個別サーチ中 (位置スナップショット公開)');
   } else if (variant === 'GLOBAL_REVEAL') {
     detail.style.color = 'orange';
     detail.style.fontWeight = 'bold';

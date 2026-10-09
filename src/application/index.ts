@@ -2,6 +2,7 @@ export { activateInvincibility } from './activateInvincibility.ts';
 export { resumeWaiting, startWaiting } from './waitingActions.ts';
 export { requestSafetyAction } from './requestSafetyAction.ts';
 export { resumePlayer, swapTeamRoles } from './adminGameStateActions.ts';
+export { revealPlayerLocations } from './adminReveal.ts';
 export { capturePlayer } from './capturePlayer.ts';
 export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
@@ -31,6 +32,10 @@ export type {
   SafetyActionResult,
   AdminGameStateFailureReason,
   AdminGameStateGateway,
+  AdminRevealFailureReason,
+  AdminRevealGateway,
+  AdminRevealInput,
+  AdminRevealResult,
   ResumePlayerInput,
   ResumePlayerResult,
   SwapTeamRolesInput,

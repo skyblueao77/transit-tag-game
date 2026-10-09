@@ -33,11 +33,15 @@ export interface PrivateLocation {
   updatedAt?: unknown;
 }
 
+export type ExposedLocationScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL';
+export type AdminRevealScope = Exclude<ExposedLocationScope, 'INDIVIDUAL'>;
+
 export interface ExposedLocation {
   latitude: number;
   longitude: number;
-  capturedAt?: unknown;
+  capturedAt?: number;
   expiresAt: number;
+  revealScope?: ExposedLocationScope;
 }
 
 export interface EmergencyLocationProjection {

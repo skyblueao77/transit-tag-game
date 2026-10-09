@@ -62,15 +62,36 @@ export function subscribePrivateLocation(
 }
 
 export function subscribeExposedLocations(
+  playerIds: readonly string[],
   onValue: (locations: Record<string, ExposedLocation>) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
-  return onSnapshot(collection(db, 'exposedLocations'), snapshot => {
-    onValue(mapExposedLocationDocuments(snapshot.docs.map(document => ({
-      id: document.id,
-      data: document.data(),
-    }))));
-  }, onError);
+  let active = true;
+  const values: Record<string, ExposedLocation> = {};
+  const publish = () => {
+    if (active) onValue({ ...values });
+  };
+  const unsubscribes = [...new Set(playerIds)].map(playerId => onSnapshot(
+    doc(db, 'exposedLocations', playerId),
+    snapshot => {
+      const mapped = mapExposedLocationDocuments(snapshot.exists()
+        ? [{ id: snapshot.id, data: snapshot.data() }]
+        : []);
+      if (mapped[playerId]) values[playerId] = mapped[playerId];
+      else delete values[playerId];
+      publish();
+    },
+    error => {
+      delete values[playerId];
+      publish();
+      if ((error as Error & { code?: string }).code !== 'permission-denied') onError(error);
+    },
+  ));
+  publish();
+  return () => {
+    active = false;
+    unsubscribes.forEach(unsubscribe => unsubscribe());
+  };
 }
 
 export function subscribeEmergencyLocationProjections(
