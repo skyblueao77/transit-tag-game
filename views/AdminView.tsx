@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GameConfig, User, GameLog, GameStatus, Mission } from '../types';
-import { INITIAL_GAME_CONFIG, MISSIONS, FINAL_MISSIONS, getRandomFinalMission } from '../constants';
+import { GameConfig, User, GameLog, Mission } from '../types';
+import { INITIAL_GAME_CONFIG, MISSIONS } from '../constants';
 import {
   Users, Lock, Trash2, Save, Shield, Trophy, Play,
   AlertTriangle, Shuffle, XCircle, Flag, MapPin,
@@ -12,6 +12,8 @@ import { revealPlayerLocations } from '../src/application/adminReveal';
 import type { AdminRevealScope } from '../src/game/adminReveal';
 import { firebaseAdminGameStateGateway } from '../src/infrastructure/firebase/adminActions';
 import { firebaseAdminRevealGateway } from '../src/infrastructure/firebase/adminRevealActions';
+import { transitionGamePhase } from '../src/application/adminPhaseActions';
+import { firebaseAdminPhaseGateway } from '../src/infrastructure/firebase/adminPhaseActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
@@ -95,38 +97,15 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     }
   };
 
-  const handleUpdateStatus = async (newStatus: GameStatus): Promise<void> => {
+  const handlePhaseAction = async (action: 'START_DAY1' | 'PAUSE' | 'RESUME' | 'END_DAY1' | 'START_DAY2' | 'START_FINAL' | 'END_GAME'): Promise<void> => {
     if (isProcessing) return;
-    if (!confirm(`フェーズを「${newStatus}」に変更しますか？`)) return;
+    if (!confirm(`フェーズ操作「${action}」を実行しますか？`)) return;
     setIsProcessing(true);
-    const updates: Record<string, any> = { gameStatus: newStatus };
-    
-    if (newStatus === 'PRE_GAME') {
-      Object.assign(updates, { day: 1, isFinalMissionActive: false, isGameOver: false, startTime: 0 });
-    } else if (newStatus === 'GAME_OVER') {
-      updates.isGameOver = true;
-    } else if (newStatus === 'DAY1_ACTIVE') {
-      if (!config.startTime || config.startTime === 0) {
-      updates.startTime = Date.now();
-      }
-    } else if (newStatus === 'DAY2_ACTIVE') {
-      if (!config.startTime || config.startTime === 0) {
-      updates.startTime = Date.now();
-      }
-    } else if (newStatus === 'FINAL_MISSION') {
-      const finalM = getRandomFinalMission();
-      updates.isFinalMissionActive = true;
-      updates.activeFinalMissionId = finalM.id;
-      updates.finalMissionEndTime = Date.now() + 2 * 60 * 60 * 1000;
-      await addGameLog(`最終ミッション選出: ${finalM.title}`, 'SYSTEM');
-    }
-
-
     try {
-      await updateDoc(doc(db, 'game_config', 'current'), updates);
-      await addGameLog(`フェーズ変更: ${newStatus}`, 'SYSTEM');
-    } catch (error) { 
-      alert('更新に失敗しました'); 
+      const result = await transitionGamePhase({ action, requestId: crypto.randomUUID() }, firebaseAdminPhaseGateway);
+      if (result.ok === false) alert(`フェーズ操作に失敗しました: ${result.reason}`);
+    } catch {
+      alert('フェーズ操作に失敗しました');
     } finally { 
       setIsProcessing(false); 
     }
@@ -345,10 +324,13 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter"><Play size={20} /> Phase Control</h3>
         <div className="grid grid-cols-2 gap-2">
-          {(['PRE_GAME', 'DAY1_ACTIVE', 'DAY1_PAUSED', 'DAY1_ENDED', 'DAY2_ACTIVE', 'FINAL_MISSION'] as GameStatus[]).map(status => (
-            <button key={status} onClick={() => handleUpdateStatus(status)} disabled={isProcessing} className={`p-3 rounded-xl font-bold text-[10px] ${config.gameStatus === status ? 'bg-slate-900 text-white shadow-inner' : 'bg-slate-100 text-slate-600'}`}>{status}</button>
-          ))}
-          <button onClick={() => handleUpdateStatus('GAME_OVER')} disabled={isProcessing} className="p-3 col-span-2 bg-red-600 text-white rounded-xl font-black text-xs mt-2 shadow-lg">GAME OVER / RESULT</button>
+          {config.gameStatus === 'PRE_GAME' && <button onClick={() => handlePhaseAction('START_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 開始</button>}
+          {config.gameStatus === 'DAY1_ACTIVE' && <><button onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button onClick={() => handlePhaseAction('END_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 終了</button></>}
+          {config.gameStatus === 'DAY1_PAUSED' && <button onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 再開</button>}
+          {config.gameStatus === 'DAY1_ENDED' && <button onClick={() => handlePhaseAction('START_DAY2')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 開始</button>}
+          {config.gameStatus === 'DAY2_ACTIVE' && <><button onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">Final 開始</button></>}
+          {config.gameStatus === 'DAY2_PAUSED' && <button onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 再開</button>}
+          {config.gameStatus === 'FINAL_MISSION' && <button onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 col-span-2 bg-red-600 text-white rounded-xl font-black text-xs mt-2 shadow-lg">GAME OVER / RESULT</button>}
         </div>
       </section>
           {/* AdminView.tsx の return 内 */}

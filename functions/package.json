@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test:unit": "npm run build && node --test test/missionService.test.mjs test/captureService.test.mjs test/invincibilityService.test.mjs test/waitingService.test.mjs test/safetyService.test.mjs test/emergencyLocationService.test.mjs test/adminGameStateService.test.mjs test/adminRevealService.test.mjs",
-    "test:integration": "node --test test/mission.integration.test.mjs && node --test test/waiting.integration.test.mjs && node --test test/safety.integration.test.mjs && node --test test/adminGameState.integration.test.mjs && node --test test/adminReveal.integration.test.mjs"
+    "test:unit": "npm run build && node --test test/missionService.test.mjs test/captureService.test.mjs test/invincibilityService.test.mjs test/waitingService.test.mjs test/safetyService.test.mjs test/emergencyLocationService.test.mjs test/adminGameStateService.test.mjs test/adminPhaseService.test.mjs test/adminRevealService.test.mjs",
+    "test:integration": "node --test test/mission.integration.test.mjs && node --test test/waiting.integration.test.mjs && node --test test/safety.integration.test.mjs && node --test test/adminGameState.integration.test.mjs && node --test test/adminPhase.integration.test.mjs && node --test test/adminReveal.integration.test.mjs"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",

@@ -532,7 +532,7 @@ const App: React.FC = () => {
               現在、ゲームは一時中断しています。<br />再開までしばらくお待ちください。
             </p>
             <div className="bg-white/20 p-4 rounded-2xl text-sm font-bold">
-              スコア加算、タイマー、無敵時間等は<br />すべて停止しています。
+              ゲーム操作は一時停止中です。待機時間や無敵時間などの期限は進行します。
             </div>
             <button
               onClick={() => setSafetyDialogOpen(true)}

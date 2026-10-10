@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
+const projectId=process.env.GCLOUD_PROJECT||process.env.GOOGLE_CLOUD_PROJECT||'demo-no-project';
+const db=`http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
+const authUrl='http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
+const fn=`http://127.0.0.1:5001/${projectId}/asia-northeast1/transitionGamePhase`;
+let seq=0;
+async function user(){const r=await fetch(`${authUrl}:signUp?key=demo-key`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({returnSecureToken:true})});assert.equal(r.ok,true);return r.json();}
+function enc(v){if(v===null)return{nullValue:null};if(typeof v==='number')return Number.isInteger(v)?{integerValue:String(v)}:{doubleValue:v};if(typeof v==='boolean')return{booleanValue:v};if(typeof v==='string')return{stringValue:v};if(Array.isArray(v))return{arrayValue:{values:v.map(enc)}};return{mapValue:{fields:Object.fromEntries(Object.entries(v).map(([k,x])=>[k,enc(x)]))}};}
+function dec(v){if(v.nullValue!==undefined)return null;if(v.integerValue!==undefined)return Number(v.integerValue);if(v.doubleValue!==undefined)return v.doubleValue;if(v.booleanValue!==undefined)return v.booleanValue;if(v.stringValue!==undefined)return v.stringValue;if(v.arrayValue)return(v.arrayValue.values||[]).map(dec);if(v.mapValue)return Object.fromEntries(Object.entries(v.mapValue.fields||{}).map(([k,x])=>[k,dec(x)]));return undefined;}
+async function seed(path,data){const r=await fetch(`${db}/${path}`,{method:'PATCH',headers:{Authorization:'Bearer owner','Content-Type':'application/json'},body:JSON.stringify({fields:Object.fromEntries(Object.entries(data).map(([k,v])=>[k,enc(v)]))})});assert.equal(r.ok,true,`seed ${path}: ${r.status}`);}
+async function clearFinalCatalog(){for(const n of ['01','02','03','04'])await fetch(`${db}/missions/final_${n}`,{method:'DELETE',headers:{Authorization:'Bearer owner'}});}
+async function read(path){const r=await fetch(`${db}/${path}`,{headers:{Authorization:'Bearer owner'}});if(!r.ok)return null;const body=await r.json();return Object.fromEntries(Object.entries(body.fields||{}).map(([k,v])=>[k,dec(v)]));}
+async function admin(){const a=await user();await seed(`admins/${a.localId}`,{active:true});return a;}
+async function call(data,token){const r=await fetch(fn,{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify({data})});return{status:r.status,body:await r.json()};}
+function id(){seq++;return`123e4567-e89b-42d3-a456-${String(seq).padStart(12,'0')}`;}
+function intent(action,requestId=id()){return{action,requestId};}
+async function config(gameStatus){await seed('game_config/current',{gameStatus,day:1,startTime:100,isGameOver:false,isFinalMissionActive:false,activeFinalMissionId:null,finalMissionEndTime:0,logs:[],unchanged:'value'});}
+describe('Trusted Phase callable emulator integration',()=>{
+ test('enforces the full semantic transition sequence and keeps atomic audit/receipt state',async()=>{const a=await admin();await clearFinalCatalog();await config('PRE_GAME');for(const n of ['01','02','03','04'])await seed(`missions/final_${n}`,{id:`final_${n}`,area:'最終',region:'ALL',title:'Mission',description:'Valid',points:100,type:'PHOTO'});
+  const steps=[['START_DAY1','DAY1_ACTIVE'],['PAUSE','DAY1_PAUSED'],['RESUME','DAY1_ACTIVE'],['END_DAY1','DAY1_ENDED'],['START_DAY2','DAY2_ACTIVE'],['PAUSE','DAY2_PAUSED'],['RESUME','DAY2_ACTIVE'],['START_FINAL','FINAL_MISSION'],['END_GAME','GAME_OVER']];
+  for(const[action,next]of steps){const requestId=id();const result=await call(intent(action,requestId),a.idToken);assert.ok(result.body.result,`${action}: ${JSON.stringify(result.body)}`);assert.equal(result.body.result.ok,true,JSON.stringify(result.body));assert.equal(result.body.result.newPhase,next);const current=await read('game_config/current');assert.equal(current.gameStatus,next);assert.equal(current.logs[0].action,action);assert.ok(await read(`admins/${a.localId}/phaseTransitionRequests/${requestId}`));}
+  const final=await read('game_config/current');assert.equal(final.unchanged,'value');assert.equal(final.isGameOver,true);assert.equal(final.isFinalMissionActive,false);assert.equal(final.logs.length,9);
+ });
+ test('rejects absent final catalog and non-admin without Config/log/receipt writes',async()=>{const a=await admin();await clearFinalCatalog();await config('DAY2_ACTIVE');const requestId=id();const denied=await call(intent('START_FINAL',requestId),(await user()).idToken);assert.equal(denied.body.error.status,'PERMISSION_DENIED');assert.equal((await read('game_config/current')).logs.length,0);assert.equal(await read(`admins/${a.localId}/phaseTransitionRequests/${requestId}`),null);
+  const missing=await call(intent('START_FINAL'),a.idToken);assert.equal(missing.body.error.details.reason,'FINAL_MISSION_NOT_FOUND');assert.equal((await read('game_config/current')).gameStatus,'DAY2_ACTIVE');assert.equal((await read('game_config/current')).logs.length,0);
+ });
+ test('requires authentication and replays same request exactly once',async()=>{const a=await admin();await config('DAY1_ACTIVE');const requestId=id();const unauth=await call(intent('PAUSE'));assert.equal(unauth.body.error.status,'UNAUTHENTICATED');const [one,two]=await Promise.all([call(intent('PAUSE',requestId),a.idToken),call(intent('PAUSE',requestId),a.idToken)]);assert.equal(one.body.result.ok,true);assert.equal(two.body.result.ok,true);assert.equal([one.body.result.duplicate,two.body.result.duplicate].filter(Boolean).length,1);assert.equal((await read('game_config/current')).logs.length,1);
+ });
+ test('different concurrent actions are re-evaluated against the committed phase',async()=>{const a=await admin();await config('DAY1_ACTIVE');const [pause,end]=await Promise.all([call(intent('PAUSE'),a.idToken),call(intent('END_DAY1'),a.idToken)]);assert.equal([pause,end].filter(x=>x.body.result?.ok===true).length,1);const rejected=[pause,end].find(x=>x.body.result?.ok!==true);assert.ok(rejected.body.error);const current=await read('game_config/current');assert.ok(['DAY1_PAUSED','DAY1_ENDED'].includes(current.gameStatus));assert.equal(current.logs.length,1);});
+});
