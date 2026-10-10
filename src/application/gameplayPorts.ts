@@ -238,3 +238,9 @@ export type AdminRevealResult =
 export interface AdminRevealGateway {
   revealPlayerLocations(input: AdminRevealInput): Promise<AdminRevealResult>;
 }
+
+export type TransitionGamePhaseAction = 'START_DAY1' | 'PAUSE' | 'RESUME' | 'END_DAY1' | 'START_DAY2' | 'START_FINAL' | 'END_GAME';
+export interface TransitionGamePhaseInput { action: TransitionGamePhaseAction; requestId: string }
+export type TransitionGamePhaseFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'TRANSITION_NOT_ALLOWED' | 'FINAL_MISSION_NOT_FOUND' | 'PERSISTENCE_ERROR';
+export type TransitionGamePhaseResult = { ok: true; action: TransitionGamePhaseAction; oldPhase: string; newPhase: string; selectedFinalMissionId?: string; duplicate: boolean } | { ok: false; reason: TransitionGamePhaseFailureReason };
+export interface AdminPhaseGateway { transitionGamePhase(input: TransitionGamePhaseInput): Promise<TransitionGamePhaseResult> }

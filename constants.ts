@@ -1,4 +1,6 @@
 import { Mission, GameConfig } from './types';
+import { FINAL_MISSIONS } from './src/game/finalMissions';
+export { FINAL_MISSIONS } from './src/game/finalMissions';
 
 // ============================================================
 // エリア定義
@@ -53,48 +55,6 @@ export const MISSIONS: Mission[] = [
   { id: 'm24', area: 'ALL', region: 'ALL', title: '合計450m以上の高さの建物に登れ', description: '高さ100m以上かつ展望台がある建物に登り合計450m以上に。各展望台入場証明を送ること。', points: 40, type: 'PHOTO' },
   { id: 'm23', area: 'ALL', region: 'ALL', title: '漢数字「一〜十」駅を5箇所巡れ', description: '駅名に漢数字（一〜十）が含まれる駅を5駅巡れ（1数字1駅）。各駅の写真を送ること。', points: 50, type: 'PHOTO' },
   { id: 'm31', area: 'ALL', region: 'ALL', title: 'プロ競技場2ヶ所訪れろ（最低1ヶ所は東北）', description: 'プロスポーツ本拠地を2ヶ所訪問。うち最低1ヶ所は東北。各競技場の写真を送ること。', points: 50, type: 'PHOTO' },
-];
-
-// ============================================================
-// 最終ミッション（100pt固定）
-// ============================================================
-export const FINAL_MISSIONS: Mission[] = [
-  {
-    id: 'final_01',
-    area: '最終',
-    region: 'ALL',
-    title: '乗降客数トップ10の駅を5つ訪れろ（非山手線必須）',
-    description: '1日の乗降客数全国トップ10の駅のうち5駅を訪れよ。非山手線の駅を必ず1駅以上含めること。各駅での写真を送ること。',
-    points: 100,
-    type: 'CHECKIN',
-  },
-  {
-    id: 'final_02',
-    area: '最終',
-    region: 'ALL',
-    title: '路面電車＋モノレールの両方を撮影しろ',
-    description: '「路面電車とモノレール」を合計3つ(それぞれ1つずつともう一つはどちらからか)撮影せよ。両方の写真を送ること。',
-    points: 100,
-    type: 'PHOTO',
-  },
-  {
-    id: 'final_03',
-    area: '最終',
-    region: 'ALL',
-    title: '東京・神奈川・千葉・埼玉のいずれかの庁舎に行け',
-    description: '1都3県の県庁・都庁を訪れよ。逃走者はゲーム終了まで都庁前駅を利用禁止。庁舎前での写真を送ること。',
-    points: 100,
-    type: 'CHECKIN',
-  },
-  {
-    id: 'final_04',
-    area: '最終',
-    region: 'ALL',
-    title: '2時間以内に異なる3社の車両が並ぶ瞬間を撮影せよ',
-    description: '2時間以内に、異なる鉄道会社3社の車両が並んでいる瞬間を1枚の写真に収めて送ること。',
-    points: 100,
-    type: 'PHOTO',
-  },
 ];
 
 // 最終ミッションをランダムに1つ選ぶ関数

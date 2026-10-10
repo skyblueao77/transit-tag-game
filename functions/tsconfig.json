@@ -15,6 +15,8 @@
   "include": [
     "src/**/*.ts",
     "../src/game/adminGameState.ts",
+    "../src/game/adminPhaseTransition.ts",
+    "../src/game/finalMissions.ts",
     "../src/game/adminReveal.ts",
     "../src/game/capture.ts",
     "../src/game/emergencyLocationProjection.ts",
