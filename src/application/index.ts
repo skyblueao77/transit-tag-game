@@ -3,6 +3,7 @@ export { resumeWaiting, startWaiting } from './waitingActions.ts';
 export { requestSafetyAction } from './requestSafetyAction.ts';
 export { resumePlayer, swapTeamRoles } from './adminGameStateActions.ts';
 export { revealPlayerLocations } from './adminReveal.ts';
+export { assignMissions, setMissionMode, syncMissionCatalog } from './adminMissionActions.ts';
 export { capturePlayer } from './capturePlayer.ts';
 export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
@@ -40,6 +41,15 @@ export type {
   ResumePlayerResult,
   SwapTeamRolesInput,
   SwapTeamRolesResult,
+  AdminMissionFailureReason,
+  AdminMissionGateway,
+  AssignMissionsInput,
+  AssignMissionsResult,
+  MissionMode,
+  SetMissionModeInput,
+  SetMissionModeResult,
+  SyncMissionCatalogInput,
+  SyncMissionCatalogResult,
 } from './gameplayPorts.ts';
 export type {
   Coordinates,

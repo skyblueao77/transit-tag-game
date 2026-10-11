@@ -14,6 +14,8 @@ import { firebaseAdminGameStateGateway } from '../src/infrastructure/firebase/ad
 import { firebaseAdminRevealGateway } from '../src/infrastructure/firebase/adminRevealActions';
 import { transitionGamePhase } from '../src/application/adminPhaseActions';
 import { firebaseAdminPhaseGateway } from '../src/infrastructure/firebase/adminPhaseActions';
+import { setMissionMode, assignMissions, syncMissionCatalog } from '../src/application/adminMissionActions';
+import { firebaseAdminMissionGateway } from '../src/infrastructure/firebase/adminMissionActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
@@ -45,6 +47,9 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const resumeBusyRef = useRef(new Set<string>());
   const revealBusyRef = useRef(false);
   const revealRequestIdsRef = useRef<Partial<Record<AdminRevealScope, string>>>({});
+  const missionBusyRef = useRef(false);
+  const missionRequestIdsRef = useRef<Record<string, string>>({});
+  const pendingMissionModeRef = useRef<{ mode: 'SAME' | 'DIFFERENT'; requestId: string } | null>(null);
   const emergencyPlayerIds = useMemo(
     () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id),
     [users],
@@ -208,53 +213,91 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     }
   };
 
+  const missionRequestId = (key: string): string => {
+    missionRequestIdsRef.current[key] ??= crypto.randomUUID();
+    return missionRequestIdsRef.current[key];
+  };
+
   const handleToggleMissionMode = async (): Promise<void> => {
-    const next = config.missionMode === 'SAME' ? 'DIFFERENT' : 'SAME';
+    if (missionBusyRef.current || isProcessing) return;
+    const pending = pendingMissionModeRef.current;
+    const next = pending?.mode ?? (config.missionMode === 'SAME' ? 'DIFFERENT' : 'SAME');
+    const requestId = pending?.requestId ?? crypto.randomUUID();
+    pendingMissionModeRef.current ??= { mode: next, requestId };
+    missionBusyRef.current = true;
+    setIsProcessing(true);
     try {
-      await updateDoc(doc(db, 'game_config', 'current'), { missionMode: next });
-    } catch {
-      alert('モード切り替えに失敗しました。');
+      const result = await setMissionMode({ mode: next, requestId }, firebaseAdminMissionGateway);
+      if (result.ok === false) {
+        alert(`モード切り替えに失敗しました: ${result.reason}`);
+        return;
+      }
+      pendingMissionModeRef.current = null;
+      if (!result.changed) alert('配信モードは変更されていません。');
+    } finally {
+      missionBusyRef.current = false;
+      setIsProcessing(false);
     }
   };
 
-  const handleManualAssign = async (team: 'A' | 'B') => {
+  const handleManualAssign = async (team: 'A' | 'B'): Promise<void> => {
+    if (missionBusyRef.current || isProcessing) return;
     if (!manualMissionId) return alert('ミッションを選択してください');
     if (!confirm(`Team ${team} に指定ミッションを配信しますか？`)) return;
+    const target = team === 'A' ? 'TEAM_A' : 'TEAM_B';
+    const key = `manual:${target}:${manualMissionId}`;
+    missionBusyRef.current = true;
+    setIsProcessing(true);
     try {
-      const field = team === 'A' ? 'activeMissionA' : 'activeMissionB';
-      await updateDoc(doc(db, 'game_config', 'current'), { [field]: manualMissionId });
-      await addGameLog(`Team ${team} に指定ミッション配信`, 'SYSTEM');
+      const result = await assignMissions({ strategy: 'MANUAL', target, missionId: manualMissionId, requestId: missionRequestId(key) }, firebaseAdminMissionGateway);
+      if (result.ok === false) {
+        alert(`ミッション配信に失敗しました: ${result.reason}`);
+        return;
+      }
+      delete missionRequestIdsRef.current[key];
       alert('配信完了');
-    } catch { 
-      alert('失敗'); 
+    } finally {
+      missionBusyRef.current = false;
+      setIsProcessing(false);
     }
   };
 
   const handleShuffleMissions = async (): Promise<void> => {
-    if (MISSIONS.length === 0) return alert('ミッションデータがありません');
+    if (missionBusyRef.current || isProcessing) return;
+    if (!confirm('サーバーで選んだミッションを両チームへ配信しますか？')) return;
+    const key = 'random-assignment';
+    missionBusyRef.current = true;
+    setIsProcessing(true);
     try {
-      setIsProcessing(true);
-      const pool = [...MISSIONS];
-      const m1 = pool[Math.floor(Math.random() * pool.length)];
-      let m2 = pool[Math.floor(Math.random() * pool.length)];
-      
-      if (config.missionMode === 'DIFFERENT' && pool.length > 1) {
-        while (m2.id === m1.id) { 
-          m2 = pool[Math.floor(Math.random() * pool.length)]; 
-        }
+      const result = await assignMissions({ strategy: 'RANDOM', target: 'BOTH', requestId: missionRequestId(key) }, firebaseAdminMissionGateway);
+      if (result.ok === false) {
+        alert(`ランダム配信に失敗しました: ${result.reason}`);
+        return;
       }
+      delete missionRequestIdsRef.current[key];
+      alert(`ミッションを配信しました${result.duplicate ? '（再送結果）' : ''}`);
+    } finally {
+      missionBusyRef.current = false;
+      setIsProcessing(false);
+    }
+  };
 
-      await updateDoc(doc(db, 'game_config', 'current'), { 
-        activeMissionA: m1.id, 
-        activeMissionB: config.missionMode === 'SAME' ? m1.id : m2.id 
-      });
-
-      await addGameLog(`ランダムミッション配信 (${config.missionMode})`, 'MISSION');
-      alert("ミッションを配信しました");
-    } catch { 
-      alert('失敗'); 
-    } finally { 
-      setIsProcessing(false); 
+  const handleSyncMissionCatalog = async (): Promise<void> => {
+    if (missionBusyRef.current || isProcessing || !confirm('Normal / Final Mission catalogを安全に同期しますか？未知のMissionは削除されません。')) return;
+    const key = 'catalog-sync';
+    missionBusyRef.current = true;
+    setIsProcessing(true);
+    try {
+      const result = await syncMissionCatalog({ requestId: missionRequestId(key) }, firebaseAdminMissionGateway);
+      if (result.ok === false) {
+        alert(`ミッションcatalog同期に失敗しました: ${result.reason}`);
+        return;
+      }
+      delete missionRequestIdsRef.current[key];
+      alert(`同期完了: 作成 ${result.createdCount} / 更新 ${result.updatedCount} / 変更なし ${result.unchangedCount}（管理対象 ${result.totalManagedCount}）`);
+    } finally {
+      missionBusyRef.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -430,8 +473,9 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
         <h3 className="font-black flex items-center gap-2 mb-4"><Shuffle size={20} /> Mission Control</h3>
         
         <button 
-          onClick={handleToggleMissionMode} 
-          className="w-full mb-4 py-2 rounded-xl border border-white/30 text-[11px] font-black flex items-center justify-center gap-2 bg-white/10 active:bg-white/20 transition-all"
+          onClick={handleToggleMissionMode}
+          disabled={isProcessing}
+          className="w-full mb-4 py-2 rounded-xl border border-white/30 text-[11px] font-black flex items-center justify-center gap-2 bg-white/10 active:bg-white/20 transition-all disabled:opacity-50"
         >
           配信モード：{config.missionMode === 'SAME' ? '🔗 両チーム同一' : '🔀 チーム別'}
         </button>
@@ -445,18 +489,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
                   <div className="text-[9px] font-black text-white/50 uppercase">Team {t} Status</div>
                   <p className="text-xs font-bold text-white leading-snug">{m ? m.title : '未配信'}</p>
                 </div>
-                <button onClick={async () => {
-                  const missionId = t === 'A' ? config.activeMissionA : config.activeMissionB;
-                  if (!missionId) return;
-                  if (confirm(`Team ${t} の完了を取り消しますか？`)) {
-                    const mission = MISSIONS.find(mi => mi.id === missionId);
-                    const pts = mission?.points ?? 0;
-                    const currentScore = t === 'A' ? (config.teamAScore ?? 0) : (config.teamBScore ?? 0);
-                    await updateDoc(doc(db, 'game_config', 'current'), { 
-                      [t === 'A' ? 'teamAScore' : 'teamBScore']: Math.max(0, currentScore - pts) 
-                    });
-                  }
-                }} className="shrink-0 p-1.5 bg-white/10 rounded-lg active:bg-red-500"><XCircle size={14} /></button>
+                <button type="button" disabled title="スコア調整機能へ移行予定" className="shrink-0 p-1.5 bg-white/10 rounded-lg opacity-40 cursor-not-allowed"><XCircle size={14} /></button>
               </div>
             );
           })}
@@ -471,8 +504,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
             {MISSIONS.map(m => <option key={m.id} value={m.id}>[{m.points}pt] {m.title}</option>)}
           </select>
           <div className="grid grid-cols-2 gap-3">
-            <button onClick={() => handleManualAssign('A')} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40">Aに指定配信</button>
-            <button onClick={() => handleManualAssign('B')} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40">Bに指定配信</button>
+            <button onClick={() => handleManualAssign('A')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Aに指定配信</button>
+            <button onClick={() => handleManualAssign('B')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Bに指定配信</button>
           </div>
         </div>
       </section>
@@ -556,7 +589,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       </section>
 
       <div className="space-y-4">
-        <button onClick={async () => { if (!confirm(`同期しますか？`)) return; setIsProcessing(true); try { const batch = writeBatch(db); const existing = await getDocs(collection(db, 'missions')); existing.docs.forEach(d => batch.delete(d.ref)); MISSIONS.forEach(m => { batch.set(doc(db, 'missions', m.id), m); }); await batch.commit(); alert('完了'); } catch { alert('失敗'); } finally { setIsProcessing(false); } }} disabled={isProcessing} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs border border-blue-100 mb-2 uppercase tracking-widest active:bg-blue-100">🔄 ミッションDB同期</button>
+        <button onClick={handleSyncMissionCatalog} disabled={isProcessing} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs border border-blue-100 mb-2 uppercase tracking-widest active:bg-blue-100 disabled:opacity-50">🔄 ミッションDB同期</button>
         <button onClick={handleResetAllData} disabled={isProcessing} className="w-full py-5 bg-red-50 text-red-600 rounded-2xl font-black text-sm border-2 border-red-100 flex items-center justify-center gap-2 uppercase tracking-widest active:bg-red-100"><AlertTriangle size={18} /> Master Reset</button>
       </div>
     </div>

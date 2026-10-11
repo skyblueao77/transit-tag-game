@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
+import { before, describe, test } from 'node:test';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
 const functionsBase = `http://127.0.0.1:5001/${projectId}/asia-northeast1`;
+const firestoreClearUrl = `http://127.0.0.1:8080/emulator/v1/projects/${projectId}/databases/(default)/documents`;
+const authClearUrl = `http://127.0.0.1:9099/emulator/v1/projects/${projectId}/accounts`;
 let sequence = 0;
+
+async function clearEmulatorState() {
+  const firestoreResponse = await fetch(firestoreClearUrl, { method: 'DELETE' });
+  assert.equal(firestoreResponse.ok, true, `Firestore Emulator clear failed: ${firestoreResponse.status}`);
+  const authResponse = await fetch(authClearUrl, { method: 'DELETE' });
+  assert.equal(authResponse.ok, true, `Auth Emulator clear failed: ${authResponse.status}`);
+}
 
 async function createAuthUser() {
   const response = await fetch(`${authBase}:signUp?key=demo-key`, {
@@ -114,6 +123,8 @@ function intent(scope, requestId = uniqueRequestId(), durationMinutes = 1) {
 }
 
 describe('Admin Reveal callable emulator integration', () => {
+  before(clearEmulatorState);
+
   test('Admin GLOBAL, TEAM_A, and TEAM_B create scoped snapshots and trusted deadlines', async () => {
     const admin = await seedAdmin();
     const a = await seedPlayer({ team: 'A' });
