@@ -1,6 +1,6 @@
-import { Mission, GameConfig } from './types';
-import { FINAL_MISSIONS } from './src/game/finalMissions';
-export { FINAL_MISSIONS } from './src/game/finalMissions';
+import type { Mission, GameConfig } from './types.ts';
+import { FINAL_MISSIONS } from './src/game/finalMissions.ts';
+export { FINAL_MISSIONS } from './src/game/finalMissions.ts';
 
 // ============================================================
 // エリア定義

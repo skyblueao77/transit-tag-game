@@ -244,3 +244,25 @@ export interface TransitionGamePhaseInput { action: TransitionGamePhaseAction; r
 export type TransitionGamePhaseFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'TRANSITION_NOT_ALLOWED' | 'FINAL_MISSION_NOT_FOUND' | 'PERSISTENCE_ERROR';
 export type TransitionGamePhaseResult = { ok: true; action: TransitionGamePhaseAction; oldPhase: string; newPhase: string; selectedFinalMissionId?: string; duplicate: boolean } | { ok: false; reason: TransitionGamePhaseFailureReason };
 export interface AdminPhaseGateway { transitionGamePhase(input: TransitionGamePhaseInput): Promise<TransitionGamePhaseResult> }
+
+export type MissionMode = 'SAME' | 'DIFFERENT';
+export interface SetMissionModeInput { mode: MissionMode; requestId: string }
+export type AssignMissionsInput =
+  | { strategy: 'MANUAL'; target: 'TEAM_A' | 'TEAM_B'; missionId: string; requestId: string }
+  | { strategy: 'RANDOM'; target: 'BOTH'; requestId: string };
+export interface SyncMissionCatalogInput { requestId: string }
+export type AdminMissionFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'INVALID_PHASE' | 'ASSIGNMENT_NOT_ALLOWED' | 'INVALID_MISSION' | 'PERSISTENCE_ERROR';
+export type SetMissionModeResult =
+  | { ok: true; action: 'setMissionMode'; mode: MissionMode; changed: boolean; duplicate: boolean }
+  | { ok: false; reason: AdminMissionFailureReason };
+export type AssignMissionsResult =
+  | { ok: true; action: 'assignMissions'; strategy: 'MANUAL' | 'RANDOM'; target: 'TEAM_A' | 'TEAM_B' | 'BOTH'; activeMissionA?: string; activeMissionB?: string; selectedMissionIds: string[]; duplicate: boolean }
+  | { ok: false; reason: AdminMissionFailureReason };
+export type SyncMissionCatalogResult =
+  | { ok: true; action: 'syncMissionCatalog'; createdCount: number; updatedCount: number; unchangedCount: number; totalManagedCount: number; duplicate: boolean }
+  | { ok: false; reason: AdminMissionFailureReason };
+export interface AdminMissionGateway {
+  setMissionMode(input: SetMissionModeInput): Promise<SetMissionModeResult>;
+  assignMissions(input: AssignMissionsInput): Promise<AssignMissionsResult>;
+  syncMissionCatalog(input: SyncMissionCatalogInput): Promise<SyncMissionCatalogResult>;
+}

@@ -48,6 +48,22 @@ export {
 export type { GameClockState } from './time';
 export { resolveLocationVisibility } from './reveal';
 export { resolveAdminRevealPlan } from './adminReveal';
+export {
+  planMissionCatalogSync,
+  resolveMissionAssignment,
+  resolveMissionModeChange,
+  validateCanonicalMission,
+} from './adminMission';
+export type {
+  MissionAdminPhase,
+  MissionAdminRejectionReason,
+  MissionAssignmentDecision,
+  MissionAssignmentStrategy,
+  MissionAssignmentTarget,
+  MissionCatalogSyncPlan,
+  MissionMode,
+  MissionModeChangeDecision,
+} from './adminMission';
 export type {
   AdminRevealConfigField,
   AdminRevealInput,
