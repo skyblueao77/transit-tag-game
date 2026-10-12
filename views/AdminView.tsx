@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GameConfig, User, GameLog, Mission } from '../types';
-import { INITIAL_GAME_CONFIG, MISSIONS } from '../constants';
+import { MISSIONS } from '../constants';
 import {
   Users, Lock, Trash2, Shield, Trophy, Play,
   AlertTriangle, Shuffle, XCircle, Flag, MapPin,
   RefreshCw 
 } from 'lucide-react';
-import { isCurrentAuthUserAdmin, signInAdmin } from '../src/infrastructure/firebase/auth';
+import { signInAdmin } from '../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../src/application/adminReveal';
 import type { AdminRevealScope } from '../src/game/adminReveal';
@@ -19,12 +19,15 @@ import { firebaseAdminMissionGateway } from '../src/infrastructure/firebase/admi
 import { adjustTeamScore } from '../src/application/adminScoreAdjustment';
 import type { AdjustTeamScoreResult, ScoreAdjustmentReasonCode } from '../src/application/gameplayPorts';
 import { firebaseAdminScoreAdjustmentGateway } from '../src/infrastructure/firebase/adminScoreAdjustmentActions';
+import { prepareGameReset, executeGameReset } from '../src/application/gameReset';
+import type { PrepareGameResetPreview } from '../src/application/gameplayPorts';
+import { firebaseAdminGameResetGateway } from '../src/infrastructure/firebase/adminGameResetActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
 import type { EmergencyLocationProjection } from '../types';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
-import { doc, updateDoc, collection, getDocs, writeBatch, deleteDoc, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 
 interface Props {
   config: GameConfig;
@@ -41,6 +44,10 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const [scoreDeltaInput, setScoreDeltaInput] = useState('');
   const [scoreReasonCode, setScoreReasonCode] = useState<ScoreAdjustmentReasonCode>('CORRECTION');
   const [scoreAdjustmentResult, setScoreAdjustmentResult] = useState<Extract<AdjustTeamScoreResult, { ok: true }> | null>(null);
+  const [resetPreview, setResetPreview] = useState<PrepareGameResetPreview | null>(null);
+  const [resetConfirmationText, setResetConfirmationText] = useState('');
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [searchDuration, setSearchDuration] = useState(10); 
   const [manualMissionId, setManualMissionId] = useState('');
@@ -54,6 +61,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const revealRequestIdsRef = useRef<Partial<Record<AdminRevealScope, string>>>({});
   const missionBusyRef = useRef(false);
   const scoreBusyRef = useRef(false);
+  const resetBusyRef = useRef(false);
+  const resetRequestIdRef = useRef<string | null>(null);
   const pendingScoreRequestRef = useRef<{ key: string; requestId: string } | null>(null);
   const missionRequestIdsRef = useRef<Record<string, string>>({});
   const pendingMissionModeRef = useRef<{ mode: 'SAME' | 'DIFFERENT'; requestId: string } | null>(null);
@@ -341,30 +350,48 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     }
   };
 
-  const handleResetAllData = async (): Promise<void> => {
-    if (!confirm('【⚠️警告】全データを消去しますか？')) return;
-    if (!(await isCurrentAuthUserAdmin())) {
-      alert('管理者権限が確認できません。');
-      return;
-    }
+  const handlePrepareGameReset = async (): Promise<void> => {
+    if (resetBusyRef.current || isProcessing) return;
+    resetBusyRef.current = true;
+    setIsProcessing(true);
+    setResetPreview(null);
+    setResetConfirmationText('');
+    setResetError(null);
+    setResetSuccess(null);
+    resetRequestIdRef.current = null;
     try {
-      setIsProcessing(true);
-      const batch = writeBatch(db);
-      const userSnaps = await getDocs(collection(db, 'users'));
-      userSnaps.docs.forEach(uDoc => batch.delete(uDoc.ref));
-      batch.set(doc(db, 'game_config', 'current'), { 
-        ...INITIAL_GAME_CONFIG, 
-        logs: [], 
-        teamAScore: 0, 
-        teamBScore: 0, 
-        gameStatus: 'PRE_GAME' 
-      });
-      await batch.commit(); 
-      window.location.reload();
-    } catch { 
-      alert('失敗'); 
-    } finally { 
-      setIsProcessing(false); 
+      const result = await prepareGameReset({}, firebaseAdminGameResetGateway);
+      if (result.ok === false) {
+        setResetError(`Reset Previewに失敗しました: ${result.reason}`);
+        return;
+      }
+      setResetPreview(result.preview);
+    } finally {
+      resetBusyRef.current = false;
+      setIsProcessing(false);
+    }
+  };
+
+  const handleExecuteGameReset = async (): Promise<void> => {
+    if (resetBusyRef.current || isProcessing || !resetPreview || resetConfirmationText !== 'RESET') return;
+    resetBusyRef.current = true;
+    setIsProcessing(true);
+    setResetError(null);
+    try {
+      resetRequestIdRef.current ??= crypto.randomUUID();
+      const result = await executeGameReset({
+        confirmationToken: resetPreview.confirmationToken,
+        requestId: resetRequestIdRef.current,
+      }, firebaseAdminGameResetGateway);
+      if (result.ok === false) {
+        setResetError(`Resetは実行されませんでした: ${result.reason}`);
+        return;
+      }
+      resetRequestIdRef.current = null;
+      setResetSuccess(`新しいSession ${result.newSessionId} を開始しました`);
+    } finally {
+      resetBusyRef.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -643,7 +670,28 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
       <div className="space-y-4">
         <button onClick={handleSyncMissionCatalog} disabled={isProcessing} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs border border-blue-100 mb-2 uppercase tracking-widest active:bg-blue-100 disabled:opacity-50">🔄 ミッションDB同期</button>
-        <button onClick={handleResetAllData} disabled={isProcessing} className="w-full py-5 bg-red-50 text-red-600 rounded-2xl font-black text-sm border-2 border-red-100 flex items-center justify-center gap-2 uppercase tracking-widest active:bg-red-100"><AlertTriangle size={18} /> Master Reset</button>
+        <section className="rounded-2xl border-2 border-red-100 bg-red-50 p-4 text-slate-800">
+          <h3 className="flex items-center gap-2 font-black text-red-700"><AlertTriangle size={18} /> Master Reset Preview</h3>
+          <p className="mt-2 text-xs font-bold text-slate-600">Previewのみです。実行後のロールバックはできません。Session対応が完了するまでResetは実行できません。</p>
+          <button type="button" onClick={() => void handlePrepareGameReset()} disabled={isProcessing} className="mt-3 w-full rounded-xl bg-red-600 py-3 font-black text-white disabled:opacity-50">{isProcessing ? 'Previewを取得中…' : 'Reset Previewを取得'}</button>
+          {resetPreview && <div className="mt-3 space-y-2 rounded-xl bg-white p-3 text-xs">
+            <p>対象Player: <strong>{resetPreview.participantCount}</strong></p>
+            <p>Private locations: <strong>{resetPreview.privateLocationCount}</strong></p>
+            <p>Exposed locations: <strong>{resetPreview.exposedLocationCount}</strong></p>
+            <p>Emergency projections: <strong>{resetPreview.emergencyProjectionCount}</strong></p>
+            <p>推定write数: <strong>{resetPreview.estimatedWriteCount}</strong> / 450</p>
+            <p>Current Session: <strong>{resetPreview.currentSessionId ?? 'legacy (未設定)'}</strong></p>
+            <p>提案Session: <strong>{resetPreview.proposedSessionId}</strong></p>
+            <p>Token期限: <strong>{new Date(resetPreview.expiresAt).toLocaleString()}</strong>（期限切れの場合はPreviewを再取得）</p>
+            {resetPreview.warningCodes.map(code => <p key={code} role="alert" className="font-bold text-amber-700">警告: {code}</p>)}
+            <label className="block pt-2 font-bold">確認のため RESET と入力
+              <input aria-label="Reset typed confirmation" value={resetConfirmationText} onChange={event => setResetConfirmationText(event.target.value)} className="mt-1 w-full rounded-lg border p-2" />
+            </label>
+            <button type="button" onClick={() => void handleExecuteGameReset()} disabled className="mt-2 w-full rounded-xl bg-slate-300 py-3 font-black text-slate-600">Reset実行は無効です</button>
+          </div>}
+          {resetError && <p role="alert" className="mt-3 text-sm font-bold text-red-700">{resetError}</p>}
+          {resetSuccess && <p role="status" className="mt-3 text-sm font-bold text-emerald-700">{resetSuccess}</p>}
+        </section>
       </div>
     </div>
   );

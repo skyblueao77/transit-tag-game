@@ -30,6 +30,22 @@ describe('Firebase snapshot mappers', () => {
     ]), [{ id: 'mission-1', title: 'Mission' }]);
   });
 
+  test('keeps legacy Session metadata optional and maps valid Session fields without legacy defaults', () => {
+    const legacy = mapGameConfigDocument({ gameStatus: 'PRE_GAME' }, defaults);
+    assert.equal('gameSessionId' in legacy, false);
+    assert.equal('sessionStartedAt' in legacy, false);
+    assert.equal('sessionSchemaVersion' in legacy, false);
+    assert.deepEqual(mapGameConfigDocument({
+      gameSessionId: 'session-1', sessionStartedAt: 123, sessionSchemaVersion: 1,
+    }, defaults), {
+      ...defaults, gameSessionId: 'session-1', sessionStartedAt: 123, sessionSchemaVersion: 1,
+    });
+    const invalid = mapGameConfigDocument({ gameSessionId: '', sessionStartedAt: 'bad', sessionSchemaVersion: -1 }, defaults);
+    assert.equal('gameSessionId' in invalid, false);
+    assert.equal('sessionStartedAt' in invalid, false);
+    assert.equal('sessionSchemaVersion' in invalid, false);
+  });
+
   test('maps missing and existing private-location documents', () => {
     assert.equal(mapPrivateLocation(null), null);
     assert.deepEqual(mapPrivateLocation({ latitude: 35, longitude: 139 }), {

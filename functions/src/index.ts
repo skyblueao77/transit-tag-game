@@ -7,6 +7,7 @@ export { resumePlayer, swapTeamRoles } from './admin/adminGameStateActions';
 export { transitionGamePhase } from './admin/adminPhaseActions';
 export { setMissionMode, assignMissions, syncMissionCatalog } from './admin/adminMissionActions';
 export { adjustTeamScore } from './admin/adminScoreAdjustmentActions';
+export { executeGameReset, prepareGameReset } from './admin/gameResetActions';
 export { revealPlayerLocations } from './admin/adminRevealActions';
 export {
   onPlayerWritten as reconcileEmergencyProjectionAfterPlayerWrite,

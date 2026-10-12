@@ -106,6 +106,9 @@ export interface GameConfig {
   teamARevealUntil?: number;
   teamBRevealUntil?: number;
   nextRevealTime?: number;
+  gameSessionId?: string;
+  sessionStartedAt?: number;
+  sessionSchemaVersion?: number;
 }
 
 export interface LocationLog {
