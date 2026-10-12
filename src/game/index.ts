@@ -54,6 +54,14 @@ export {
   resolveMissionModeChange,
   validateCanonicalMission,
 } from './adminMission';
+export { resolveTeamScoreAdjustment } from './adminScoreAdjustment';
+export type {
+  ScoreAdjustmentField,
+  ScoreAdjustmentReasonCode,
+  ScoreAdjustmentRejectionReason,
+  ScoreAdjustmentTeam,
+  TeamScoreAdjustmentDecision,
+} from './adminScoreAdjustment';
 export type {
   MissionAdminPhase,
   MissionAdminRejectionReason,

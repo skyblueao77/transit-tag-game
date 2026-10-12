@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GameConfig, User, GameLog, Mission } from '../types';
 import { INITIAL_GAME_CONFIG, MISSIONS } from '../constants';
 import {
-  Users, Lock, Trash2, Save, Shield, Trophy, Play,
+  Users, Lock, Trash2, Shield, Trophy, Play,
   AlertTriangle, Shuffle, XCircle, Flag, MapPin,
   RefreshCw 
 } from 'lucide-react';
@@ -16,6 +16,9 @@ import { transitionGamePhase } from '../src/application/adminPhaseActions';
 import { firebaseAdminPhaseGateway } from '../src/infrastructure/firebase/adminPhaseActions';
 import { setMissionMode, assignMissions, syncMissionCatalog } from '../src/application/adminMissionActions';
 import { firebaseAdminMissionGateway } from '../src/infrastructure/firebase/adminMissionActions';
+import { adjustTeamScore } from '../src/application/adminScoreAdjustment';
+import type { AdjustTeamScoreResult, ScoreAdjustmentReasonCode } from '../src/application/gameplayPorts';
+import { firebaseAdminScoreAdjustmentGateway } from '../src/infrastructure/firebase/adminScoreAdjustmentActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
@@ -34,8 +37,10 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(false);
-  const [teamAScoreInput, setTeamAScoreInput] = useState<number | null>(null);
-  const [teamBScoreInput, setTeamBScoreInput] = useState<number | null>(null);
+  const [scoreTeam, setScoreTeam] = useState<'A' | 'B'>('A');
+  const [scoreDeltaInput, setScoreDeltaInput] = useState('');
+  const [scoreReasonCode, setScoreReasonCode] = useState<ScoreAdjustmentReasonCode>('CORRECTION');
+  const [scoreAdjustmentResult, setScoreAdjustmentResult] = useState<Extract<AdjustTeamScoreResult, { ok: true }> | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [searchDuration, setSearchDuration] = useState(10); 
   const [manualMissionId, setManualMissionId] = useState('');
@@ -48,6 +53,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const revealBusyRef = useRef(false);
   const revealRequestIdsRef = useRef<Partial<Record<AdminRevealScope, string>>>({});
   const missionBusyRef = useRef(false);
+  const scoreBusyRef = useRef(false);
+  const pendingScoreRequestRef = useRef<{ key: string; requestId: string } | null>(null);
   const missionRequestIdsRef = useRef<Record<string, string>>({});
   const pendingMissionModeRef = useRef<{ mode: 'SAME' | 'DIFFERENT'; requestId: string } | null>(null);
   const emergencyPlayerIds = useMemo(
@@ -210,6 +217,39 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       alert('失敗'); 
     } finally { 
       setIsProcessing(false); 
+    }
+  };
+
+  const handleAdjustTeamScore = async (): Promise<void> => {
+    if (scoreBusyRef.current || isProcessing) return;
+    const delta = Number(scoreDeltaInput);
+    if (!Number.isSafeInteger(delta) || delta === 0 || delta < -1000 || delta > 1000) {
+      alert('補正値は -1000〜1000 の0以外の整数で入力してください。');
+      return;
+    }
+    const reasonLabels: Record<ScoreAdjustmentReasonCode, string> = {
+      CORRECTION: 'スコア訂正', BONUS: '運営ボーナス', PENALTY: '運営ペナルティ', OTHER: 'その他の運営調整',
+    };
+    if (!confirm(`Team ${scoreTeam} を ${delta > 0 ? '+' : ''}${delta}pt 補正しますか？\n理由: ${reasonLabels[scoreReasonCode]}`)) return;
+    const key = `${scoreTeam}:${delta}:${scoreReasonCode}`;
+    const requestId = pendingScoreRequestRef.current?.key === key
+      ? pendingScoreRequestRef.current.requestId
+      : crypto.randomUUID();
+    pendingScoreRequestRef.current = { key, requestId };
+    scoreBusyRef.current = true;
+    setIsProcessing(true);
+    try {
+      const result = await adjustTeamScore({ team: scoreTeam, delta, reasonCode: scoreReasonCode, requestId }, firebaseAdminScoreAdjustmentGateway);
+      if (result.ok === false) {
+        alert(`スコア補正に失敗しました: ${result.reason}`);
+        return;
+      }
+      pendingScoreRequestRef.current = null;
+      setScoreAdjustmentResult(result);
+      setScoreDeltaInput('');
+    } finally {
+      scoreBusyRef.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -489,7 +529,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
                   <div className="text-[9px] font-black text-white/50 uppercase">Team {t} Status</div>
                   <p className="text-xs font-bold text-white leading-snug">{m ? m.title : '未配信'}</p>
                 </div>
-                <button type="button" disabled title="スコア調整機能へ移行予定" className="shrink-0 p-1.5 bg-white/10 rounded-lg opacity-40 cursor-not-allowed"><XCircle size={14} /></button>
+                <span title="Mission CompletionのUndoは行いません。Team Score欄の監査付き補正を使用してください" className="shrink-0 px-2 py-1 bg-white/10 rounded-lg text-[9px] font-bold text-white/50">Undo不可</span>
               </div>
             );
           })}
@@ -574,18 +614,31 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       {/* 4. スコア管理 */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h3 className="font-black mb-4 flex items-center gap-2 text-slate-700 uppercase tracking-tighter"><Trophy size={20} /> Team Score</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-4 mb-4">
           {(['A', 'B'] as const).map(t => (
             <div key={t} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
               <div className="text-[10px] font-black text-slate-400 mb-1 uppercase">Team {t}</div>
               <div className="text-2xl font-black text-slate-800">{t === 'A' ? (config.teamAScore ?? 0) : (config.teamBScore ?? 0)} <span className="text-xs">pt</span></div>
-              <div className="mt-3 flex gap-1">
-                <input id={`score-input-${t}`} type="number" onChange={e => (t === 'A' ? setTeamAScoreInput : setTeamBScoreInput)(Number(e.target.value))} className="w-full p-2 text-xs border rounded-xl outline-none font-bold" placeholder="直接修正" />
-                <button onClick={async () => { const val = t === 'A' ? teamAScoreInput : teamBScoreInput; if (val !== null) { await updateDoc(doc(db, 'game_config', 'current'), { [t === 'A' ? 'teamAScore' : 'teamBScore']: val }); } }} className="p-2 bg-indigo-600 text-white rounded-xl shadow-md"><Save size={16} /></button>
-              </div>
             </div>
           ))}
         </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-[10px] font-black text-slate-500">対象チーム
+            <select aria-label="補正対象チーム" value={scoreTeam} onChange={event => setScoreTeam(event.target.value as 'A' | 'B')} className="mt-1 w-full p-2 border rounded-xl text-sm text-slate-800">
+              <option value="A">Team A</option><option value="B">Team B</option>
+            </select>
+          </label>
+          <label className="text-[10px] font-black text-slate-500">増減値（-1000〜1000）
+            <input aria-label="スコア増減値" type="number" step="1" value={scoreDeltaInput} onChange={event => setScoreDeltaInput(event.target.value)} className="mt-1 w-full p-2 border rounded-xl text-sm text-slate-800" placeholder="例: 5 / -3" />
+          </label>
+          <label className="col-span-2 text-[10px] font-black text-slate-500">理由
+            <select aria-label="補正理由" value={scoreReasonCode} onChange={event => setScoreReasonCode(event.target.value as ScoreAdjustmentReasonCode)} className="mt-1 w-full p-2 border rounded-xl text-sm text-slate-800">
+              <option value="CORRECTION">スコア訂正</option><option value="BONUS">運営ボーナス</option><option value="PENALTY">運営ペナルティ</option><option value="OTHER">その他の運営調整</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" onClick={() => void handleAdjustTeamScore()} disabled={isProcessing} className="mt-3 w-full py-3 bg-indigo-600 text-white rounded-xl font-black disabled:opacity-50">スコア補正を実行</button>
+        {scoreAdjustmentResult && <p role="status" className="mt-3 text-center text-sm font-bold text-emerald-700">Team {scoreAdjustmentResult.team}: {scoreAdjustmentResult.previousScore} → {scoreAdjustmentResult.nextScore} pt{scoreAdjustmentResult.duplicate ? '（再送結果）' : ''}</p>}
       </section>
 
       <div className="space-y-4">
