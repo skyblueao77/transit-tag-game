@@ -298,3 +298,47 @@ export type AdjustTeamScoreResult =
 export interface AdminScoreAdjustmentGateway {
   adjustTeamScore(input: AdjustTeamScoreInput): Promise<AdjustTeamScoreResult>;
 }
+
+export type GameResetFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'PERMISSION_DENIED'
+  | 'INVALID_ARGUMENT'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_CONFIG'
+  | 'RESET_NOT_READY'
+  | 'CONFIRMATION_NOT_FOUND'
+  | 'CONFIRMATION_EXPIRED'
+  | 'CONFIRMATION_ALREADY_USED'
+  | 'SESSION_CHANGED'
+  | 'CONFIRMATION_STALE'
+  | 'RESET_TOO_LARGE'
+  | 'REQUEST_ID_REUSED'
+  | 'PERSISTENCE_ERROR'
+  | 'INTERNAL';
+
+export type PrepareGameResetInput = Record<string, never>;
+export interface PrepareGameResetPreview {
+  confirmationToken: string;
+  expiresAt: number;
+  currentSessionId: string | null;
+  proposedSessionId: string;
+  sessionSchemaVersion: number;
+  participantCount: number;
+  privateLocationCount: number;
+  exposedLocationCount: number;
+  emergencyProjectionCount: number;
+  estimatedWriteCount: number;
+  resetReady: false;
+  warningCodes: ('SESSION_SCOPE_NOT_READY' | 'RESET_TOO_LARGE')[];
+}
+export type PrepareGameResetResult =
+  | { ok: true; preview: PrepareGameResetPreview }
+  | { ok: false; reason: GameResetFailureReason };
+export interface ExecuteGameResetInput { confirmationToken: string; requestId: string }
+export type ExecuteGameResetResult =
+  | { ok: true; executed: true; newSessionId: string }
+  | { ok: false; reason: GameResetFailureReason };
+export interface AdminGameResetGateway {
+  prepareGameReset(input: PrepareGameResetInput): Promise<PrepareGameResetResult>;
+  executeGameReset(input: ExecuteGameResetInput): Promise<ExecuteGameResetResult>;
+}

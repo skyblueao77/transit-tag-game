@@ -101,5 +101,18 @@ export function mapGameConfigDocument(
     const timestamp = firestoreTimestampMillis(value);
     config[field] = timestamp ?? (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
   }
+  if (data.gameSessionId === undefined) delete config.gameSessionId;
+  else if (typeof data.gameSessionId !== 'string' || data.gameSessionId.trim().length === 0) delete config.gameSessionId;
+  if (data.sessionStartedAt === undefined) delete config.sessionStartedAt;
+  else {
+    const timestamp = firestoreTimestampMillis(data.sessionStartedAt);
+    const value = timestamp ?? data.sessionStartedAt;
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) config.sessionStartedAt = value;
+    else delete config.sessionStartedAt;
+  }
+  if (data.sessionSchemaVersion === undefined) delete config.sessionSchemaVersion;
+  else if (Number.isSafeInteger(data.sessionSchemaVersion) && (data.sessionSchemaVersion as number) >= 0) {
+    config.sessionSchemaVersion = data.sessionSchemaVersion as number;
+  } else delete config.sessionSchemaVersion;
   return config;
 }

@@ -5,6 +5,7 @@ export { resumePlayer, swapTeamRoles } from './adminGameStateActions.ts';
 export { revealPlayerLocations } from './adminReveal.ts';
 export { assignMissions, setMissionMode, syncMissionCatalog } from './adminMissionActions.ts';
 export { adjustTeamScore } from './adminScoreAdjustment.ts';
+export { executeGameReset, prepareGameReset } from './gameReset.ts';
 export { capturePlayer } from './capturePlayer.ts';
 export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
@@ -49,6 +50,13 @@ export type {
   AdjustTeamScoreResult,
   ScoreAdjustmentReasonCode,
   ScoreAdjustmentTeam,
+  AdminGameResetGateway,
+  ExecuteGameResetInput,
+  ExecuteGameResetResult,
+  GameResetFailureReason,
+  PrepareGameResetInput,
+  PrepareGameResetPreview,
+  PrepareGameResetResult,
   AdminMissionGateway,
   AssignMissionsInput,
   AssignMissionsResult,

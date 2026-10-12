@@ -1,4 +1,36 @@
 export type { GameStatus, PlayerTeam, Role, Team, TeamRoles } from './types';
+export {
+  buildResetReceiptContract,
+  isResetConfirmationExpired,
+  isResetConfirmationStale,
+  isResetSessionReady,
+  isValidResetId,
+  planFutureGameResetConfig,
+  planFuturePlayerReset,
+  planGameResetPreview,
+  resolveResetReceiptReplay,
+  validateExecuteGameResetRequest,
+  validatePrepareGameResetRequest,
+  validateResetConfig,
+  RESET_CONFIRMATION_TTL_MS,
+  RESET_MAX_ESTIMATED_WRITES,
+  RESET_SESSION_SCHEMA_VERSION,
+} from './gameReset';
+export type {
+  FutureGameResetConfigPatch,
+  FuturePlayerResetPatch,
+  ResetConfirmationSnapshot,
+  ResetCounts,
+  ResetDocumentIdentity,
+  ResetParticipantDocument,
+  ResetPreviewInput,
+  ResetPreviewPlan,
+  ResetReceiptContract,
+  ResetReceiptReplay,
+  ResetRequestValidation,
+  ResetSessionState,
+  ResetWarningCode,
+} from './gameReset';
 export { resolveAdminPlayerResume, resolveAdminRoleSwap } from './adminGameState';
 export type {
   AdminPlayerResumeInput,
