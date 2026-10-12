@@ -4,6 +4,7 @@ export { requestSafetyAction } from './requestSafetyAction.ts';
 export { resumePlayer, swapTeamRoles } from './adminGameStateActions.ts';
 export { revealPlayerLocations } from './adminReveal.ts';
 export { assignMissions, setMissionMode, syncMissionCatalog } from './adminMissionActions.ts';
+export { adjustTeamScore } from './adminScoreAdjustment.ts';
 export { capturePlayer } from './capturePlayer.ts';
 export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
@@ -42,6 +43,12 @@ export type {
   SwapTeamRolesInput,
   SwapTeamRolesResult,
   AdminMissionFailureReason,
+  AdminScoreAdjustmentFailureReason,
+  AdminScoreAdjustmentGateway,
+  AdjustTeamScoreInput,
+  AdjustTeamScoreResult,
+  ScoreAdjustmentReasonCode,
+  ScoreAdjustmentTeam,
   AdminMissionGateway,
   AssignMissionsInput,
   AssignMissionsResult,

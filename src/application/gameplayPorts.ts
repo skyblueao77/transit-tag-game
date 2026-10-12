@@ -266,3 +266,35 @@ export interface AdminMissionGateway {
   assignMissions(input: AssignMissionsInput): Promise<AssignMissionsResult>;
   syncMissionCatalog(input: SyncMissionCatalogInput): Promise<SyncMissionCatalogResult>;
 }
+
+export type ScoreAdjustmentTeam = 'A' | 'B';
+export type ScoreAdjustmentReasonCode = 'CORRECTION' | 'BONUS' | 'PENALTY' | 'OTHER';
+export interface AdjustTeamScoreInput {
+  team: ScoreAdjustmentTeam;
+  delta: number;
+  reasonCode: ScoreAdjustmentReasonCode;
+  requestId: string;
+}
+export type AdminScoreAdjustmentFailureReason =
+  | 'UNAUTHENTICATED'
+  | 'PERMISSION_DENIED'
+  | 'INVALID_ARGUMENT'
+  | 'CONFIG_NOT_FOUND'
+  | 'INVALID_CONFIG'
+  | 'SCORE_BELOW_ZERO'
+  | 'REQUEST_ID_REUSED'
+  | 'PERSISTENCE_ERROR';
+export type AdjustTeamScoreResult =
+  | {
+      ok: true;
+      team: ScoreAdjustmentTeam;
+      delta: number;
+      reasonCode: ScoreAdjustmentReasonCode;
+      previousScore: number;
+      nextScore: number;
+      duplicate: boolean;
+    }
+  | { ok: false; reason: AdminScoreAdjustmentFailureReason };
+export interface AdminScoreAdjustmentGateway {
+  adjustTeamScore(input: AdjustTeamScoreInput): Promise<AdjustTeamScoreResult>;
+}

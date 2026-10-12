@@ -17,6 +17,7 @@
     "../src/game/adminGameState.ts",
     "../src/game/adminPhaseTransition.ts",
     "../src/game/adminMission.ts",
+    "../src/game/adminScoreAdjustment.ts",
     "../constants.ts",
     "../src/game/finalMissions.ts",
     "../src/game/adminReveal.ts",
