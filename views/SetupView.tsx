@@ -120,6 +120,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
             onChange={e => setName(e.target.value)}
             className="w-full px-6 py-5 bg-slate-50 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:bg-white outline-none font-bold text-lg transition-all"
             placeholder="ニックネーム"
+            maxLength={80}
             required
             disabled={isSubmitting}
           />

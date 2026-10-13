@@ -9,7 +9,7 @@ export const firebasePrivateLocationStore: PrivateLocationStore = {
       latitude: location.latitude,
       longitude: location.longitude,
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    });
   },
 };
 

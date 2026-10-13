@@ -2,7 +2,7 @@ import {
   collection,
   doc,
   onSnapshot,
-  setDoc,
+
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebaseClient';
@@ -135,7 +135,6 @@ export function subscribeGameConfig(
   defaults: GameConfig,
   onValue: (config: GameConfig) => void,
   onError: (error: Error) => void,
-  onSeedError: (error: Error) => void = onError,
 ): Unsubscribe {
   const configRef = doc(db, 'game_config', 'current');
   return onSnapshot(configRef, snapshot => {
@@ -144,6 +143,7 @@ export function subscribeGameConfig(
       return;
     }
 
-    void setDoc(configRef, defaults).catch(onSeedError);
+    // A missing Config must not be created with client-authoritative defaults.
+    onValue(defaults);
   }, onError);
 }
