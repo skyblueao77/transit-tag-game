@@ -70,6 +70,7 @@ export interface ResetConfirmationSnapshot {
 export type ResetReceiptContract = {
   operation: 'executeGameReset';
   requestId: string;
+  gameSessionId: string;
   confirmationToken: string;
   result: { ok: true; executed: true; newSessionId: string };
 };
@@ -233,29 +234,35 @@ export function isResetSessionReady(sessionSchemaVersion: number): boolean {
 
 export function buildResetReceiptContract(
   requestId: string,
+  gameSessionId: string,
   confirmationToken: string,
   newSessionId: string,
 ): ResetReceiptContract | null {
-  if (!isValidResetId(requestId) || !isValidResetId(confirmationToken) || !isValidResetId(newSessionId)) return null;
+  if (!isValidResetId(requestId) || !isValidResetId(gameSessionId)
+    || !isValidResetId(confirmationToken) || !isValidResetId(newSessionId)) return null;
   return {
     operation: 'executeGameReset',
     requestId,
+    gameSessionId,
     confirmationToken,
     result: { ok: true, executed: true, newSessionId },
   };
 }
 
-export type ResetReceiptReplay = 'MATCH' | 'REQUEST_ID_REUSED' | 'INVALID_RECEIPT';
+export type ResetReceiptReplay = 'MATCH' | 'SESSION_CHANGED' | 'REQUEST_ID_REUSED' | 'INVALID_RECEIPT';
 
 export function resolveResetReceiptReplay(
   receipt: unknown,
   requestId: string,
+  gameSessionId: string,
   confirmationToken: string,
 ): ResetReceiptReplay {
   if (!isRecord(receipt) || receipt.operation !== 'executeGameReset'
     || receipt.requestId !== requestId || !isRecord(receipt.result)
     || receipt.result.ok !== true || receipt.result.executed !== true
     || !isValidResetId(receipt.result.newSessionId)) return 'INVALID_RECEIPT';
+  if (!isValidResetId(receipt.gameSessionId)) return 'REQUEST_ID_REUSED';
+  if (receipt.gameSessionId !== gameSessionId) return 'SESSION_CHANGED';
   if (receipt.confirmationToken !== confirmationToken) return 'REQUEST_ID_REUSED';
   return 'MATCH';
 }
@@ -271,6 +278,7 @@ export interface FutureGameResetConfigPatch {
   activeFinalMissionId: null;
   isFinalMissionActive: false;
   isGameOver: false;
+  isGameEnded: false;
   startTime: 0;
   finalMissionEndTime: 0;
   teamARole: 'RUNNER';
@@ -296,7 +304,7 @@ export function planFutureGameResetConfig(input: {
   return {
     gameStatus: 'PRE_GAME', day: 1, teamAScore: 0, teamBScore: 0,
     missionMode: 'DIFFERENT', activeMissionA: null, activeMissionB: null,
-    activeFinalMissionId: null, isFinalMissionActive: false, isGameOver: false,
+    activeFinalMissionId: null, isFinalMissionActive: false, isGameOver: false, isGameEnded: false,
     startTime: 0, finalMissionEndTime: 0, teamARole: 'RUNNER', teamBRole: 'ONI',
     broadcastMessage: '', broadcastTime: 0, gameSessionId: input.proposedSessionId,
     sessionStartedAt: input.resetAt, sessionSchemaVersion: RESET_SESSION_SCHEMA_VERSION,
@@ -307,6 +315,7 @@ export function planFutureGameResetConfig(input: {
 }
 
 export interface FuturePlayerResetPatch {
+  gameSessionId: string;
   status: 'ACTIVE';
   score: 0;
   invincibleCards: 0;
@@ -315,8 +324,10 @@ export interface FuturePlayerResetPatch {
   shinkansenStartTime: null;
 }
 
-export function planFuturePlayerReset(): FuturePlayerResetPatch {
+export function planFuturePlayerReset(gameSessionId: string): FuturePlayerResetPatch | null {
+  if (!isValidResetId(gameSessionId)) return null;
   return {
+    gameSessionId,
     status: 'ACTIVE', score: 0, invincibleCards: 0,
     invincibleUntil: 0, waitingUntil: 0, shinkansenStartTime: null,
   };

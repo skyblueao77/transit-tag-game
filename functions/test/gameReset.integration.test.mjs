@@ -131,7 +131,7 @@ describe('trusted game reset foundation callable emulator integration', () => {
     assert.equal(preview.emergencyProjectionCount, 1);
     assert.equal(preview.currentSessionId, SESSION_ID);
     assert.equal(preview.sessionSchemaVersion, 2);
-    assert.equal(preview.resetReady, false);
+    assert.equal(preview.resetReady, true);
     assert.equal(JSON.stringify(preview).includes('private player'), false);
     assert.equal(JSON.stringify(preview).includes('latitude'), false);
     const token = await read(`admins/${fixture.admin.localId}/resetConfirmations/${preview.confirmationToken}`);
@@ -150,43 +150,132 @@ describe('trusted game reset foundation callable emulator integration', () => {
     assert.equal((await call('prepareGameReset', { expectedSessionId: SESSION_ID, requestedCount: 2 }, fixture.admin.idToken)).body.error.details.reason, 'INVALID_ARGUMENT');
   });
 
-  test('execute is server-gated and leaves Config, Players, locations, token, receipts, and logs untouched', async () => {
+  test('executes one atomic Session reset, keeps Completion history, and stably replays its receipt', async () => {
     const admin = await makeAdmin();
-    const a = await makePlayer('A');
-    const b = await makePlayer('B');
+    const a = await makePlayer('A', 'CAPTURED');
+    const b = await makePlayer('B', 'CAPTURED');
+    const adminPlayer = await makePlayer('ADMIN');
+    const unknownPlayer = await makePlayer('UNKNOWN');
     await seedConfig();
+    await seed(`users/${a.localId}`, {
+      ...await read(`users/${a.localId}`), waitingUntil: 123, invincibleUntil: 456, invincibleCards: 4, shinkansenStartTime: new Date(0),
+    });
+    await seed(`users/${b.localId}`, {
+      ...await read(`users/${b.localId}`), waitingUntil: 789, invincibleUntil: 999, invincibleCards: 3, shinkansenStartTime: new Date(1),
+    });
     await seed(`privateLocations/${a.localId}`, { gameSessionId: SESSION_ID, latitude: 35.1, longitude: 139.1, updatedAt: new Date() });
     await seed(`privateLocations/${b.localId}`, { gameSessionId: SESSION_ID, latitude: 36.1, longitude: 140.1, updatedAt: new Date() });
+    await seed(`privateLocations/${adminPlayer.localId}`, { gameSessionId: SESSION_ID, latitude: 37.1, longitude: 141.1, updatedAt: new Date() });
+    await seed(`privateLocations/${unknownPlayer.localId}`, { gameSessionId: SESSION_ID, latitude: 38.1, longitude: 142.1, updatedAt: new Date() });
     await seed(`exposedLocations/${b.localId}`, { gameSessionId: SESSION_ID, latitude: 36.1, longitude: 140.1, expiresAt: new Date(Date.now() + 60_000) });
+
     const orphanProjection = 'emergencyLocationProjections/orphan-preview-fixture';
     await seed(orphanProjection, { gameSessionId: SESSION_ID, playerId: 'orphan-preview-fixture', latitude: 35, longitude: 139 });
-    const preview = (await call('prepareGameReset', { expectedSessionId: SESSION_ID }, admin.idToken)).body.result;
+    const completionPath = 'missionCompletions/legacy-history-fixture';
+    await seed(completionPath, { missionId: 'old-mission', team: 'A', completedBy: a.localId, points: 10 });
+
+    const previewResponse = await call('prepareGameReset', { expectedSessionId: SESSION_ID }, admin.idToken);
+    assert.equal(previewResponse.body.result.resetReady, true);
+    const preview = previewResponse.body.result;
     const paths = [
       'game_config/current', `users/${a.localId}`, `users/${b.localId}`,
+      `users/${adminPlayer.localId}`, `users/${unknownPlayer.localId}`,
       `privateLocations/${a.localId}`, `privateLocations/${b.localId}`,
-      `exposedLocations/${b.localId}`, orphanProjection,
+      `privateLocations/${adminPlayer.localId}`, `privateLocations/${unknownPlayer.localId}`,
+      `exposedLocations/${b.localId}`, `emergencyLocationProjections/${a.localId}`,
+      orphanProjection, completionPath,
     ];
-    const before = await Promise.all(paths.map(read));
     const tokenPath = `admins/${admin.localId}/resetConfirmations/${preview.confirmationToken}`;
     const tokenBefore = await read(tokenPath);
     const executeId = requestId();
-    const response = await call('executeGameReset', {
+    const executeInput = {
       confirmationToken: preview.confirmationToken, requestId: executeId, expectedSessionId: SESSION_ID,
-    }, admin.idToken);
-    assert.equal(response.body.error.details.reason, 'RESET_NOT_READY', JSON.stringify(response.body));
-    assert.deepEqual(await Promise.all(paths.map(read)), before);
-    assert.deepEqual(await read(tokenPath), tokenBefore);
-    assert.equal(await read(`admins/${admin.localId}/gameResetRequests/${executeId}`), null);
-    assert.equal((await read('game_config/current')).logs[0].id, 'old-log');
+    };
+    const response = await call('executeGameReset', executeInput, admin.idToken);
+    assert.equal(response.body.result?.ok, true, JSON.stringify(response.body));
+    assert.equal(response.body.result.executed, true);
+    assert.equal(response.body.result.newSessionId, preview.proposedSessionId);
 
-    const staleExecuteId = requestId();
+    const after = await Promise.all(paths.map(read));
+    const resetConfig = after[0];
+    assert.equal(resetConfig.gameSessionId, preview.proposedSessionId);
+    assert.equal(resetConfig.sessionStartedAt, resetConfig.logs[0].timestamp);
+    assert.equal(resetConfig.sessionSchemaVersion, 2);
+    assert.equal(resetConfig.gameStatus, 'PRE_GAME');
+    assert.equal(resetConfig.day, 1);
+    assert.equal(resetConfig.teamAScore, 0);
+    assert.equal(resetConfig.teamBScore, 0);
+    assert.equal(resetConfig.teamARole, 'RUNNER');
+    assert.equal(resetConfig.teamBRole, 'ONI');
+    assert.equal(resetConfig.activeMissionA, null);
+    assert.equal(resetConfig.activeMissionB, null);
+    assert.equal(resetConfig.activeFinalMissionId, null);
+    assert.equal(resetConfig.locationRevealUntil, null);
+    assert.equal(resetConfig.logs[0].action, 'executeGameReset');
+    assert.equal(resetConfig.logs[0].actorUid, admin.localId);
+    assert.equal(resetConfig.logs[1].id, 'old-log');
+
+    for (const player of [after[1], after[2]]) {
+      assert.equal(player.gameSessionId, preview.proposedSessionId);
+      assert.equal(player.status, 'ACTIVE');
+      assert.equal(player.score, 0);
+      assert.equal(player.invincibleCards, 0);
+      assert.equal(player.invincibleUntil, 0);
+      assert.equal(player.waitingUntil, 0);
+      assert.equal(player.shinkansenStartTime, null);
+    }
+    assert.equal(after[3].score, 10);
+    assert.equal(after[4].score, 10);
+    assert.equal(after[5], null);
+    assert.equal(after[6], null);
+    assert.ok(after[7]);
+    assert.ok(after[8]);
+    assert.equal(after[9], null);
+    assert.equal(after[10], null);
+    assert.ok(after[11]);
+    assert.deepEqual(after[12], { missionId: 'old-mission', team: 'A', completedBy: a.localId, points: 10 });
+
+    const tokenAfter = await read(tokenPath);
+    assert.equal(tokenAfter.used, true);
+    assert.ok(tokenAfter.usedAt >= tokenBefore.issuedAt);
+    const receiptPath = `admins/${admin.localId}/gameResetRequests/${executeId}`;
+    const receipt = await read(receiptPath);
+    assert.equal(receipt.gameSessionId, SESSION_ID);
+    assert.equal(receipt.confirmationToken, preview.confirmationToken);
+    assert.deepEqual(receipt.result, response.body.result);
+
+    const replay = await call('executeGameReset', executeInput, admin.idToken);
+    assert.deepEqual(replay.body.result, response.body.result);
+    assert.deepEqual(await Promise.all(paths.map(read)), after);
+    assert.deepEqual(await read(tokenPath), tokenAfter);
+    assert.deepEqual(await read(receiptPath), receipt);
+
+    const staleInput = { ...executeInput, requestId: requestId() };
+    const stale = await call('executeGameReset', staleInput, admin.idToken);
+    assert.equal(stale.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual(await Promise.all(paths.map(read)), after);
+    assert.deepEqual(await read(tokenPath), tokenAfter);
+  });
+
+  test('rejects old-client Execute shape and stale Session without changing authoritative state', async () => {
+    const admin = await makeAdmin();
+    await seedConfig();
+    const a = await makePlayer('A');
+    const preview = (await call('prepareGameReset', { expectedSessionId: SESSION_ID }, admin.idToken)).body.result;
+    const before = await Promise.all(['game_config/current', `users/${a.localId}`].map(read));
+    const tokenPath = `admins/${admin.localId}/resetConfirmations/${preview.confirmationToken}`;
+    const tokenBefore = await read(tokenPath);
+
+    const oldClient = await call('executeGameReset', {
+      confirmationToken: preview.confirmationToken, requestId: requestId(),
+    }, admin.idToken);
+    assert.equal(oldClient.body.error.details.reason, 'INVALID_ARGUMENT');
     const stale = await call('executeGameReset', {
-      confirmationToken: preview.confirmationToken, requestId: staleExecuteId, expectedSessionId: STALE_SESSION_ID,
+      confirmationToken: preview.confirmationToken, requestId: requestId(), expectedSessionId: STALE_SESSION_ID,
     }, admin.idToken);
     assert.equal(stale.body.error.details.reason, 'SESSION_CHANGED');
-    assert.deepEqual(await Promise.all(paths.map(read)), before);
+    assert.deepEqual(await Promise.all(['game_config/current', `users/${a.localId}`].map(read)), before);
     assert.deepEqual(await read(tokenPath), tokenBefore);
-    assert.equal(await read(`admins/${admin.localId}/gameResetRequests/${staleExecuteId}`), null);
   });
 
   test('creates distinct confirmation tokens and rejects expired confirmation without writes', async () => {

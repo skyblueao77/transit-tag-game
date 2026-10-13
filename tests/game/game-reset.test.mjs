@@ -121,23 +121,31 @@ describe('trusted game reset foundation core', () => {
     assert.deepEqual(planFutureGameResetConfig(configInput), {
       gameStatus: 'PRE_GAME', day: 1, teamAScore: 0, teamBScore: 0, missionMode: 'DIFFERENT',
       activeMissionA: null, activeMissionB: null, activeFinalMissionId: null, isFinalMissionActive: false,
-      isGameOver: false, startTime: 0, finalMissionEndTime: 0, teamARole: 'RUNNER', teamBRole: 'ONI',
+      isGameOver: false, isGameEnded: false, startTime: 0, finalMissionEndTime: 0, teamARole: 'RUNNER', teamBRole: 'ONI',
       broadcastMessage: '', broadcastTime: 0, gameSessionId: uuid, sessionStartedAt: 100,
       sessionSchemaVersion: 2, nextRevealTime: 200,
       clearRevealDeadlines: ['locationRevealUntil', 'teamARevealUntil', 'teamBRevealUntil'], preserveLogCount: 199,
     });
     assert.deepEqual(configInput, before);
-    assert.deepEqual(planFuturePlayerReset(), {
-      status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0, waitingUntil: 0, shinkansenStartTime: null,
+    assert.deepEqual(planFuturePlayerReset(uuid), {
+      gameSessionId: uuid, status: 'ACTIVE', score: 0, invincibleCards: 0,
+      invincibleUntil: 0, waitingUntil: 0, shinkansenStartTime: null,
     });
+    assert.equal(planFuturePlayerReset('bad/session'), null);
   });
 
-  test('defines a strict future receipt contract and rejects requestId reuse', () => {
-    const receipt = buildResetReceiptContract(uuid, uuid, uuid);
+  test('defines a Session-bound receipt and rejects reused or legacy receipts', () => {
+    const otherSession = '123e4567-e89b-42d3-a456-426614174001';
+    const receipt = buildResetReceiptContract(uuid, uuid, uuid, otherSession);
     assert.equal(receipt.operation, 'executeGameReset');
-    assert.equal(resolveResetReceiptReplay(receipt, uuid, uuid), 'MATCH');
-    assert.equal(resolveResetReceiptReplay(receipt, uuid, '123e4567-e89b-42d3-a456-426614174001'), 'REQUEST_ID_REUSED');
-    assert.equal(resolveResetReceiptReplay({}, uuid, uuid), 'INVALID_RECEIPT');
-    assert.equal(buildResetReceiptContract('bad', uuid, uuid), null);
+    assert.equal(receipt.gameSessionId, uuid);
+    assert.equal(resolveResetReceiptReplay(receipt, uuid, uuid, uuid), 'MATCH');
+    assert.equal(resolveResetReceiptReplay(receipt, uuid, otherSession, uuid), 'SESSION_CHANGED');
+    assert.equal(resolveResetReceiptReplay(receipt, uuid, uuid, otherSession), 'REQUEST_ID_REUSED');
+    const legacyReceipt = { ...receipt };
+    delete legacyReceipt.gameSessionId;
+    assert.equal(resolveResetReceiptReplay(legacyReceipt, uuid, uuid, uuid), 'REQUEST_ID_REUSED');
+    assert.equal(resolveResetReceiptReplay({}, uuid, uuid, uuid), 'INVALID_RECEIPT');
+    assert.equal(buildResetReceiptContract('bad', uuid, uuid, otherSession), null);
   });
 });

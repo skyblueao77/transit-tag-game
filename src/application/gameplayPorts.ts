@@ -353,7 +353,7 @@ export interface PrepareGameResetPreview {
   exposedLocationCount: number;
   emergencyProjectionCount: number;
   estimatedWriteCount: number;
-  resetReady: false;
+  resetReady: boolean;
   warningCodes: ('SESSION_SCOPE_NOT_READY' | 'RESET_TOO_LARGE')[];
 }
 export type PrepareGameResetResult =
