@@ -8,12 +8,15 @@ import {
 } from '../../../src/game/adminMission';
 import type { Mission } from '../../../types';
 import type { MissionAssignmentStrategy, MissionAssignmentTarget, MissionMode } from '../../../src/game/adminMission';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type AdminMissionAction = 'setMissionMode' | 'assignMissions' | 'syncMissionCatalog';
 export type AdminMissionFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
+  | 'REQUEST_ID_REUSED'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_CONFIG'
   | 'INVALID_PHASE'
@@ -31,6 +34,7 @@ export class AdminMissionServiceError extends Error {
 export interface AdminMissionReceipt {
   action: AdminMissionAction;
   requestId: string;
+  gameSessionId: string;
   result: Record<string, unknown>;
 }
 
@@ -73,40 +77,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseRequest(request: unknown):
-  | { action: 'setMissionMode'; requestId: string; mode: MissionMode }
-  | { action: 'assignMissions'; requestId: string; strategy: 'MANUAL'; target: 'TEAM_A' | 'TEAM_B'; missionId: string }
-  | { action: 'assignMissions'; requestId: string; strategy: 'RANDOM'; target: 'BOTH' }
-  | { action: 'syncMissionCatalog'; requestId: string } {
-  if (!isRecord(request) || typeof request.requestId !== 'string' || !requestIdPattern.test(request.requestId)) {
+  | { action: 'setMissionMode'; requestId: string; expectedSessionId: string; mode: MissionMode }
+  | { action: 'assignMissions'; requestId: string; expectedSessionId: string; strategy: 'MANUAL'; target: 'TEAM_A' | 'TEAM_B'; missionId: string }
+  | { action: 'assignMissions'; requestId: string; expectedSessionId: string; strategy: 'RANDOM'; target: 'BOTH' }
+  | { action: 'syncMissionCatalog'; requestId: string; expectedSessionId: string } {
+  if (!isRecord(request) || typeof request.requestId !== 'string' || !requestIdPattern.test(request.requestId)
+    || !isValidGameSessionId(request.expectedSessionId)) {
     return fail('INVALID_ARGUMENT');
   }
   if (request.action === 'setMissionMode') {
-    if (Object.keys(request).length !== 3 || !Object.hasOwn(request, 'mode')
+    if (Object.keys(request).length !== 4 || !Object.hasOwn(request, 'mode')
       || (request.mode !== 'SAME' && request.mode !== 'DIFFERENT')) return fail('INVALID_ARGUMENT');
-    return { action: 'setMissionMode', mode: request.mode, requestId: request.requestId };
+    return { action: 'setMissionMode', mode: request.mode, requestId: request.requestId, expectedSessionId: request.expectedSessionId };
   }
   if (request.action === 'assignMissions') {
     if (request.strategy === 'MANUAL') {
-      if (Object.keys(request).length !== 5 || !Object.hasOwn(request, 'target') || !Object.hasOwn(request, 'missionId')
+      if (Object.keys(request).length !== 6 || !Object.hasOwn(request, 'target') || !Object.hasOwn(request, 'missionId')
         || (request.target !== 'TEAM_A' && request.target !== 'TEAM_B')
         || typeof request.missionId !== 'string' || !missionIdPattern.test(request.missionId)) return fail('INVALID_ARGUMENT');
-      return { action: 'assignMissions', strategy: 'MANUAL', target: request.target, missionId: request.missionId, requestId: request.requestId };
+      return { action: 'assignMissions', strategy: 'MANUAL', target: request.target, missionId: request.missionId, requestId: request.requestId, expectedSessionId: request.expectedSessionId };
     }
-    if (request.strategy === 'RANDOM' && Object.keys(request).length === 4 && request.target === 'BOTH') {
-      return { action: 'assignMissions', strategy: 'RANDOM', target: 'BOTH', requestId: request.requestId };
+    if (request.strategy === 'RANDOM' && Object.keys(request).length === 5 && request.target === 'BOTH') {
+      return { action: 'assignMissions', strategy: 'RANDOM', target: 'BOTH', requestId: request.requestId, expectedSessionId: request.expectedSessionId };
     }
     return fail('INVALID_ARGUMENT');
   }
-  if (request.action === 'syncMissionCatalog' && Object.keys(request).length === 2) {
-    return { action: 'syncMissionCatalog', requestId: request.requestId };
+  if (request.action === 'syncMissionCatalog' && Object.keys(request).length === 3) {
+    return { action: 'syncMissionCatalog', requestId: request.requestId, expectedSessionId: request.expectedSessionId };
   }
   return fail('INVALID_ARGUMENT');
 }
 
-function parseStoredResult(value: Record<string, unknown>, action: AdminMissionAction, requestId: string): AdminMissionSuccess {
+function parseStoredResult(value: Record<string, unknown>, action: AdminMissionAction, requestId: string, expectedSessionId: string): AdminMissionSuccess {
   if (value.action !== action || value.requestId !== requestId || !isRecord(value.result) || value.result.ok !== true) {
     return fail('PERSISTENCE_ERROR');
   }
+  if (value.gameSessionId !== expectedSessionId) return fail('REQUEST_ID_REUSED');
   const result = value.result;
   if (action === 'setMissionMode' && (result.action !== action || (result.mode !== 'SAME' && result.mode !== 'DIFFERENT') || typeof result.changed !== 'boolean')) return fail('PERSISTENCE_ERROR');
   if (action === 'assignMissions' && (result.action !== action || (result.strategy !== 'MANUAL' && result.strategy !== 'RANDOM') || !Array.isArray(result.selectedMissionIds))) return fail('PERSISTENCE_ERROR');
@@ -158,9 +164,10 @@ export async function administerMissionForAdmin(
   try {
     return await store.runTransaction(async tx => {
       if (!await tx.readAdmin(authUid)) fail('PERMISSION_DENIED');
-      const prior = await tx.readReceipt(authUid, parsed.action, parsed.requestId);
-      if (prior) return parseStoredResult(prior, parsed.action, parsed.requestId);
       const config = validateConfig(await tx.readConfig());
+      if (!validateExpectedSession(config, parsed.expectedSessionId).valid) fail('SESSION_CHANGED');
+      const prior = await tx.readReceipt(authUid, parsed.action, parsed.requestId);
+      if (prior) return parseStoredResult(prior, parsed.action, parsed.requestId, parsed.expectedSessionId);
 
       if (parsed.action === 'setMissionMode') {
         const decision = resolveMissionModeChange(config.missionMode, parsed.mode);
@@ -170,7 +177,7 @@ export async function administerMissionForAdmin(
           const audit = { id: logId, timestamp: now, type: 'MISSION', actorUid: authUid, action: parsed.action, mode: decision.mode, message: `Mission mode changed to ${decision.mode}` };
           tx.updateConfig({ missionMode: decision.mode, logs: logsWithAudit(config, audit) });
         }
-        tx.createReceipt(authUid, parsed.action, parsed.requestId, { action: parsed.action, requestId: parsed.requestId, result });
+        tx.createReceipt(authUid, parsed.action, parsed.requestId, { action: parsed.action, requestId: parsed.requestId, gameSessionId: parsed.expectedSessionId, result });
         return result;
       }
 
@@ -218,7 +225,7 @@ export async function administerMissionForAdmin(
             : `Random missions assigned (${config.missionMode}): A=${decision.activeMissionA} B=${decision.activeMissionB}`,
         };
         tx.updateConfig({ ...patch, logs: logsWithAudit(config, audit) });
-        tx.createReceipt(authUid, parsed.action, parsed.requestId, { action: parsed.action, requestId: parsed.requestId, result });
+        tx.createReceipt(authUid, parsed.action, parsed.requestId, { action: parsed.action, requestId: parsed.requestId, gameSessionId: parsed.expectedSessionId, result });
         return result;
       }
 
@@ -248,7 +255,7 @@ export async function administerMissionForAdmin(
       };
       for (const mission of plan.upserts) tx.upsertMission(mission.id, mission);
       tx.updateConfig({ logs: logsWithAudit(config, audit) });
-      tx.createReceipt(authUid, parsed.action, parsed.requestId, { action: parsed.action, requestId: parsed.requestId, result });
+      tx.createReceipt(authUid, parsed.action, parsed.requestId, { action: parsed.action, requestId: parsed.requestId, gameSessionId: parsed.expectedSessionId, result });
       return result;
     });
   } catch (error) {

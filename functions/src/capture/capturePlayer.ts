@@ -82,6 +82,8 @@ function callableCode(reason: string): HttpsError['code'] {
   switch (reason) {
     case 'INVALID_ARGUMENT':
       return 'invalid-argument';
+    case 'SESSION_CHANGED':
+      return 'failed-precondition';
     case 'PLAYER_NOT_FOUND':
     case 'TARGET_NOT_FOUND':
       return 'not-found';
@@ -110,8 +112,9 @@ export const capturePlayer = onCall(
       data === null
       || typeof data !== 'object'
       || Array.isArray(data)
-      || Object.keys(data).length !== 1
+      || Object.keys(data).length !== 2
       || !Object.prototype.hasOwnProperty.call(data, 'targetId')
+      || !Object.prototype.hasOwnProperty.call(data, 'expectedSessionId')
     ) {
       throw new HttpsError('invalid-argument', 'Expected only a targetId.', {
         reason: 'INVALID_ARGUMENT',
@@ -123,6 +126,7 @@ export const capturePlayer = onCall(
       return await capturePlayerForPlayer(
         request.auth.uid,
         targetId,
+        (data as { expectedSessionId: unknown }).expectedSessionId,
         captureStore,
         { now: Date.now, createLogId: randomUUID },
       );

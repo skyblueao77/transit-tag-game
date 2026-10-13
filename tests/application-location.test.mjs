@@ -6,7 +6,7 @@ function privateStore() {
   const calls = [];
   return {
     calls,
-    save: async (playerId, location) => calls.push({ playerId, location }),
+    save: async (playerId, location, expectedSessionId) => calls.push({ playerId, location, expectedSessionId }),
   };
 }
 
@@ -18,7 +18,7 @@ function exposedStore() {
   };
 }
 
-const validInput = { playerId: 'player-1', latitude: 35.1, longitude: 139.1 };
+const validInput = { playerId: 'player-1', expectedSessionId: 'session-current', latitude: 35.1, longitude: 139.1 };
 
 describe('updatePrivateLocation application use case', () => {
   test('persists valid coordinates for the supplied player', async () => {
@@ -29,6 +29,7 @@ describe('updatePrivateLocation application use case', () => {
     assert.deepEqual(store.calls, [{
       playerId: 'player-1',
       location: { latitude: 35.1, longitude: 139.1 },
+      expectedSessionId: 'session-current',
     }]);
   });
 
@@ -68,9 +69,10 @@ describe('updatePrivateLocation application use case', () => {
 describe('exposeLocation application use case', () => {
   test('persists an individual snapshot during an allowed phase', async () => {
     const store = exposedStore();
-    const privateLocation = { latitude: 35.1, longitude: 139.1 };
+    const privateLocation = { gameSessionId: 'session-current', latitude: 35.1, longitude: 139.1 };
     const result = await exposeLocation({
       playerId: 'player-1',
+      expectedSessionId: 'session-current',
       privateLocation,
       phase: 'DAY1_ACTIVE',
       now: 1_000_000,
@@ -80,6 +82,7 @@ describe('exposeLocation application use case', () => {
     assert.deepEqual(result, {
       ok: true,
       snapshot: {
+        gameSessionId: 'session-current',
         latitude: 35.1,
         longitude: 139.1,
         capturedAt: 1_000_000,
@@ -89,6 +92,7 @@ describe('exposeLocation application use case', () => {
     assert.deepEqual(store.calls, [{
       playerId: 'player-1',
       snapshot: {
+        gameSessionId: 'session-current',
         latitude: 35.1,
         longitude: 139.1,
         capturedAt: 1_000_000,
@@ -101,7 +105,8 @@ describe('exposeLocation application use case', () => {
     const store = exposedStore();
     const result = await exposeLocation({
       playerId: 'player-1',
-      privateLocation: { latitude: 1, longitude: 2 },
+      expectedSessionId: 'session-current',
+      privateLocation: { gameSessionId: 'session-current', latitude: 1, longitude: 2 },
       phase: 'FINAL_MISSION',
       now: 1_000_000,
       duration: 300_000,
@@ -114,31 +119,31 @@ describe('exposeLocation application use case', () => {
   test('requires private coordinates and accepts zero coordinates', async () => {
     const missingStore = exposedStore();
     assert.deepEqual(await exposeLocation({
-      playerId: 'player-1', privateLocation: null, phase: 'DAY2_ACTIVE', now: 1, duration: 1,
+      playerId: 'player-1', expectedSessionId: 'session-current', privateLocation: null, phase: 'DAY2_ACTIVE', now: 1, duration: 1,
     }, missingStore), { ok: false, reason: 'PRIVATE_LOCATION_MISSING' });
     assert.equal(missingStore.calls.length, 0);
 
     const zeroStore = exposedStore();
     assert.equal((await exposeLocation({
-      playerId: 'player-1', privateLocation: { latitude: 0, longitude: 0 },
+      playerId: 'player-1', expectedSessionId: 'session-current', privateLocation: { gameSessionId: 'session-current', latitude: 0, longitude: 0 },
       phase: 'DAY2_ACTIVE', now: 1, duration: 10,
     }, zeroStore)).ok, true);
     assert.deepEqual(zeroStore.calls[0].snapshot, {
-      latitude: 0, longitude: 0, capturedAt: 1, expiresAt: 11,
+      gameSessionId: 'session-current', latitude: 0, longitude: 0, capturedAt: 1, expiresAt: 11,
     });
   });
 
   test('copies snapshot coordinates and does not mutate or link to private location', async () => {
     const store = exposedStore();
-    const privateLocation = { latitude: 10, longitude: 20 };
+    const privateLocation = { gameSessionId: 'session-current', latitude: 10, longitude: 20 };
     const result = await exposeLocation({
-      playerId: 'player-1', privateLocation, phase: 'DAY1_ACTIVE', now: 100, duration: 50,
+      playerId: 'player-1', expectedSessionId: 'session-current', privateLocation, phase: 'DAY1_ACTIVE', now: 100, duration: 50,
     }, store);
 
     privateLocation.latitude = 30;
     privateLocation.longitude = 40;
     assert.deepEqual(result.snapshot, {
-      latitude: 10, longitude: 20, capturedAt: 100, expiresAt: 150,
+      gameSessionId: 'session-current', latitude: 10, longitude: 20, capturedAt: 100, expiresAt: 150,
     });
     assert.deepEqual(store.calls[0].snapshot, result.snapshot);
   });
@@ -146,14 +151,14 @@ describe('exposeLocation application use case', () => {
   test('rejects invalid coordinates and persistence failures', async () => {
     const invalidStore = exposedStore();
     assert.deepEqual(await exposeLocation({
-      playerId: 'player-1', privateLocation: { latitude: 91, longitude: 0 },
+      playerId: 'player-1', expectedSessionId: 'session-current', privateLocation: { gameSessionId: 'session-current', latitude: 91, longitude: 0 },
       phase: 'DAY1_ACTIVE', now: 1, duration: 10,
     }, invalidStore), { ok: false, reason: 'INVALID_COORDINATES' });
     assert.equal(invalidStore.calls.length, 0);
 
     const failingStore = { saveSnapshot: async () => { throw new Error('offline'); } };
     assert.deepEqual(await exposeLocation({
-      playerId: 'player-1', privateLocation: { latitude: 1, longitude: 2 },
+      playerId: 'player-1', expectedSessionId: 'session-current', privateLocation: { gameSessionId: 'session-current', latitude: 1, longitude: 2 },
       phase: 'DAY1_ACTIVE', now: 1, duration: 10,
     }, failingStore), { ok: false, reason: 'PERSISTENCE_ERROR' });
   });

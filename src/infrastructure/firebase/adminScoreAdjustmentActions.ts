@@ -9,7 +9,7 @@ import { functions } from './firebaseClient';
 
 const adjustCallable = httpsCallable<AdjustTeamScoreInput, unknown>(functions, 'adjustTeamScore');
 const knownReasons = new Set<AdminScoreAdjustmentFailureReason>([
-  'UNAUTHENTICATED', 'PERMISSION_DENIED', 'INVALID_ARGUMENT', 'CONFIG_NOT_FOUND',
+  'UNAUTHENTICATED', 'PERMISSION_DENIED', 'INVALID_ARGUMENT', 'SESSION_CHANGED', 'CONFIG_NOT_FOUND',
   'INVALID_CONFIG', 'SCORE_BELOW_ZERO', 'REQUEST_ID_REUSED', 'PERSISTENCE_ERROR',
 ]);
 
@@ -58,6 +58,7 @@ export const firebaseAdminScoreAdjustmentGateway: AdminScoreAdjustmentGateway = 
         delta: input.delta,
         reasonCode: input.reasonCode,
         requestId: input.requestId,
+        expectedSessionId: input.expectedSessionId,
       });
       return mapResult(response.data);
     } catch (error) {

@@ -9,7 +9,7 @@ export async function capturePlayer(
   gateway: CaptureGateway,
 ): Promise<CapturePlayerResult> {
   try {
-    return await gateway.capture({ targetId: input.targetId });
+    return await gateway.capture({ targetId: input.targetId, expectedSessionId: input.expectedSessionId });
   } catch {
     return { ok: false, reason: 'PERSISTENCE_ERROR' };
   }

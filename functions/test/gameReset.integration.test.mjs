@@ -7,6 +7,8 @@ const authUrl = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/account
 const functionsUrl = `http://127.0.0.1:5001/${projectId}/asia-northeast1`;
 const firestoreClearUrl = `http://127.0.0.1:8080/emulator/v1/projects/${projectId}/databases/(default)/documents`;
 const authClearUrl = `http://127.0.0.1:9099/emulator/v1/projects/${projectId}/accounts`;
+const SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
+const STALE_SESSION_ID = '123e4567-e89b-42d3-a456-426614174001';
 let sequence = 0;
 
 async function clearEmulatorState() {
@@ -72,7 +74,7 @@ async function makePlayer(team, status = 'ACTIVE') {
   const user = await createAuthUser();
   await seed(`users/${user.localId}`, {
     id: user.localId, name: `private player ${team}`, team, role: 'RUNNER', status,
-    score: 10, invincibleCards: 2, invincibleUntil: 0, waitingUntil: 0,
+    gameSessionId: SESSION_ID, score: 10, invincibleCards: 2, invincibleUntil: 0, waitingUntil: 0,
   });
   return user;
 }
@@ -97,18 +99,21 @@ async function seedResetFixture() {
   const adminPlayer = await makePlayer('ADMIN');
   const unknown = await makePlayer('UNKNOWN');
 
-  await seed(`privateLocations/${a.localId}`, { latitude: 35.1, longitude: 139.1, updatedAt: new Date() });
-  await seed(`privateLocations/${b.localId}`, { latitude: 36.1, longitude: 140.1, updatedAt: new Date() });
-  await seed(`privateLocations/${adminPlayer.localId}`, { latitude: 37.1, longitude: 141.1, updatedAt: new Date() });
-  await seed(`exposedLocations/${b.localId}`, { latitude: 36.1, longitude: 140.1, expiresAt: new Date(Date.now() + 60_000) });
+  await seed(`privateLocations/${a.localId}`, { gameSessionId: SESSION_ID, latitude: 35.1, longitude: 139.1, updatedAt: new Date() });
+  await seed(`privateLocations/${b.localId}`, { gameSessionId: SESSION_ID, latitude: 36.1, longitude: 140.1, updatedAt: new Date() });
+  await seed(`privateLocations/${adminPlayer.localId}`, { gameSessionId: SESSION_ID, latitude: 37.1, longitude: 141.1, updatedAt: new Date() });
+  await seed(`exposedLocations/${b.localId}`, { gameSessionId: SESSION_ID, latitude: 36.1, longitude: 140.1, expiresAt: new Date(Date.now() + 60_000) });
   await seed(`emergencyLocationProjections/${a.localId}`, {
-    playerId: a.localId, latitude: 35.1, longitude: 139.1, expiresAt: new Date(Date.now() + 60_000),
+    gameSessionId: SESSION_ID, playerId: a.localId, latitude: 35.1, longitude: 139.1, expiresAt: new Date(Date.now() + 60_000),
   });
   return { admin, a, b, adminPlayer, unknown };
 }
 
-async function legacyConfig() {
-  await seed('game_config/current', { gameStatus: 'DAY1_ACTIVE', teamAScore: 9, teamBScore: 11, logs: [{ id: 'old-log' }] });
+async function seedConfig() {
+  await seed('game_config/current', {
+    gameSessionId: SESSION_ID, sessionStartedAt: 1_700_000_000_000, sessionSchemaVersion: 2,
+    gameStatus: 'DAY1_ACTIVE', teamAScore: 9, teamBScore: 11, logs: [{ id: 'old-log' }],
+  });
 }
 
 describe('trusted game reset foundation callable emulator integration', () => {
@@ -116,16 +121,16 @@ describe('trusted game reset foundation callable emulator integration', () => {
 
   test('Admin Preview counts only A/B targets and persists a private, actor-bound token', async () => {
     const fixture = await seedResetFixture();
-    await legacyConfig();
-    const response = await call('prepareGameReset', {}, fixture.admin.idToken);
+    await seedConfig();
+    const response = await call('prepareGameReset', { expectedSessionId: SESSION_ID }, fixture.admin.idToken);
     assert.equal(response.body.result.ok, true, JSON.stringify(response.body));
     const preview = response.body.result;
     assert.equal(preview.participantCount, 2);
     assert.equal(preview.privateLocationCount, 2);
     assert.equal(preview.exposedLocationCount, 1);
     assert.equal(preview.emergencyProjectionCount, 1);
-    assert.equal(preview.currentSessionId, null);
-    assert.equal(preview.sessionSchemaVersion, 0);
+    assert.equal(preview.currentSessionId, SESSION_ID);
+    assert.equal(preview.sessionSchemaVersion, 2);
     assert.equal(preview.resetReady, false);
     assert.equal(JSON.stringify(preview).includes('private player'), false);
     assert.equal(JSON.stringify(preview).includes('latitude'), false);
@@ -138,24 +143,24 @@ describe('trusted game reset foundation callable emulator integration', () => {
 
   test('rejects unauthenticated and non-admin Preview and rejects extra request fields', async () => {
     const fixture = await seedResetFixture();
-    await legacyConfig();
+    await seedConfig();
     const regular = await createAuthUser();
-    assert.ok((await call('prepareGameReset', {})).body.error);
-    assert.equal((await call('prepareGameReset', {}, regular.idToken)).body.error.details.reason, 'PERMISSION_DENIED');
-    assert.equal((await call('prepareGameReset', { requestedCount: 2 }, fixture.admin.idToken)).body.error.details.reason, 'INVALID_ARGUMENT');
+    assert.ok((await call('prepareGameReset', { expectedSessionId: SESSION_ID })).body.error);
+    assert.equal((await call('prepareGameReset', { expectedSessionId: SESSION_ID }, regular.idToken)).body.error.details.reason, 'PERMISSION_DENIED');
+    assert.equal((await call('prepareGameReset', { expectedSessionId: SESSION_ID, requestedCount: 2 }, fixture.admin.idToken)).body.error.details.reason, 'INVALID_ARGUMENT');
   });
 
   test('execute is server-gated and leaves Config, Players, locations, token, receipts, and logs untouched', async () => {
     const admin = await makeAdmin();
     const a = await makePlayer('A');
     const b = await makePlayer('B');
-    await legacyConfig();
-    await seed(`privateLocations/${a.localId}`, { latitude: 35.1, longitude: 139.1, updatedAt: new Date() });
-    await seed(`privateLocations/${b.localId}`, { latitude: 36.1, longitude: 140.1, updatedAt: new Date() });
-    await seed(`exposedLocations/${b.localId}`, { latitude: 36.1, longitude: 140.1, expiresAt: new Date(Date.now() + 60_000) });
+    await seedConfig();
+    await seed(`privateLocations/${a.localId}`, { gameSessionId: SESSION_ID, latitude: 35.1, longitude: 139.1, updatedAt: new Date() });
+    await seed(`privateLocations/${b.localId}`, { gameSessionId: SESSION_ID, latitude: 36.1, longitude: 140.1, updatedAt: new Date() });
+    await seed(`exposedLocations/${b.localId}`, { gameSessionId: SESSION_ID, latitude: 36.1, longitude: 140.1, expiresAt: new Date(Date.now() + 60_000) });
     const orphanProjection = 'emergencyLocationProjections/orphan-preview-fixture';
-    await seed(orphanProjection, { playerId: 'orphan-preview-fixture', latitude: 35, longitude: 139 });
-    const preview = (await call('prepareGameReset', {}, admin.idToken)).body.result;
+    await seed(orphanProjection, { gameSessionId: SESSION_ID, playerId: 'orphan-preview-fixture', latitude: 35, longitude: 139 });
+    const preview = (await call('prepareGameReset', { expectedSessionId: SESSION_ID }, admin.idToken)).body.result;
     const paths = [
       'game_config/current', `users/${a.localId}`, `users/${b.localId}`,
       `privateLocations/${a.localId}`, `privateLocations/${b.localId}`,
@@ -166,20 +171,29 @@ describe('trusted game reset foundation callable emulator integration', () => {
     const tokenBefore = await read(tokenPath);
     const executeId = requestId();
     const response = await call('executeGameReset', {
-      confirmationToken: preview.confirmationToken, requestId: executeId,
+      confirmationToken: preview.confirmationToken, requestId: executeId, expectedSessionId: SESSION_ID,
     }, admin.idToken);
     assert.equal(response.body.error.details.reason, 'RESET_NOT_READY', JSON.stringify(response.body));
     assert.deepEqual(await Promise.all(paths.map(read)), before);
     assert.deepEqual(await read(tokenPath), tokenBefore);
     assert.equal(await read(`admins/${admin.localId}/gameResetRequests/${executeId}`), null);
     assert.equal((await read('game_config/current')).logs[0].id, 'old-log');
+
+    const staleExecuteId = requestId();
+    const stale = await call('executeGameReset', {
+      confirmationToken: preview.confirmationToken, requestId: staleExecuteId, expectedSessionId: STALE_SESSION_ID,
+    }, admin.idToken);
+    assert.equal(stale.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual(await Promise.all(paths.map(read)), before);
+    assert.deepEqual(await read(tokenPath), tokenBefore);
+    assert.equal(await read(`admins/${admin.localId}/gameResetRequests/${staleExecuteId}`), null);
   });
 
   test('creates distinct confirmation tokens and rejects expired confirmation without writes', async () => {
     const admin = await makeAdmin();
-    await legacyConfig();
-    const first = (await call('prepareGameReset', {}, admin.idToken)).body.result;
-    const second = (await call('prepareGameReset', {}, admin.idToken)).body.result;
+    await seedConfig();
+    const first = (await call('prepareGameReset', { expectedSessionId: SESSION_ID }, admin.idToken)).body.result;
+    const second = (await call('prepareGameReset', { expectedSessionId: SESSION_ID }, admin.idToken)).body.result;
     assert.notEqual(first.confirmationToken, second.confirmationToken);
     const path = `admins/${admin.localId}/resetConfirmations/${first.confirmationToken}`;
     const expiredAt = Date.now() - 1;
@@ -190,7 +204,9 @@ describe('trusted game reset foundation callable emulator integration', () => {
     assert.equal(typeof changedToken.issuedAt, 'number');
     assert.equal(typeof changedToken.used, 'boolean');
     assert.equal(typeof changedToken.previewFingerprint, 'string');
-    const response = await call('executeGameReset', { confirmationToken: first.confirmationToken, requestId: requestId() }, admin.idToken);
+    const response = await call('executeGameReset', {
+      confirmationToken: first.confirmationToken, requestId: requestId(), expectedSessionId: SESSION_ID,
+    }, admin.idToken);
     assert.equal(response.body.error.details.reason, 'CONFIRMATION_EXPIRED');
     assert.equal((await read('game_config/current')).teamAScore, 9);
   });

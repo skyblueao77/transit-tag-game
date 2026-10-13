@@ -17,7 +17,7 @@ export interface User {
   team: string;
   color: string;
   score: number;
-
+  gameSessionId?: string;
 
   status: 'ACTIVE' | 'CAPTURED' | 'WAITING' | 'EMERGENCY' | 'RETIRED';
   invincibleUntil?: number;
@@ -28,6 +28,7 @@ export interface User {
 }
 
 export interface PrivateLocation {
+  gameSessionId: string;
   latitude: number;
   longitude: number;
   updatedAt?: unknown;
@@ -37,6 +38,7 @@ export type ExposedLocationScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL'
 export type AdminRevealScope = Exclude<ExposedLocationScope, 'INDIVIDUAL'>;
 
 export interface ExposedLocation {
+  gameSessionId: string;
   latitude: number;
   longitude: number;
   capturedAt?: number;
@@ -46,6 +48,7 @@ export interface ExposedLocation {
 
 export interface EmergencyLocationProjection {
   playerId: string;
+  gameSessionId: string;
   latitude: number;
   longitude: number;
   projectedAt: number;
@@ -109,6 +112,17 @@ export interface GameConfig {
   gameSessionId?: string;
   sessionStartedAt?: number;
   sessionSchemaVersion?: number;
+}
+
+export interface MissionCompletion {
+  gameSessionId: string;
+  missionId: string;
+  team: 'A' | 'B';
+  completedBy: string;
+  points: number;
+  luckyReward: boolean;
+  isFinalMission: boolean;
+  completedAt: unknown;
 }
 
 export interface LocationLog {

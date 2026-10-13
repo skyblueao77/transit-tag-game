@@ -57,6 +57,8 @@ function callableCode(reason: string): HttpsError['code'] {
   switch (reason) {
     case 'INVALID_ARGUMENT':
       return 'invalid-argument';
+    case 'SESSION_CHANGED':
+      return 'failed-precondition';
     case 'PLAYER_NOT_FOUND':
     case 'CONFIG_NOT_FOUND':
       return 'not-found';
@@ -67,15 +69,15 @@ function callableCode(reason: string): HttpsError['code'] {
   }
 }
 
-function requireEmptyRequest(data: unknown): void {
-  if (data === null
-    || typeof data !== 'object'
-    || Array.isArray(data)
-    || Object.keys(data).length !== 0) {
-    throw new HttpsError('invalid-argument', 'Expected an empty request.', {
+function expectedSessionRequest(data: unknown): unknown {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)
+    || Object.keys(data).length !== 1
+    || !Object.prototype.hasOwnProperty.call(data, 'expectedSessionId')) {
+    throw new HttpsError('invalid-argument', 'Expected expectedSessionId.', {
       reason: 'INVALID_ARGUMENT',
     });
   }
+  return (data as { expectedSessionId: unknown }).expectedSessionId;
 }
 
 export const startWaiting = onCall(
@@ -86,10 +88,10 @@ export const startWaiting = onCall(
         reason: 'UNAUTHENTICATED',
       });
     }
-    requireEmptyRequest(request.data);
+    const expectedSessionId = expectedSessionRequest(request.data);
 
     try {
-      return await startWaitingForPlayer(request.auth.uid, waitingStore, runtime);
+      return await startWaitingForPlayer(request.auth.uid, expectedSessionId, waitingStore, runtime);
     } catch (error) {
       if (error instanceof WaitingServiceError) {
         throw new HttpsError(callableCode(error.reason), error.reason, { reason: error.reason });
@@ -110,10 +112,10 @@ export const resumeWaiting = onCall(
         reason: 'UNAUTHENTICATED',
       });
     }
-    requireEmptyRequest(request.data);
+    const expectedSessionId = expectedSessionRequest(request.data);
 
     try {
-      return await resumeWaitingForPlayer(request.auth.uid, waitingStore, runtime);
+      return await resumeWaitingForPlayer(request.auth.uid, expectedSessionId, waitingStore, runtime);
     } catch (error) {
       if (error instanceof WaitingServiceError) {
         throw new HttpsError(callableCode(error.reason), error.reason, { reason: error.reason });

@@ -30,6 +30,7 @@ export interface EmergencyHeartbeatScheduler {
 export interface EmergencyLocationHeartbeatInput {
   status: string | undefined;
   playerId: string | undefined;
+  expectedSessionId: string | undefined;
   authUserId: string | null;
   geolocation: EmergencyHeartbeatGeolocation | null;
   updatePrivateLocation: (input: UpdatePrivateLocationInput) => Promise<UpdatePrivateLocationResult>;
@@ -46,18 +47,21 @@ const browserScheduler: EmergencyHeartbeatScheduler = {
 
 function isEligible(input: EmergencyLocationHeartbeatInput): input is EmergencyLocationHeartbeatInput & {
   playerId: string;
+  expectedSessionId: string;
   authUserId: string;
   geolocation: EmergencyHeartbeatGeolocation;
 } {
   return input.status === 'EMERGENCY'
     && typeof input.playerId === 'string'
     && input.playerId.length > 0
+    && typeof input.expectedSessionId === 'string'
+    && input.expectedSessionId.length > 0
     && input.authUserId === input.playerId
     && input.geolocation !== null;
 }
 
 function updateFromCurrentPosition(
-  input: EmergencyLocationHeartbeatInput & { playerId: string; geolocation: EmergencyHeartbeatGeolocation },
+  input: EmergencyLocationHeartbeatInput & { playerId: string; expectedSessionId: string; geolocation: EmergencyHeartbeatGeolocation },
 ): Promise<boolean> {
   if (!input.isOnline() || !input.isCurrentPlayer()) return Promise.resolve(false);
 
@@ -84,6 +88,7 @@ function updateFromCurrentPosition(
 
         void input.updatePrivateLocation({
           playerId: input.playerId,
+          expectedSessionId: input.expectedSessionId,
           latitude,
           longitude,
         }).then(result => {
@@ -144,7 +149,7 @@ export function createEmergencyLocationHeartbeatController() {
 
   return {
     sync(input: EmergencyLocationHeartbeatInput): void {
-      const nextKey = isEligible(input) ? `${input.authUserId}\u0000${input.playerId}` : null;
+      const nextKey = isEligible(input) ? `${input.authUserId}\u0000${input.playerId}\u0000${input.expectedSessionId}` : null;
       if (nextKey === activeKey) return;
 
       stopActive();

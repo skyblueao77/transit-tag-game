@@ -75,14 +75,17 @@ describe('trusted game reset foundation core', () => {
     assert.ok(tooLarge.warningCodes.includes('RESET_TOO_LARGE'));
   });
 
-  test('validates minimal Prepare and Execute request contracts without mutation', () => {
-    const execute = { confirmationToken: uuid, requestId: '123e4567-e89b-42d3-a456-426614174001' };
+  test('validates strict Prepare and Execute request contracts without mutation', () => {
+    const execute = { confirmationToken: uuid, requestId: '123e4567-e89b-42d3-a456-426614174001', expectedSessionId: uuid };
     const before = structuredClone(execute);
-    assert.deepEqual(validatePrepareGameResetRequest({}), { allowed: true, request: {} });
-    assert.deepEqual(validatePrepareGameResetRequest({ extra: true }), { allowed: false, reason: 'INVALID_ARGUMENT' });
+    assert.deepEqual(validatePrepareGameResetRequest({ expectedSessionId: uuid }), {
+      allowed: true, request: { expectedSessionId: uuid },
+    });
+    assert.deepEqual(validatePrepareGameResetRequest({ expectedSessionId: uuid, extra: true }), { allowed: false, reason: 'INVALID_ARGUMENT' });
+    assert.deepEqual(validatePrepareGameResetRequest({}), { allowed: false, reason: 'INVALID_ARGUMENT' });
     assert.deepEqual(validateExecuteGameResetRequest(execute), { allowed: true, request: execute });
     assert.deepEqual(validateExecuteGameResetRequest({ ...execute, currentSessionId: 'forged' }), { allowed: false, reason: 'INVALID_ARGUMENT' });
-    assert.deepEqual(validateExecuteGameResetRequest({ confirmationToken: 'bad', requestId: execute.requestId }), { allowed: false, reason: 'INVALID_ARGUMENT' });
+    assert.deepEqual(validateExecuteGameResetRequest({ confirmationToken: 'bad', requestId: execute.requestId, expectedSessionId: uuid }), { allowed: false, reason: 'INVALID_ARGUMENT' });
     assert.deepEqual(execute, before);
   });
 

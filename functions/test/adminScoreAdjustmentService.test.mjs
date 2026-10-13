@@ -5,11 +5,12 @@ import { AdminScoreAdjustmentServiceError, adjustTeamScoreForAdmin } from '../li
 const uid = 'trusted-admin';
 const requestId = '123e4567-e89b-42d3-a456-426614174000';
 const now = 1_800_000_000_000;
-const request = (overrides = {}) => ({ team: 'A', delta: 5, reasonCode: 'CORRECTION', requestId, ...overrides });
+const sessionId = 'session_score_2';
+const request = (overrides = {}) => ({ team: 'A', delta: 5, reasonCode: 'CORRECTION', requestId, expectedSessionId: sessionId, ...overrides });
 function makeFixture({ admin = true, gameConfig = {}, failWrite = false } = {}) {
   const state = {
     admin,
-    config: gameConfig === null ? null : structuredClone({ teamAScore: 20, teamBScore: 30, logs: [], untouched: 'preserve', ...gameConfig }),
+    config: gameConfig === null ? null : structuredClone({ gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2, teamAScore: 20, teamBScore: 30, logs: [], untouched: 'preserve', ...gameConfig }),
     receipts: new Map(),
     writes: [],
     reads: [],
@@ -76,7 +77,7 @@ describe('trusted Admin score adjustment service', () => {
     assert.equal(receipt.createdAt, now);
     assert.equal(receipt.result.nextScore, 20);
     assert.deepEqual(f.state.writes, ['config', 'receipt']);
-    assert.deepEqual(f.state.reads, [`admin:${uid}`, 'receipt', 'config']);
+    assert.deepEqual(f.state.reads, [`admin:${uid}`, 'config', 'receipt']);
     assert.deepEqual(f.runtime.calls, { now: 1, id: 1 });
   });
 
@@ -135,6 +136,52 @@ describe('trusted Admin score adjustment service', () => {
     await rejects('SCORE_BELOW_ZERO', () => adjustTeamScoreForAdmin(uid, request({ delta: -5 }), belowZero.store, belowZero.runtime));
     assert.deepEqual(belowZero.state.writes, []);
     await rejects('UNAUTHENTICATED', () => adjustTeamScoreForAdmin('', request(), makeFixture().store, makeFixture().runtime));
+  });
+
+  test('rejects missing, malformed, stale, or invalid Config Sessions before receipts or writes', async () => {
+    const missingExpected = { ...request() };
+    delete missingExpected.expectedSessionId;
+    for (const input of [missingExpected, request({ expectedSessionId: '' }), request({ expectedSessionId: 'bad/session' })]) {
+      const f = makeFixture();
+      await rejects('INVALID_ARGUMENT', () => adjustTeamScoreForAdmin(uid, input, f.store, f.runtime));
+      assert.deepEqual(f.state.reads, []);
+      assert.deepEqual(f.state.writes, []);
+    }
+
+    for (const setup of [
+      { gameConfig: null },
+      { gameConfig: { gameSessionId: undefined } },
+      { gameConfig: { gameSessionId: 'bad/session' } },
+      { gameConfig: { sessionStartedAt: undefined } },
+      { gameConfig: { sessionSchemaVersion: 1 } },
+    ]) {
+      const f = makeFixture(setup);
+      await rejects(setup.gameConfig === null ? 'CONFIG_NOT_FOUND' : 'SESSION_CHANGED', () =>
+        adjustTeamScoreForAdmin(uid, request(), f.store, f.runtime));
+      assert.deepEqual(f.state.reads, [`admin:${uid}`, 'config']);
+      assert.deepEqual(f.state.writes, []);
+    }
+
+    const stale = makeFixture();
+    await rejects('SESSION_CHANGED', () => adjustTeamScoreForAdmin(
+      uid, request({ expectedSessionId: 'session_stale' }), stale.store, stale.runtime,
+    ));
+    assert.deepEqual(stale.state.reads, [`admin:${uid}`, 'config']);
+    assert.deepEqual(stale.state.writes, []);
+  });
+
+  test('rejects mismatched and legacy receipt Sessions without replaying or writing', async () => {
+    for (const session of ['session_stale', undefined]) {
+      const f = makeFixture();
+      f.state.receipts.set(`${uid}:${requestId}`, {
+        operation: 'adjustTeamScore', requestId,
+        ...(session === undefined ? {} : { gameSessionId: session }),
+        team: 'A', delta: 5, reasonCode: 'CORRECTION',
+      });
+      await rejects('REQUEST_ID_REUSED', () => adjustTeamScoreForAdmin(uid, request(), f.store, f.runtime));
+      assert.deepEqual(f.state.reads, [`admin:${uid}`, 'config', 'receipt']);
+      assert.deepEqual(f.state.writes, []);
+    }
   });
 
   test('returns a stored result for the same payload and rejects requestId reuse with changed payload', async () => {

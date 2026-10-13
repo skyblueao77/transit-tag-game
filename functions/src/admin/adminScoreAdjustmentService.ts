@@ -1,10 +1,12 @@
 import { resolveTeamScoreAdjustment } from '../../../src/game/adminScoreAdjustment';
 import type { ScoreAdjustmentReasonCode, ScoreAdjustmentTeam } from '../../../src/game/adminScoreAdjustment';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type AdminScoreAdjustmentFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_CONFIG'
   | 'SCORE_BELOW_ZERO'
@@ -31,6 +33,7 @@ export interface TeamScoreAdjustmentResult {
 export interface TeamScoreAdjustmentReceipt {
   operation: 'adjustTeamScore';
   requestId: string;
+  gameSessionId: string;
   team: ScoreAdjustmentTeam;
   delta: number;
   reasonCode: ScoreAdjustmentReasonCode;
@@ -84,14 +87,17 @@ function parseRequest(value: unknown): {
   delta: number;
   reasonCode: ScoreAdjustmentReasonCode;
   requestId: string;
+  expectedSessionId: string;
 } {
-  if (!isRecord(value) || Object.keys(value).length !== 4
+  if (!isRecord(value) || Object.keys(value).length !== 5
     || !Object.hasOwn(value, 'team') || !Object.hasOwn(value, 'delta')
     || !Object.hasOwn(value, 'reasonCode') || !Object.hasOwn(value, 'requestId')
+    || !Object.hasOwn(value, 'expectedSessionId')
     || (value.team !== 'A' && value.team !== 'B')
     || typeof value.delta !== 'number' || !Number.isSafeInteger(value.delta) || value.delta === 0 || value.delta < -1000 || value.delta > 1000
     || typeof value.reasonCode !== 'string' || !Object.hasOwn(reasonLabels, value.reasonCode)
-    || typeof value.requestId !== 'string' || !REQUEST_ID_PATTERN.test(value.requestId)) {
+    || typeof value.requestId !== 'string' || !REQUEST_ID_PATTERN.test(value.requestId)
+    || !isValidGameSessionId(value.expectedSessionId)) {
     return fail('INVALID_ARGUMENT');
   }
   return {
@@ -99,6 +105,7 @@ function parseRequest(value: unknown): {
     delta: value.delta,
     reasonCode: value.reasonCode as ScoreAdjustmentReasonCode,
     requestId: value.requestId,
+    expectedSessionId: value.expectedSessionId,
   };
 }
 
@@ -114,6 +121,7 @@ function readPriorReceipt(
   request: ReturnType<typeof parseRequest>,
 ): TeamScoreAdjustmentResult {
   if (receipt.operation !== 'adjustTeamScore' || receipt.requestId !== request.requestId) fail('PERSISTENCE_ERROR');
+  if (receipt.gameSessionId !== request.expectedSessionId) fail('REQUEST_ID_REUSED');
   if (receipt.team !== request.team || receipt.delta !== request.delta || receipt.reasonCode !== request.reasonCode) {
     fail('REQUEST_ID_REUSED');
   }
@@ -147,11 +155,11 @@ export async function adjustTeamScoreForAdmin(
   try {
     return await store.runTransaction(async transaction => {
       if (!await transaction.readAdmin(authUid)) fail('PERMISSION_DENIED');
-      const prior = await transaction.readReceipt(authUid, request.requestId);
-      if (prior) return readPriorReceipt(prior, request);
-
       const config = await transaction.readConfig();
       if (!config) fail('CONFIG_NOT_FOUND');
+      if (!validateExpectedSession(config, request.expectedSessionId).valid) fail('SESSION_CHANGED');
+      const prior = await transaction.readReceipt(authUid, request.requestId);
+      if (prior) return readPriorReceipt(prior, request);
       if (config.logs !== undefined && !Array.isArray(config.logs)) fail('INVALID_CONFIG');
       const decision = resolveTeamScoreAdjustment({
         team: request.team,
@@ -193,6 +201,7 @@ export async function adjustTeamScoreForAdmin(
       const receipt: TeamScoreAdjustmentReceipt = {
         operation: 'adjustTeamScore',
         requestId: request.requestId,
+        gameSessionId: request.expectedSessionId,
         team: decision.team,
         delta: decision.delta,
         reasonCode: decision.reasonCode,

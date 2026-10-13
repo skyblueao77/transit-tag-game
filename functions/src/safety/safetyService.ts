@@ -5,9 +5,11 @@ import type {
   SafetyReasonCode,
   SafetyRejectionReason,
 } from '../../../src/game/playerSafety';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type SafetyFailureReason =
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -83,16 +85,18 @@ function invalidRequest(): never {
   throw new SafetyServiceError('INVALID_ARGUMENT');
 }
 
-function parseRequest(data: unknown): { action: SafetyAction; reasonCode: SafetyReasonCode } {
+function parseRequest(data: unknown): { action: SafetyAction; reasonCode: SafetyReasonCode; expectedSessionId: string } {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return invalidRequest();
   const record = data as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length !== 2
+  if (keys.length !== 3
     || !Object.prototype.hasOwnProperty.call(record, 'action')
-    || !Object.prototype.hasOwnProperty.call(record, 'reasonCode')) {
+    || !Object.prototype.hasOwnProperty.call(record, 'reasonCode')
+    || !Object.prototype.hasOwnProperty.call(record, 'expectedSessionId')) {
     return invalidRequest();
   }
   if (typeof record.action !== 'string' || typeof record.reasonCode !== 'string') return invalidRequest();
+  if (!isValidGameSessionId(record.expectedSessionId)) throw new SafetyServiceError('SESSION_CHANGED');
 
   if (record.action !== 'EMERGENCY' && record.action !== 'RETIRE') {
     throw new SafetyServiceError('INVALID_ACTION');
@@ -103,6 +107,7 @@ function parseRequest(data: unknown): { action: SafetyAction; reasonCode: Safety
   return {
     action: record.action,
     reasonCode: record.reasonCode as SafetyReasonCode,
+    expectedSessionId: record.expectedSessionId,
   };
 }
 
@@ -156,7 +161,7 @@ export async function requestSafetyActionForPlayer(
   runtime: SafetyRuntime,
 ): Promise<SafetyActionSuccess> {
   if (typeof uid !== 'string' || uid.length === 0) throw new SafetyServiceError('INVALID_ARGUMENT');
-  const { action, reasonCode } = parseRequest(request);
+  const { action, reasonCode, expectedSessionId } = parseRequest(request);
   const now = runtime.now();
   const logId = runtime.createLogId();
   if (!Number.isFinite(now) || now < 0 || typeof logId !== 'string' || logId.length === 0) {
@@ -165,12 +170,10 @@ export async function requestSafetyActionForPlayer(
 
   try {
     return await store.runTransaction(async transaction => {
-      const [playerDocument, rawConfig] = await Promise.all([
-        transaction.readPlayer(uid),
-        transaction.readGameConfig(),
-      ]);
-      const player = readPlayer(playerDocument, uid);
-      const config = readConfig(rawConfig);
+      const config = readConfig(await transaction.readGameConfig());
+      const session = validateExpectedSession(config, expectedSessionId);
+      if (!session.valid) throw new SafetyServiceError('SESSION_CHANGED');
+      const player = readPlayer(await transaction.readPlayer(uid), uid);
       const result = resolvePlayerSafetyAction({
         action,
         reasonCode,

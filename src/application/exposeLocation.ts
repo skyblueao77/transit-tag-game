@@ -1,4 +1,5 @@
 import { canRevealLocation } from '../game/phases.ts';
+import { isValidGameSessionId } from '../game/gameSession.ts';
 import type {
   ExposeLocationInput,
   ExposeLocationResult,
@@ -22,7 +23,10 @@ export async function exposeLocation(
   if (!canRevealLocation(input.phase)) {
     return { ok: false, reason: 'REVEAL_NOT_ALLOWED' };
   }
-  if (!privateLocation) {
+  if (!isValidGameSessionId(input.expectedSessionId)) {
+    return { ok: false, reason: 'PRIVATE_LOCATION_MISSING' };
+  }
+  if (!privateLocation || privateLocation.gameSessionId !== input.expectedSessionId) {
     return { ok: false, reason: 'PRIVATE_LOCATION_MISSING' };
   }
   if (!Number.isFinite(input.now) || !Number.isFinite(input.duration) || input.duration < 0) {
@@ -33,6 +37,7 @@ export async function exposeLocation(
   }
 
   const snapshot = {
+    gameSessionId: input.expectedSessionId,
     latitude: privateLocation.latitude,
     longitude: privateLocation.longitude,
     capturedAt: input.now,

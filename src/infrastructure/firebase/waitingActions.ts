@@ -20,6 +20,7 @@ const resumeWaitingCallable = httpsCallable<ResumeWaitingInput, ResumeWaitingRes
 
 const knownReasons = new Set<WaitingFailureReason>([
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
   'PLAYER_NOT_FOUND',
   'CONFIG_NOT_FOUND',
   'INVALID_PLAYER_STATE',
@@ -53,17 +54,17 @@ function mapFailure(error: unknown): WaitingFailureReason {
 }
 
 export const firebaseWaitingGateway: WaitingGateway = {
-  async startWaiting(): Promise<StartWaitingResult> {
+  async startWaiting(input): Promise<StartWaitingResult> {
     try {
-      const response = await startWaitingCallable({});
+      const response = await startWaitingCallable(input);
       return response.data;
     } catch (error) {
       return { ok: false, reason: mapFailure(error) };
     }
   },
-  async resumeWaiting(): Promise<ResumeWaitingResult> {
+  async resumeWaiting(input): Promise<ResumeWaitingResult> {
     try {
-      const response = await resumeWaitingCallable({});
+      const response = await resumeWaitingCallable(input);
       return response.data;
     } catch (error) {
       return { ok: false, reason: mapFailure(error) };

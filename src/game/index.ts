@@ -1,5 +1,13 @@
 export type { GameStatus, PlayerTeam, Role, Team, TeamRoles } from './types';
 export {
+  GAME_SESSION_SCHEMA_VERSION,
+  isValidGameSessionId,
+  sessionScopedCompletionId,
+  validateExpectedSession,
+  validateGameSession,
+} from './gameSession.ts';
+export type { GameSessionFields, GameSessionValidation } from './gameSession.ts';
+export {
   buildResetReceiptContract,
   isResetConfirmationExpired,
   isResetConfirmationStale,

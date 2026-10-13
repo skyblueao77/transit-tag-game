@@ -23,6 +23,10 @@ const projections = firestore.collection('emergencyLocationProjections');
 const store: EmergencyProjectionStore = {
   runTransaction: work => firestore.runTransaction(async transaction => {
     const projectionTransaction: EmergencyProjectionTransaction = {
+      readGameConfig: async () => {
+        const snapshot = await transaction.get(firestore.doc('game_config/current'));
+        return snapshot.exists ? snapshot.data() ?? null : null;
+      },
       readPlayer: async uid => {
         const snapshot = await transaction.get(users.doc(uid));
         return snapshot.exists ? { id: snapshot.id, data: snapshot.data() ?? {} } : null;

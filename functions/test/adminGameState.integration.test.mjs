@@ -5,6 +5,7 @@ const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
 const functionsBase = `http://127.0.0.1:5001/${projectId}/asia-northeast1`;
+const SESSION_ID = 'admin_game_state_session_v1';
 let sequence = 0;
 
 async function createAuthUser() {
@@ -82,6 +83,7 @@ async function seedPlayer({ team = 'A', status = 'ACTIVE', name } = {}) {
   const auth = await createAuthUser();
   await seedDocument(`users/${auth.localId}`, {
     id: auth.localId,
+    gameSessionId: SESSION_ID,
     name: name ?? `Admin integration ${sequence}`,
     team,
     status,
@@ -104,6 +106,9 @@ async function seedAdmin() {
 
 async function seedConfig({ teamARole = 'ONI', teamBRole = 'RUNNER', logs = [] } = {}) {
   await seedDocument('game_config/current', {
+    gameSessionId: SESSION_ID,
+    sessionStartedAt: Date.now(),
+    sessionSchemaVersion: 2,
     teamARole,
     teamBRole,
     nextRevealTime: 0,
@@ -146,7 +151,7 @@ describe('Admin Game State callable emulator integration', () => {
     const retired = await seedPlayer({ team: 'B', status: 'RETIRED' });
     await seedConfig();
 
-    const result = await call('swapTeamRoles', { requestId: uniqueRequestId() }, admin.idToken);
+    const result = await call('swapTeamRoles', { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(result.body.result.ok, true);
     assert.equal(result.body.result.newOniTeam, 'B');
     const [config, aPlayer, bPlayer, emergencyPlayer, retiredPlayer] = await Promise.all([
@@ -181,15 +186,36 @@ describe('Admin Game State callable emulator integration', () => {
     await seedConfig();
     const before = await readDocument('game_config/current', admin.idToken);
 
-    assert.ok((await call('swapTeamRoles', { requestId: uniqueRequestId() })).body.error);
+    assert.ok((await call('swapTeamRoles', { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID })).body.error);
     const nonAdmin = await createAuthUser();
-    assert.ok((await call('swapTeamRoles', { requestId: uniqueRequestId() }, nonAdmin.idToken)).body.error);
-    assert.ok((await call('swapTeamRoles', { requestId: uniqueRequestId(), team: 'A' }, admin.idToken)).body.error);
+    assert.ok((await call('swapTeamRoles', { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID }, nonAdmin.idToken)).body.error);
+    assert.ok((await call('swapTeamRoles', { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID, team: 'A' }, admin.idToken)).body.error);
     const after = await readDocument('game_config/current', admin.idToken);
     assert.equal(after.teamARole, before.teamARole);
     assert.equal(after.teamBRole, before.teamBRole);
     assert.equal(after.logs.length, before.logs.length);
     assert.equal((await readDocument(`users/${player.localId}`, admin.idToken)).status, 'ACTIVE');
+  });
+
+  test('stale Role Swap and Resume sessions reject before config, player, or receipt writes', async () => {
+    const admin = await seedAdmin();
+    const waiting = await seedPlayer({ team: 'A', status: 'WAITING' });
+    await seedConfig();
+    const beforeConfig = await readDocument('game_config/current', admin.idToken);
+    const beforePlayer = await readDocument(`users/${waiting.localId}`, admin.idToken);
+    const swapId = uniqueRequestId();
+
+    const swap = await call('swapTeamRoles', { requestId: swapId, expectedSessionId: 'stale_admin_session' }, admin.idToken);
+    const resume = await call('resumePlayer', { targetId: waiting.localId, expectedSessionId: 'stale_admin_session' }, admin.idToken);
+    assert.equal(swap.body.error.details.reason, 'SESSION_CHANGED');
+    assert.equal(resume.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual(await readDocument('game_config/current', admin.idToken), beforeConfig);
+    assert.deepEqual(await readDocument(`users/${waiting.localId}`, admin.idToken), beforePlayer);
+    const receipt = await fetch(`${firestoreBase}/admins/${admin.localId}/roleSwapRequests/${swapId}`, {
+      headers: { Authorization: 'Bearer owner' },
+    });
+    assert.equal(receipt.status, 404);
+    assert.equal((await readDocument('game_config/current', admin.idToken)).logs.length, 0);
   });
 
   test('concurrent distinct Role Swap requests serialize to a consistent final roster', async () => {
@@ -200,8 +226,8 @@ describe('Admin Game State callable emulator integration', () => {
     await seedConfig();
 
     const [first, second] = await Promise.all([
-      call('swapTeamRoles', { requestId: uniqueRequestId() }, admin.idToken),
-      call('swapTeamRoles', { requestId: uniqueRequestId() }, admin.idToken),
+      call('swapTeamRoles', { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID }, admin.idToken),
+      call('swapTeamRoles', { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID }, admin.idToken),
     ]);
     assert.equal(first.body.result.ok, true, JSON.stringify(first.body));
     assert.equal(second.body.result.ok, true, JSON.stringify(second.body));
@@ -224,7 +250,7 @@ describe('Admin Game State callable emulator integration', () => {
     const a = await seedPlayer({ team: 'A', status: 'ACTIVE' });
     const b = await seedPlayer({ team: 'B', status: 'ACTIVE' });
     await seedConfig();
-    const request = { requestId: uniqueRequestId() };
+    const request = { requestId: uniqueRequestId(), expectedSessionId: SESSION_ID };
 
     const [first, second] = await Promise.all([
       call('swapTeamRoles', request, admin.idToken),
@@ -253,7 +279,7 @@ describe('Admin Game State callable emulator integration', () => {
     const active = await seedPlayer({ team: 'B', status: 'ACTIVE' });
     await seedConfig();
 
-    const resumed = await call('resumePlayer', { targetId: waiting.localId }, admin.idToken);
+    const resumed = await call('resumePlayer', { targetId: waiting.localId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.deepEqual(resumed.body.result, { ok: true, resumed: true, status: 'ACTIVE' });
     const waitingPlayer = await readDocument(`users/${waiting.localId}`, admin.idToken);
     assert.equal(waitingPlayer.status, 'ACTIVE');
@@ -262,7 +288,7 @@ describe('Admin Game State callable emulator integration', () => {
     const configAfterResume = await readDocument('game_config/current', admin.idToken);
     assert.equal(configAfterResume.logs.length, 1);
 
-    const noOp = await call('resumePlayer', { targetId: active.localId }, admin.idToken);
+    const noOp = await call('resumePlayer', { targetId: active.localId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.deepEqual(noOp.body.result, { ok: true, resumed: false, status: 'ACTIVE' });
     assert.equal((await readDocument('game_config/current', admin.idToken)).logs.length, 1);
   });
@@ -273,7 +299,7 @@ describe('Admin Game State callable emulator integration', () => {
     await seedConfig();
     await seedEmergencyProjection(emergency.localId);
 
-    const result = await call('resumePlayer', { targetId: emergency.localId }, admin.idToken);
+    const result = await call('resumePlayer', { targetId: emergency.localId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.deepEqual(result.body.result, { ok: true, resumed: true, status: 'ACTIVE' });
     const player = await readDocument(`users/${emergency.localId}`, admin.idToken);
     assert.equal(player.status, 'ACTIVE');
@@ -291,7 +317,7 @@ describe('Admin Game State callable emulator integration', () => {
     const admin = await seedAdmin();
     const retired = await seedPlayer({ team: 'B', status: 'RETIRED' });
     await seedConfig();
-    const result = await call('resumePlayer', { targetId: retired.localId }, admin.idToken);
+    const result = await call('resumePlayer', { targetId: retired.localId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.deepEqual(result.body.result, { ok: true, resumed: true, status: 'ACTIVE' });
     const player = await readDocument(`users/${retired.localId}`, admin.idToken);
     assert.equal(player.status, 'ACTIVE');

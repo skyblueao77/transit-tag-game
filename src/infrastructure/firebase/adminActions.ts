@@ -22,6 +22,7 @@ const knownReasons = new Set<AdminGameStateFailureReason>([
   'UNAUTHENTICATED',
   'PERMISSION_DENIED',
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
   'PLAYER_NOT_FOUND',
   'CONFIG_NOT_FOUND',
   'INVALID_PLAYER_STATE',
@@ -49,14 +50,14 @@ function failureReason(error: unknown): AdminGameStateFailureReason {
 export const firebaseAdminGameStateGateway: AdminGameStateGateway = {
   async swapTeamRoles(input): Promise<SwapTeamRolesResult> {
     try {
-      return (await swapTeamRolesCallable({ requestId: input.requestId })).data;
+      return (await swapTeamRolesCallable(input)).data;
     } catch (error) {
       return { ok: false, reason: failureReason(error) };
     }
   },
   async resumePlayer(input): Promise<ResumePlayerResult> {
     try {
-      return (await resumePlayerCallable({ targetId: input.targetId })).data;
+      return (await resumePlayerCallable(input)).data;
     } catch (error) {
       return { ok: false, reason: failureReason(error) };
     }

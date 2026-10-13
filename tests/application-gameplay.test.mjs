@@ -22,7 +22,8 @@ function missionGateway(result) {
 }
 
 
-const missionInput = overrides => ({ missionId: 'mission-1', ...overrides });
+const SESSION_ID = 'session-current';
+const missionInput = overrides => ({ missionId: 'mission-1', expectedSessionId: SESSION_ID, ...overrides });
 
 const missionSuccess = overrides => ({
   ok: true,
@@ -58,7 +59,7 @@ describe('completeMission application use case', () => {
     const before = structuredClone(input);
 
     assert.deepEqual(await completeMission(input, gateway), result);
-    assert.deepEqual(gateway.calls, [{ missionId: 'mission-1' }]);
+    assert.deepEqual(gateway.calls, [{ missionId: 'mission-1', expectedSessionId: SESSION_ID }]);
     assert.deepEqual(input, before);
   });
 
@@ -70,8 +71,8 @@ describe('completeMission application use case', () => {
     });
     const gateway = missionGateway(result);
 
-    assert.deepEqual(await completeMission({ missionId: 'final-1' }, gateway), result);
-    assert.deepEqual(gateway.calls, [{ missionId: 'final-1' }]);
+    assert.deepEqual(await completeMission({ missionId: 'final-1', expectedSessionId: SESSION_ID }, gateway), result);
+    assert.deepEqual(gateway.calls, [{ missionId: 'final-1', expectedSessionId: SESSION_ID }]);
   });
 
   test('preserves callable domain rejections', async () => {
@@ -107,11 +108,11 @@ describe('capturePlayer application use case', () => {
         return { ok: true, capture };
       },
     };
-    const input = { targetId: 'runner-1' };
+    const input = { targetId: 'runner-1', expectedSessionId: SESSION_ID };
     const before = structuredClone(input);
 
     assert.deepEqual(await capturePlayer(input, gateway), { ok: true, capture });
-    assert.deepEqual(calls, [{ targetId: 'runner-1' }]);
+    assert.deepEqual(calls, [{ targetId: 'runner-1', expectedSessionId: SESSION_ID }]);
     assert.deepEqual(input, before);
   });
 
@@ -123,14 +124,14 @@ describe('capturePlayer application use case', () => {
         domainReason: 'TARGET_INVINCIBLE',
       }),
     };
-    assert.deepEqual(await capturePlayer({ targetId: 'runner-1' }, gateway), {
+    assert.deepEqual(await capturePlayer({ targetId: 'runner-1', expectedSessionId: SESSION_ID }, gateway), {
       ok: false, reason: 'CAPTURE_REJECTED', domainReason: 'TARGET_INVINCIBLE',
     });
   });
 
   test('maps unexpected gateway failures to persistence errors', async () => {
     const gateway = { capture: async () => { throw new Error('offline'); } };
-    assert.deepEqual(await capturePlayer({ targetId: 'runner-1' }, gateway), {
+    assert.deepEqual(await capturePlayer({ targetId: 'runner-1', expectedSessionId: SESSION_ID }, gateway), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });
@@ -141,14 +142,14 @@ describe('Waiting application use cases', () => {
     const calls = [];
     const trusted = { ok: true, waitingUntil: 1_900_000, duration: 3_600_000 };
     const gateway = { startWaiting: async input => { calls.push(structuredClone(input)); return trusted; } };
-    assert.deepEqual(await startWaiting({}, gateway), trusted);
-    assert.deepEqual(calls, [{}]);
+    assert.deepEqual(await startWaiting({ expectedSessionId: SESSION_ID }, gateway), trusted);
+    assert.deepEqual(calls, [{ expectedSessionId: SESSION_ID }]);
   });
 
   test('startWaiting preserves server rejection and maps transport failure', async () => {
     const rejection = { ok: false, reason: 'WRONG_ROLE' };
-    assert.deepEqual(await startWaiting({}, { startWaiting: async () => rejection }), rejection);
-    assert.deepEqual(await startWaiting({}, { startWaiting: async () => { throw new Error('offline'); } }), {
+    assert.deepEqual(await startWaiting({ expectedSessionId: SESSION_ID }, { startWaiting: async () => rejection }), rejection);
+    assert.deepEqual(await startWaiting({ expectedSessionId: SESSION_ID }, { startWaiting: async () => { throw new Error('offline'); } }), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });
@@ -157,14 +158,14 @@ describe('Waiting application use cases', () => {
     const calls = [];
     const trusted = { ok: true, resumed: true };
     const gateway = { resumeWaiting: async input => { calls.push(structuredClone(input)); return trusted; } };
-    assert.deepEqual(await resumeWaiting({}, gateway), trusted);
-    assert.deepEqual(calls, [{}]);
+    assert.deepEqual(await resumeWaiting({ expectedSessionId: SESSION_ID }, gateway), trusted);
+    assert.deepEqual(calls, [{ expectedSessionId: SESSION_ID }]);
   });
 
   test('resumeWaiting preserves rejection and maps gateway failures', async () => {
     const rejection = { ok: false, reason: 'WAITING_NOT_EXPIRED' };
-    assert.deepEqual(await resumeWaiting({}, { resumeWaiting: async () => rejection }), rejection);
-    assert.deepEqual(await resumeWaiting({}, { resumeWaiting: async () => { throw new Error('offline'); } }), {
+    assert.deepEqual(await resumeWaiting({ expectedSessionId: SESSION_ID }, { resumeWaiting: async () => rejection }), rejection);
+    assert.deepEqual(await resumeWaiting({ expectedSessionId: SESSION_ID }, { resumeWaiting: async () => { throw new Error('offline'); } }), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });
@@ -179,7 +180,7 @@ describe('Safety Action application use case', () => {
     const gateway = {
       requestSafetyAction: async input => { calls.push(structuredClone(input)); return trusted; },
     };
-    const input = { action: 'EMERGENCY', reasonCode: 'OTHER' };
+    const input = { action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: SESSION_ID };
     const before = structuredClone(input);
 
     assert.deepEqual(await requestSafetyAction(input, gateway), trusted);
@@ -189,10 +190,10 @@ describe('Safety Action application use case', () => {
 
   test('preserves server rejection and maps transport failure', async () => {
     const rejection = { ok: false, reason: 'RETIRED_TERMINAL' };
-    assert.deepEqual(await requestSafetyAction({ action: 'EMERGENCY', reasonCode: 'OTHER' }, {
+    assert.deepEqual(await requestSafetyAction({ action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: SESSION_ID }, {
       requestSafetyAction: async () => rejection,
     }), rejection);
-    assert.deepEqual(await requestSafetyAction({ action: 'RETIRE', reasonCode: 'RETIREMENT_REQUEST' }, {
+    assert.deepEqual(await requestSafetyAction({ action: 'RETIRE', reasonCode: 'RETIREMENT_REQUEST', expectedSessionId: SESSION_ID }, {
       requestSafetyAction: async () => { throw new Error('offline'); },
     }), { ok: false, reason: 'PERSISTENCE_ERROR' });
   });
@@ -214,8 +215,8 @@ describe('activateInvincibility application use case', () => {
       },
     };
 
-    assert.deepEqual(await activateInvincibility({}, gateway), trustedResult);
-    assert.deepEqual(calls, [{}]);
+    assert.deepEqual(await activateInvincibility({ expectedSessionId: SESSION_ID }, gateway), trustedResult);
+    assert.deepEqual(calls, [{ expectedSessionId: SESSION_ID }]);
   });
 
   test('returns the trusted server result unchanged', async () => {
@@ -226,18 +227,18 @@ describe('activateInvincibility application use case', () => {
       duration: 1_800_000,
     };
     const gateway = { activate: async () => trustedResult };
-    assert.deepEqual(await activateInvincibility({}, gateway), trustedResult);
+    assert.deepEqual(await activateInvincibility({ expectedSessionId: SESSION_ID }, gateway), trustedResult);
   });
 
   test('preserves server domain rejection', async () => {
     const rejection = { ok: false, reason: 'POWERUP_NOT_ALLOWED', domainReason: 'PHASE' };
     const gateway = { activate: async () => rejection };
-    assert.deepEqual(await activateInvincibility({}, gateway), rejection);
+    assert.deepEqual(await activateInvincibility({ expectedSessionId: SESSION_ID }, gateway), rejection);
   });
 
   test('maps unexpected gateway failures to persistence errors', async () => {
     const gateway = { activate: async () => { throw new Error('offline'); } };
-    assert.deepEqual(await activateInvincibility({}, gateway), {
+    assert.deepEqual(await activateInvincibility({ expectedSessionId: SESSION_ID }, gateway), {
       ok: false, reason: 'PERSISTENCE_ERROR',
     });
   });

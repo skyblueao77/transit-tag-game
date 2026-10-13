@@ -3,19 +3,26 @@ import { describe, test } from 'node:test';
 import { projectEmergencyLocationForPlayer } from '../lib/functions/src/emergencyLocation/emergencyLocationService.js';
 
 const now = 1_800_000_000_000;
+const sessionId = 'session_projection_2';
 
 function fixture({
-  player = { id: 'uid-a', name: 'Trusted Player', team: 'A', status: 'EMERGENCY' },
-  location = { latitude: 35.1, longitude: 139.1, updatedAt: now - 30_000 },
+  player = { id: 'uid-a', gameSessionId: sessionId, name: 'Trusted Player', team: 'A', status: 'EMERGENCY' },
+  location = { gameSessionId: sessionId, latitude: 35.1, longitude: 139.1, updatedAt: now - 30_000 },
+  config = { gameSessionId: sessionId, sessionStartedAt: now - 100_000, sessionSchemaVersion: 2 },
   projection = null,
   playerId = 'uid-a',
   locationId = 'uid-a',
 } = {}) {
-  const state = { player, location, projection, playerId, locationId, writes: [], reads: [] };
+  const state = {
+      player: player ? { gameSessionId: sessionId, ...player } : null,
+      location: location ? { gameSessionId: sessionId, ...location } : null,
+      projection, config, playerId, locationId, writes: [], reads: [],
+    };
   const store = {
     async runTransaction(work) {
       const pending = [];
       const result = await work({
+        readGameConfig: async () => { state.reads.push(['config']); return structuredClone(state.config); },
         readPlayer: async uid => {
           state.reads.push(['player', uid]);
           return state.player ? { id: state.playerId, data: structuredClone(state.player) } : null;
@@ -55,21 +62,36 @@ describe('Emergency location projection service', () => {
     assert.deepEqual(result, { status: 'CREATED' });
     assert.equal(clock.calls(), 1);
     assert.deepEqual(state.writes, [['set', 'uid-a', {
-      playerId: 'uid-a', latitude: 35.1, longitude: 139.1,
+      playerId: 'uid-a', gameSessionId: sessionId, latitude: 35.1, longitude: 139.1,
       projectedAt: now, sourceLocationUpdatedAt: now - 30_000,
       expiresAt: now - 30_000 + 120_000,
       safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
     }]]);
-    assert.deepEqual(state.reads, [['player', 'uid-a'], ['location', 'uid-a'], ['projection', 'uid-a']]);
+    assert.deepEqual(state.reads, [['config'], ['player', 'uid-a'], ['location', 'uid-a'], ['projection', 'uid-a']]);
     assert.equal('name' in state.projection, false);
     assert.equal('reason' in state.projection, false);
   });
 
+  test('does not use a missing or invalid Config Session for player/location reads or writes', async () => {
+    for (const config of [
+      null,
+      { sessionStartedAt: now, sessionSchemaVersion: 2 },
+      { gameSessionId: 'bad/session', sessionStartedAt: now, sessionSchemaVersion: 2 },
+      { gameSessionId: sessionId, sessionStartedAt: undefined, sessionSchemaVersion: 2 },
+      { gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 1 },
+    ]) {
+      const { state, store } = fixture({ config });
+      assert.deepEqual(await projectEmergencyLocationForPlayer('uid-a', store, runtime()), { status: 'UNAVAILABLE' });
+      assert.deepEqual(state.reads, [['config'], ['projection', 'uid-a']]);
+      assert.deepEqual(state.writes, []);
+    }
+  });
+
   test('refreshes an existing projection and keeps input state unchanged', async () => {
     const input = {
-      player: { id: 'uid-a', name: 'Private name', team: 'B', status: 'EMERGENCY' },
-      location: { latitude: 0, longitude: 0, updatedAt: now - 10 },
-      projection: { latitude: -1 },
+      player: { id: 'uid-a', gameSessionId: sessionId, name: 'Private name', team: 'B', status: 'EMERGENCY' },
+      location: { gameSessionId: sessionId, latitude: 0, longitude: 0, updatedAt: now - 10 },
+      projection: { gameSessionId: sessionId, latitude: -1 },
     };
     const before = structuredClone(input);
     const { state, store } = fixture(input);

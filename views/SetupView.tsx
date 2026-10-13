@@ -7,9 +7,10 @@ import { createPlayerWithPrivateLocation } from '../src/infrastructure/firebase/
 
 interface Props {
   onComplete: (user: User) => void;
+  gameSessionId?: string;
 }
 
-const SetupView: React.FC<Props> = ({ onComplete }) => {
+const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
   const [name, setName] = useState('');
   const [team, setTeam] = useState<'A' | 'B'>('A');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -35,6 +36,10 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || isSubmitting) return;
+    if (!gameSessionId) {
+      alert('ゲームセッション初期化待ちです。管理者の操作後にプレイヤー登録してください。');
+      return;
+    }
 
     setIsSubmitting(true);
     let id: string;
@@ -58,6 +63,7 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
       score: 0,
 
       status: 'ACTIVE',
+      gameSessionId,
       invincibleCards: 0,
     };
 
@@ -65,7 +71,7 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
       await createPlayerWithPrivateLocation(newUser, {
         latitude: currentPos.lat,
         longitude: currentPos.lng,
-      });
+      }, gameSessionId);
       onComplete(newUser);
     } catch (error) {
       console.error('Error saving user:', error);
@@ -148,7 +154,7 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
         {/* 送信ボタン */}
         <button
           type="submit"
-          disabled={!name.trim() || isSubmitting}
+          disabled={!name.trim() || isSubmitting || !gameSessionId}
           className={`w-full py-6 font-black rounded-2xl transition-all shadow-2xl uppercase tracking-[0.2em] text-lg active:scale-95 ${
             isSubmitting
               ? 'bg-slate-200 text-slate-400'
@@ -157,6 +163,8 @@ const SetupView: React.FC<Props> = ({ onComplete }) => {
         >
           {isSubmitting ? 'Joining...' : 'Entry Game'}
         </button>
+
+        {!gameSessionId && <p className="mt-4 text-center text-xs font-bold text-amber-600">ゲームセッション初期化待ちです。管理者の初期化後に登録できます。</p>}
 
         {/* 位置情報取得済みインジケーター */}
         {isLocationReady && (

@@ -12,6 +12,7 @@ export interface AdminRevealPlayer {
 
 export interface AdminRevealLocation {
   id: string;
+  gameSessionId?: string;
   latitude: unknown;
   longitude: unknown;
   updatedAt: unknown;
@@ -19,6 +20,7 @@ export interface AdminRevealLocation {
 
 export interface AdminRevealSnapshot {
   playerId: string;
+  gameSessionId: string;
   latitude: number;
   longitude: number;
   capturedAt: number;
@@ -40,6 +42,7 @@ export interface AdminRevealInput {
   durationMinutes: unknown;
   roster: readonly AdminRevealPlayer[];
   locations: readonly AdminRevealLocation[];
+  gameSessionId: string;
   now: number;
 }
 
@@ -135,7 +138,7 @@ export function resolveAdminRevealPlan(input: AdminRevealInput): AdminRevealPlan
       continue;
     }
     const location = locationByPlayer.get(player.id);
-    if (!location) {
+    if (!location || location.gameSessionId !== input.gameSessionId) {
       skipped.push({ playerId: player.id, reason: 'MISSING_LOCATION' });
       continue;
     }
@@ -161,6 +164,7 @@ export function resolveAdminRevealPlan(input: AdminRevealInput): AdminRevealPlan
     }
     snapshots.push({
       playerId: player.id,
+      gameSessionId: input.gameSessionId,
       latitude: location.latitude as number,
       longitude: location.longitude as number,
       capturedAt: input.now,

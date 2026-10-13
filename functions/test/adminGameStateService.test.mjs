@@ -2,13 +2,22 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   AdminGameStateServiceError,
-  resumePlayerForAdmin,
-  swapTeamRolesForAdmin,
+  resumePlayerForAdmin as resumePlayerService,
+  swapTeamRolesForAdmin as swapTeamRolesService,
 } from '../lib/functions/src/admin/adminGameStateService.js';
 
 const now = 1_800_000_000_000;
 const adminUid = 'admin-uid';
 const requestId = '123e4567-e89b-42d3-a456-426614174000';
+const sessionId = 'session_admin_state_2';
+function swapTeamRolesForAdmin(uid, request, store, clock) {
+  return swapTeamRolesService(uid, request && typeof request === 'object' && !Array.isArray(request)
+    ? { ...request, expectedSessionId: request.expectedSessionId ?? sessionId } : request, store, clock);
+}
+function resumePlayerForAdmin(uid, request, store, clock) {
+  return resumePlayerService(uid, request && typeof request === 'object' && !Array.isArray(request)
+    ? { ...request, expectedSessionId: request.expectedSessionId ?? sessionId } : request, store, clock);
+}
 
 function player(id, team = 'A', status = 'ACTIVE', extra = {}) {
   return {
@@ -20,6 +29,7 @@ function player(id, team = 'A', status = 'ACTIVE', extra = {}) {
 
 function config(overrides = {}) {
   return {
+    gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2,
     teamARole: 'ONI', teamBRole: 'RUNNER', nextRevealTime: 0,
     logs: [], teamAScore: 40, teamBScore: 50, ...overrides,
   };
@@ -186,6 +196,57 @@ describe('Admin Game State service', () => {
       assert.deepEqual(state.writes, []);
     }
     await assert.rejects(swapTeamRolesForAdmin('', { requestId }, fixture().store, runtime()), error => error.reason === 'UNAUTHENTICATED');
+  });
+
+  test('requires the expected Session for role swap and resume before dependent reads or writes', async () => {
+    for (const [service, request] of [
+      [swapTeamRolesService, { requestId }],
+      [resumePlayerService, { targetId: 'target' }],
+    ]) {
+      for (const input of [request, { ...request, expectedSessionId: '' }, { ...request, expectedSessionId: 'bad/session' }]) {
+        const { state, store } = fixture({ users: [player('target')] });
+        await assert.rejects(service(adminUid, input, store, runtime()), error => error.reason === 'INVALID_ARGUMENT');
+        assert.deepEqual(state.reads, []);
+        assert.deepEqual(state.writes, []);
+      }
+
+      for (const gameConfig of [
+        null,
+        config({ gameSessionId: undefined }),
+        config({ gameSessionId: 'bad/session' }),
+        config({ sessionStartedAt: undefined }),
+        config({ sessionSchemaVersion: 1 }),
+      ]) {
+        const { state, store } = fixture({ users: [player('target')], gameConfig });
+        const reason = gameConfig === null ? 'CONFIG_NOT_FOUND' : 'SESSION_CHANGED';
+        await assert.rejects(service(adminUid, { ...request, expectedSessionId: sessionId }, store, runtime()), error => error.reason === reason);
+        assert.deepEqual(state.reads, [`admin:${adminUid}`, 'config']);
+        assert.deepEqual(state.writes, []);
+      }
+
+      const stale = fixture({ users: [player('target')] });
+      await assert.rejects(service(adminUid, { ...request, expectedSessionId: 'session_stale' }, stale.store, runtime()), error => error.reason === 'SESSION_CHANGED');
+      assert.deepEqual(stale.state.reads, [`admin:${adminUid}`, 'config']);
+      assert.deepEqual(stale.state.writes, []);
+    }
+  });
+
+  test('role swap rejects mismatched and legacy receipt Sessions without replaying or writing', async () => {
+    const { state, store } = fixture({ users: [player('a', 'A'), player('b', 'B')] });
+    await swapTeamRolesService(adminUid, { requestId, expectedSessionId: sessionId }, store, runtime());
+    const receipt = state.receipts.get(`${adminUid}/${requestId}`);
+
+    for (const gameSessionId of ['session_stale', undefined]) {
+      const prior = { ...receipt };
+      if (gameSessionId === undefined) delete prior.gameSessionId;
+      else prior.gameSessionId = gameSessionId;
+      state.receipts.set(`${adminUid}/${requestId}`, prior);
+      state.reads.length = 0;
+      state.writes.length = 0;
+      await assert.rejects(swapTeamRolesService(adminUid, { requestId, expectedSessionId: sessionId }, store, runtime()), error => error.reason === 'SESSION_CHANGED');
+      assert.deepEqual(state.reads, [`admin:${adminUid}`, 'config', `receipt:${adminUid}:${requestId}`]);
+      assert.deepEqual(state.writes, []);
+    }
   });
 
   test('Resume transitions WAITING, Safety, Retired and legacy CAPTURED; preserves unrelated fields', async () => {

@@ -11,6 +11,7 @@ import {
   validatePrepareGameResetRequest,
   validateResetConfig,
 } from '../../../src/game/gameReset';
+import { validateExpectedSession } from '../../../src/game/gameSession';
 import type {
   ResetDocumentIdentity,
   ResetParticipantDocument,
@@ -112,11 +113,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parsePrepareRequest(value: unknown): void {
-  if (!validatePrepareGameResetRequest(value).allowed) fail('INVALID_ARGUMENT');
+function parsePrepareRequest(value: unknown): { expectedSessionId: string } {
+  const parsed = validatePrepareGameResetRequest(value);
+  if (!parsed.allowed) fail('INVALID_ARGUMENT');
+  return parsed.request;
 }
 
-function parseExecuteRequest(value: unknown): { confirmationToken: string; requestId: string } {
+function parseExecuteRequest(value: unknown): { confirmationToken: string; requestId: string; expectedSessionId: string } {
   const parsed = validateExecuteGameResetRequest(value);
   if (!parsed.allowed) fail('INVALID_ARGUMENT');
   return parsed.request;
@@ -141,16 +144,21 @@ function validateRuntime(runtime: GameResetRuntime): {
   return { now, tokenId, proposedSessionId };
 }
 
-async function currentPreview(transaction: GameResetTransaction): Promise<ResetPreviewPlan> {
-  const [configSnapshot, participants, privateLocations, exposedLocations, emergencyProjections] = await Promise.all([
-    transaction.readConfig(),
+async function currentPreview(
+  transaction: GameResetTransaction,
+  expectedSessionId: string,
+  existingConfig?: GameResetConfigSnapshot,
+): Promise<ResetPreviewPlan> {
+  const configSnapshot = existingConfig ?? await transaction.readConfig();
+  if (!configSnapshot) fail('CONFIG_NOT_FOUND');
+  if (!validateResetConfig(configSnapshot.data).allowed) fail('INVALID_CONFIG');
+  if (!validateExpectedSession(configSnapshot.data, expectedSessionId).valid) fail('SESSION_CHANGED');
+  const [participants, privateLocations, exposedLocations, emergencyProjections] = await Promise.all([
     transaction.readParticipants(),
     transaction.readCollection('privateLocations'),
     transaction.readCollection('exposedLocations'),
     transaction.readCollection('emergencyLocationProjections'),
   ]);
-  if (!configSnapshot) fail('CONFIG_NOT_FOUND');
-  if (!validateResetConfig(configSnapshot.data).allowed) fail('INVALID_CONFIG');
   const plan = planGameResetPreview({
     config: configSnapshot.data,
     configRevision: configSnapshot.revision,
@@ -170,7 +178,7 @@ export async function prepareGameResetForAdmin(
   runtime: GameResetRuntime,
 ): Promise<PrepareGameResetSuccess> {
   if (typeof authUid !== 'string' || authUid.length === 0) fail('UNAUTHENTICATED');
-  parsePrepareRequest(input);
+  const { expectedSessionId } = parsePrepareRequest(input);
   const { now, tokenId, proposedSessionId } = validateRuntime(runtime);
   const expiresAt = now + RESET_CONFIRMATION_TTL_MS;
   if (!Number.isSafeInteger(expiresAt)) fail('PERSISTENCE_ERROR');
@@ -178,7 +186,7 @@ export async function prepareGameResetForAdmin(
   try {
     return await store.runTransaction(async transaction => {
       if (!await transaction.readAdmin(authUid)) fail('PERMISSION_DENIED');
-      const plan = await currentPreview(transaction);
+      const plan = await currentPreview(transaction, expectedSessionId);
       const previewFingerprint = fingerprint(plan);
       const confirmation: GameResetConfirmation = {
         tokenId,
@@ -263,14 +271,19 @@ export async function executeGameResetForAdmin(
   try {
     return await store.runTransaction(async transaction => {
       if (!await transaction.readAdmin(authUid)) fail('PERMISSION_DENIED');
+      const configSnapshot = await transaction.readConfig();
+      if (!configSnapshot) fail('CONFIG_NOT_FOUND');
+      if (!validateResetConfig(configSnapshot.data).allowed) fail('INVALID_CONFIG');
+      if (!validateExpectedSession(configSnapshot.data, request.expectedSessionId).valid) fail('SESSION_CHANGED');
       const rawConfirmation = await transaction.readConfirmation(authUid, request.confirmationToken);
       if (!rawConfirmation) fail('CONFIRMATION_NOT_FOUND');
       const confirmation = validateConfirmation(rawConfirmation, request.confirmationToken);
       if (confirmation.actorUid !== authUid) fail('PERMISSION_DENIED');
+      if (confirmation.currentSessionId !== request.expectedSessionId) fail('SESSION_CHANGED');
       if (isResetConfirmationExpired(confirmation.expiresAt, now)) fail('CONFIRMATION_EXPIRED');
       if (confirmation.used) fail('CONFIRMATION_ALREADY_USED');
 
-      const plan = await currentPreview(transaction);
+      const plan = await currentPreview(transaction, request.expectedSessionId, configSnapshot);
       if (plan.currentSessionId !== confirmation.currentSessionId
         || plan.sessionSchemaVersion !== confirmation.sessionSchemaVersion) fail('SESSION_CHANGED');
       if (isResetConfirmationStale(confirmationSnapshot(confirmation), plan, fingerprint(plan))) {

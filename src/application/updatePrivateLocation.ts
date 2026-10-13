@@ -1,3 +1,4 @@
+import { isValidGameSessionId } from '../game/gameSession.ts';
 import type {
   PrivateLocationStore,
   UpdatePrivateLocationInput,
@@ -17,7 +18,8 @@ export async function updatePrivateLocation(
   input: UpdatePrivateLocationInput,
   store: PrivateLocationStore,
 ): Promise<UpdatePrivateLocationResult> {
-  if (!input.playerId || !isValidCoordinates(input.latitude, input.longitude)) {
+  if (!input.playerId || !isValidGameSessionId(input.expectedSessionId)
+    || !isValidCoordinates(input.latitude, input.longitude)) {
     return { ok: false, reason: 'INVALID_COORDINATES' };
   }
 
@@ -25,7 +27,7 @@ export async function updatePrivateLocation(
     await store.save(input.playerId, {
       latitude: input.latitude,
       longitude: input.longitude,
-    });
+    }, input.expectedSessionId);
     return { ok: true };
   } catch {
     return { ok: false, reason: 'PERSISTENCE_ERROR' };

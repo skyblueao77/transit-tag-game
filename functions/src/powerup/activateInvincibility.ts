@@ -51,6 +51,8 @@ function callableCode(reason: string): HttpsError['code'] {
   switch (reason) {
     case 'INVALID_ARGUMENT':
       return 'invalid-argument';
+    case 'SESSION_CHANGED':
+      return 'failed-precondition';
     case 'PLAYER_NOT_FOUND':
     case 'CONFIG_NOT_FOUND':
       return 'not-found';
@@ -79,8 +81,9 @@ export const activateInvincibility = onCall(
     if (data === null
       || typeof data !== 'object'
       || Array.isArray(data)
-      || Object.keys(data).length !== 0) {
-      throw new HttpsError('invalid-argument', 'Expected an empty request.', {
+      || Object.keys(data).length !== 1
+      || !Object.prototype.hasOwnProperty.call(data, 'expectedSessionId')) {
+      throw new HttpsError('invalid-argument', 'Expected expectedSessionId.', {
         reason: 'INVALID_ARGUMENT',
       });
     }
@@ -89,6 +92,7 @@ export const activateInvincibility = onCall(
     try {
       return await activateInvincibilityForPlayer(
         uid,
+        (data as { expectedSessionId: unknown }).expectedSessionId,
         invincibilityStore,
         { now: Date.now, createLogId: randomUUID },
       );

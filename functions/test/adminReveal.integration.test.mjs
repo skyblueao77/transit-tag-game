@@ -4,6 +4,7 @@ import { before, describe, test } from 'node:test';
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
+const SESSION_ID = 'admin_reveal_session_v1';
 const functionsBase = `http://127.0.0.1:5001/${projectId}/asia-northeast1`;
 const firestoreClearUrl = `http://127.0.0.1:8080/emulator/v1/projects/${projectId}/databases/(default)/documents`;
 const authClearUrl = `http://127.0.0.1:9099/emulator/v1/projects/${projectId}/accounts`;
@@ -77,12 +78,13 @@ async function seedPlayer({ team = 'A', status = 'ACTIVE', location = true } = {
   sequence += 1;
   const auth = await createAuthUser();
   await seedDocument(`users/${auth.localId}`, {
-    id: auth.localId, name: `Reveal player ${sequence}`, team, status,
+    id: auth.localId, gameSessionId: SESSION_ID, name: `Reveal player ${sequence}`, team, status,
     score: 17, invincibleCards: 2, invincibleUntil: 0, waitingUntil: 0,
     shinkansenStartTime: null,
   });
   if (location) {
     await seedDocument(`privateLocations/${auth.localId}`, {
+      gameSessionId: SESSION_ID,
       latitude: 35.1 + sequence / 10_000,
       longitude: 139.1 + sequence / 10_000,
       updatedAt: new Date(Date.now() - 1_000),
@@ -98,7 +100,7 @@ async function seedAdmin() {
 }
 
 async function seedConfig() {
-  await seedDocument('game_config/current', { gameStatus: 'DAY1_ACTIVE', logs: [] });
+  await seedDocument('game_config/current', { gameSessionId: SESSION_ID, sessionStartedAt: Date.now(), sessionSchemaVersion: 2, gameStatus: 'DAY1_ACTIVE', logs: [] });
 }
 
 async function call(data, token) {
@@ -119,7 +121,7 @@ function uniqueRequestId() {
 }
 
 function intent(scope, requestId = uniqueRequestId(), durationMinutes = 1) {
-  return { scope, durationMinutes, requestId };
+  return { scope, durationMinutes, requestId, expectedSessionId: SESSION_ID };
 }
 
 describe('Admin Reveal callable emulator integration', () => {
@@ -143,6 +145,8 @@ describe('Admin Reveal callable emulator integration', () => {
     ]);
     assert.equal(globalA.data.revealScope, 'GLOBAL');
     assert.equal(globalB.data.revealScope, 'GLOBAL');
+    assert.equal(globalA.data.gameSessionId, SESSION_ID);
+    assert.equal(globalB.data.gameSessionId, SESSION_ID);
     assert.equal(typeof globalA.data.capturedAt, 'number');
     assert.equal(typeof globalA.data.expiresAt, 'number');
     assert.equal((await readDocument(`exposedLocations/${emergency.localId}`, admin.idToken)).response.status, 404);
@@ -189,6 +193,23 @@ describe('Admin Reveal callable emulator integration', () => {
     assert.equal((await readDocument('game_config/current', admin.idToken)).data.logs.length, 0);
   });
 
+  test('stale session rejects before Config, snapshot, or receipt writes', async () => {
+    const admin = await seedAdmin();
+    const player = await seedPlayer({ team: 'A' });
+    await seedConfig();
+    const beforeConfig = (await readDocument('game_config/current', admin.idToken)).data;
+    const request = { ...intent('TEAM_A'), expectedSessionId: 'stale_admin_reveal_session' };
+
+    const result = await call(request, admin.idToken);
+    assert.equal(result.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual((await readDocument('game_config/current', admin.idToken)).data, beforeConfig);
+    assert.equal((await readDocument(`exposedLocations/${player.localId}`, admin.idToken)).response.status, 404);
+    const receipt = await fetch(`${firestoreBase}/admins/${admin.localId}/revealRequests/${request.requestId}`, {
+      headers: { Authorization: 'Bearer owner' },
+    });
+    assert.equal(receipt.status, 404);
+  });
+
   test('same and concurrent request IDs replay one stable result without extra snapshots or logs', async () => {
     const admin = await seedAdmin();
     const a = await seedPlayer({ team: 'A' });
@@ -211,7 +232,7 @@ describe('Admin Reveal callable emulator integration', () => {
     const missing = await seedPlayer({ team: 'A', location: false });
     const stale = await seedPlayer({ team: 'B', location: false });
     await seedDocument(`privateLocations/${stale.localId}`, {
-      latitude: 35, longitude: 139, updatedAt: new Date(Date.now() - 120_000),
+      gameSessionId: SESSION_ID, latitude: 35, longitude: 139, updatedAt: new Date(Date.now() - 120_000),
     });
     await seedConfig();
     const result = await call(intent('GLOBAL'), admin.idToken);
@@ -244,7 +265,7 @@ describe('Admin Reveal callable emulator integration', () => {
     assert.equal(clientWrite.status, 403);
 
     await seedDocument(`exposedLocations/${a.localId}`, {
-      playerId: a.localId, latitude: 35.1, longitude: 139.1,
+      playerId: a.localId, gameSessionId: SESSION_ID, latitude: 35.1, longitude: 139.1,
       capturedAt: new Date(Date.now() - 120_000), expiresAt: new Date(Date.now() - 1),
       revealScope: 'GLOBAL',
     });

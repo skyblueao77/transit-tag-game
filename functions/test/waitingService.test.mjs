@@ -3,8 +3,8 @@ import { describe, test } from 'node:test';
 import {
   processWaitingLifecycle,
   processWaitingLifecycleForPlayer,
-  resumeWaitingForPlayer,
-  startWaitingForPlayer,
+  resumeWaitingForPlayer as resumeWaitingService,
+  startWaitingForPlayer as startWaitingService,
   WaitingServiceError,
 } from '../lib/functions/src/waiting/waitingService.js';
 import {
@@ -13,10 +13,17 @@ import {
 } from '../../src/game/time.ts';
 
 const now = 1_800_000_000_000;
+const sessionId = 'session_waiting_2';
+function startWaitingForPlayer(uid, store, runtime) {
+  return startWaitingService(uid, sessionId, store, runtime);
+}
+function resumeWaitingForPlayer(uid, store, runtime) {
+  return resumeWaitingService(uid, sessionId, store, runtime);
+}
 
 function basePlayer(overrides = {}) {
   return {
-    id: 'uid-a', name: 'Trusted Player', team: 'A', status: 'ACTIVE',
+    id: 'uid-a', gameSessionId: sessionId, name: 'Trusted Player', team: 'A', status: 'ACTIVE',
     waitingUntil: 0, shinkansenStartTime: null, score: 81,
     invincibleCards: 3, invincibleUntil: 0,
     ...overrides,
@@ -25,6 +32,7 @@ function basePlayer(overrides = {}) {
 
 function baseConfig(overrides = {}) {
   return {
+    gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2,
     gameStatus: 'DAY1_ACTIVE', teamARole: 'RUNNER', teamBRole: 'ONI',
     teamAScore: 20, teamBScore: 30, logs: [], ...overrides,
   };
@@ -83,6 +91,43 @@ describe('server Waiting service', () => {
     await rejectsWithoutWrites('CONFIG_NOT_FOUND', { config: null });
   });
 
+  test('manual start and resume fail closed at the Session boundary before Player reads or writes', async () => {
+    const actions = [
+      (expected, store) => startWaitingService('uid-a', expected, store, runtime()),
+      (expected, store) => resumeWaitingService('uid-a', expected, store, runtime()),
+    ];
+    for (const action of actions) {
+      for (const expectedSessionId of [undefined, '', 'bad/session', 7]) {
+        const { state, store } = fixture();
+        await assert.rejects(action(expectedSessionId, store), error => error.reason === 'SESSION_CHANGED');
+        assert.deepEqual(state.events, []);
+        assert.deepEqual(state.writes, []);
+      }
+
+      for (const config of [
+        baseConfig({ gameSessionId: undefined }),
+        baseConfig({ gameSessionId: 'bad/session' }),
+        baseConfig({ sessionStartedAt: undefined }),
+        baseConfig({ sessionSchemaVersion: 1 }),
+      ]) {
+        const { state, store } = fixture({ config });
+        await assert.rejects(action(sessionId, store), error => error.reason === 'SESSION_CHANGED');
+        assert.deepEqual(state.events, ['read-config']);
+        assert.deepEqual(state.writes, []);
+      }
+
+      const stale = fixture();
+      await assert.rejects(action('session_stale', stale.store), error => error.reason === 'SESSION_CHANGED');
+      assert.deepEqual(stale.state.events, ['read-config']);
+      assert.deepEqual(stale.state.writes, []);
+
+      const missingConfig = fixture({ config: null });
+      await assert.rejects(action(sessionId, missingConfig.store), error => error.reason === 'CONFIG_NOT_FOUND');
+      assert.deepEqual(missingConfig.state.events, ['read-config']);
+      assert.deepEqual(missingConfig.state.writes, []);
+    }
+  });
+
   test('rejects malformed identity/team/status/timestamps and invalid participant boundary', async () => {
     await rejectsWithoutWrites('INVALID_TEAM', { player: basePlayer({ team: 'ADMIN' }) });
     await rejectsWithoutWrites('INVALID_TEAM', { player: basePlayer({ team: 'unknown' }) });
@@ -137,7 +182,7 @@ describe('server Waiting service', () => {
       assert.equal(state.player.invincibleCards, before.invincibleCards);
       assert.equal(state.player.invincibleUntil, before.invincibleUntil);
       assert.equal(state.writes.length, 2);
-      assert.deepEqual(state.events, ['read-player', 'read-config', 'write-player', 'write-logs']);
+      assert.deepEqual(state.events, ['read-config', 'read-player', 'write-player', 'write-logs']);
       assert.equal(state.config.logs.length, 200);
       assert.deepEqual(state.config.logs[1], oldLogs[0]);
       assert.deepEqual(state.config.logs[0], {
@@ -234,7 +279,7 @@ describe('server Waiting service', () => {
               ? { id: selected.state.player.id, data: selected.state.player }
               : null;
           },
-          readGameConfig: async () => selected.state.config,
+          readGameConfig: async () => baseConfig(),
           writePlayer: (uid, updates) => pending.push(['player', structuredClone(updates)]),
           writeLogs: logs => pending.push(['logs', structuredClone(logs)]),
         });

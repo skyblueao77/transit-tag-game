@@ -75,6 +75,8 @@ function callableCode(reason: string): HttpsError['code'] {
       return 'permission-denied';
     case 'INVALID_ARGUMENT':
       return 'invalid-argument';
+    case 'SESSION_CHANGED':
+      return 'failed-precondition';
     case 'PLAYER_NOT_FOUND':
     case 'CONFIG_NOT_FOUND':
       return 'not-found';

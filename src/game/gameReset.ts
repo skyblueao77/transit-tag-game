@@ -96,21 +96,27 @@ export type ResetRequestValidation<T> =
   | { allowed: true; request: T }
   | { allowed: false; reason: 'INVALID_ARGUMENT' };
 
-export function validatePrepareGameResetRequest(value: unknown): ResetRequestValidation<Record<string, never>> {
-  if (!isRecord(value) || Object.keys(value).length !== 0) return { allowed: false, reason: 'INVALID_ARGUMENT' };
-  return { allowed: true, request: {} };
+export function validatePrepareGameResetRequest(value: unknown): ResetRequestValidation<{ expectedSessionId: string }> {
+  if (!isRecord(value) || Object.keys(value).length !== 1
+    || !Object.hasOwn(value, 'expectedSessionId') || !isValidResetId(value.expectedSessionId)) {
+    return { allowed: false, reason: 'INVALID_ARGUMENT' };
+  }
+  return { allowed: true, request: { expectedSessionId: value.expectedSessionId } };
 }
 
 export function validateExecuteGameResetRequest(value: unknown): ResetRequestValidation<{
   confirmationToken: string;
   requestId: string;
+  expectedSessionId: string;
 }> {
-  if (!isRecord(value) || Object.keys(value).length !== 2
+  if (!isRecord(value) || Object.keys(value).length !== 3
     || !Object.hasOwn(value, 'confirmationToken') || !Object.hasOwn(value, 'requestId')
-    || !isValidResetId(value.confirmationToken) || !isValidResetId(value.requestId)) {
+    || !Object.hasOwn(value, 'expectedSessionId')
+    || !isValidResetId(value.confirmationToken) || !isValidResetId(value.requestId)
+    || !isValidResetId(value.expectedSessionId)) {
     return { allowed: false, reason: 'INVALID_ARGUMENT' };
   }
-  return { allowed: true, request: { confirmationToken: value.confirmationToken, requestId: value.requestId } };
+  return { allowed: true, request: { confirmationToken: value.confirmationToken, requestId: value.requestId, expectedSessionId: value.expectedSessionId } };
 }
 
 export function validateResetConfig(value: unknown): ResetConfigValidation {

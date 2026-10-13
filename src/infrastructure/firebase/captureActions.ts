@@ -15,6 +15,7 @@ const callable = httpsCallable<CapturePlayerInput, CapturePlayerResult>(
 const knownReasons = new Set<CaptureFailureReason>([
   'UNAUTHENTICATED',
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
   'PLAYER_NOT_FOUND',
   'TARGET_NOT_FOUND',
   'INVALID_CAPTOR_TEAM',
@@ -61,7 +62,7 @@ function failure(error: unknown): CapturePlayerResult {
 export const firebaseCaptureGateway: CaptureGateway = {
   async capture(input): Promise<CapturePlayerResult> {
     try {
-      const response = await callable({ targetId: input.targetId });
+      const response = await callable({ targetId: input.targetId, expectedSessionId: input.expectedSessionId });
       return response.data;
     } catch (error) {
       return failure(error);

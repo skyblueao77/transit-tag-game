@@ -7,6 +7,7 @@ const authUrl = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/account
 const functionsUrl = `http://127.0.0.1:5001/${projectId}/asia-northeast1`;
 const firestoreClearUrl = `http://127.0.0.1:8080/emulator/v1/projects/${projectId}/databases/(default)/documents`;
 const authClearUrl = `http://127.0.0.1:9099/emulator/v1/projects/${projectId}/accounts`;
+const SESSION_ID = 'admin_mission_session_v1';
 let sequence = 0;
 async function clearEmulatorState() {
   const firestoreResponse = await fetch(firestoreClearUrl, { method: 'DELETE' });
@@ -61,7 +62,7 @@ async function makeAdmin() {
   return user;
 }
 async function seedConfig(gameStatus = 'PRE_GAME', extra = {}) {
-  await seed('game_config/current', { gameStatus, missionMode: 'DIFFERENT', activeMissionA: null, activeMissionB: null, activeFinalMissionId: null, teamAScore: 0, teamBScore: 0, logs: [], ...extra });
+  await seed('game_config/current', { gameSessionId: SESSION_ID, sessionStartedAt: Date.now(), sessionSchemaVersion: 2, gameStatus, missionMode: 'DIFFERENT', activeMissionA: null, activeMissionB: null, activeFinalMissionId: null, teamAScore: 0, teamBScore: 0, logs: [], ...extra });
 }
 
 describe('trusted mission administration callable integration', () => {
@@ -74,7 +75,7 @@ describe('trusted mission administration callable integration', () => {
     await seed(`missions/${'m02'}`, { id: 'm02', area: 'bad', region: 'ALL', title: 'malformed', description: '', points: 'bad', type: 'PHOTO' });
     await seedConfig('DAY2_ACTIVE');
     const syncId = requestId();
-    const response = await call('syncMissionCatalog', { requestId: syncId }, admin.idToken);
+    const response = await call('syncMissionCatalog', { requestId: syncId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(response.body.result.ok, true, JSON.stringify(response.body));
     assert.equal(response.body.result.totalManagedCount, 36);
     assert.equal(response.body.result.updatedCount, 1);
@@ -86,7 +87,7 @@ describe('trusted mission administration callable integration', () => {
     assert.equal(config.logs[0].action, 'syncMissionCatalog');
     assert.ok(await read(`admins/${admin.localId}/missionCatalogSyncRequests/${syncId}`));
 
-    const phase = await call('transitionGamePhase', { action: 'START_FINAL', requestId: requestId() }, admin.idToken);
+    const phase = await call('transitionGamePhase', { action: 'START_FINAL', requestId: requestId(), expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(phase.body.result.ok, true, JSON.stringify(phase.body));
     assert.equal(phase.body.result.newPhase, 'FINAL_MISSION');
     assert.ok((await read('game_config/current')).activeFinalMissionId);
@@ -95,32 +96,32 @@ describe('trusted mission administration callable integration', () => {
   test('supports mode changes, manual assignment, random assignment, receipts and Completion using synced canonical mission', async () => {
     const admin = await makeAdmin();
     await seedConfig('DAY1_ACTIVE');
-    await call('syncMissionCatalog', { requestId: requestId() }, admin.idToken);
+    await call('syncMissionCatalog', { requestId: requestId(), expectedSessionId: SESSION_ID }, admin.idToken);
 
     const modeId = requestId();
-    const mode = await call('setMissionMode', { mode: 'SAME', requestId: modeId }, admin.idToken);
+    const mode = await call('setMissionMode', { mode: 'SAME', requestId: modeId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(mode.body.result.ok, true, JSON.stringify(mode.body));
     assert.equal((await read('game_config/current')).missionMode, 'SAME');
-    const repeatedMode = await call('setMissionMode', { mode: 'DIFFERENT', requestId: modeId }, admin.idToken);
+    const repeatedMode = await call('setMissionMode', { mode: 'DIFFERENT', requestId: modeId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(repeatedMode.body.result.duplicate, true);
     assert.equal((await read('game_config/current')).missionMode, 'SAME');
 
     const assignmentId = requestId();
-    const manual = await call('assignMissions', { strategy: 'MANUAL', target: 'TEAM_A', missionId: 'm02', requestId: assignmentId }, admin.idToken);
+    const manual = await call('assignMissions', { strategy: 'MANUAL', target: 'TEAM_A', missionId: 'm02', requestId: assignmentId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(manual.body.result.ok, true, JSON.stringify(manual.body));
     assert.equal((await read('game_config/current')).activeMissionA, 'm02');
-    const duplicate = await call('assignMissions', { strategy: 'MANUAL', target: 'TEAM_B', missionId: 'm03', requestId: assignmentId }, admin.idToken);
+    const duplicate = await call('assignMissions', { strategy: 'MANUAL', target: 'TEAM_B', missionId: 'm03', requestId: assignmentId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(duplicate.body.result.duplicate, true);
     assert.equal(duplicate.body.result.activeMissionA, 'm02');
     assert.equal((await read('game_config/current')).activeMissionB, null);
 
-    const randomResponse = await call('assignMissions', { strategy: 'RANDOM', target: 'BOTH', requestId: requestId() }, admin.idToken);
+    const randomResponse = await call('assignMissions', { strategy: 'RANDOM', target: 'BOTH', requestId: requestId(), expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(randomResponse.body.result.ok, true, JSON.stringify(randomResponse.body));
     assert.equal(randomResponse.body.result.activeMissionA, randomResponse.body.result.activeMissionB);
 
-    await seed(`users/${admin.localId}`, { id: admin.localId, name: 'Runner A', team: 'A', status: 'ACTIVE', score: 0, invincibleCards: 0 });
+    await seed(`users/${admin.localId}`, { id: admin.localId, gameSessionId: SESSION_ID, name: 'Runner A', team: 'A', status: 'ACTIVE', score: 0, invincibleCards: 0 });
     const selectedId = (await read('game_config/current')).activeMissionA;
-    const completion = await call('completeMission', { missionId: selectedId }, admin.idToken);
+    const completion = await call('completeMission', { missionId: selectedId, expectedSessionId: SESSION_ID }, admin.idToken);
     assert.equal(completion.body.result.ok, true, JSON.stringify(completion.body));
     assert.equal(completion.body.result.missionId, selectedId);
   });
@@ -130,15 +131,15 @@ describe('trusted mission administration callable integration', () => {
     const regular = await createUser();
     await seedConfig('PRE_GAME');
     const before = await read('game_config/current');
-    const unauth = await call('setMissionMode', { mode: 'SAME', requestId: requestId() });
+    const unauth = await call('setMissionMode', { mode: 'SAME', requestId: requestId(), expectedSessionId: SESSION_ID });
     assert.equal(unauth.body.error.status, 'UNAUTHENTICATED');
-    const denied = await call('assignMissions', { strategy: 'RANDOM', target: 'BOTH', requestId: requestId() }, regular.idToken);
+    const denied = await call('assignMissions', { strategy: 'RANDOM', target: 'BOTH', requestId: requestId(), expectedSessionId: SESSION_ID }, regular.idToken);
     assert.equal(denied.body.error.details.reason, 'PERMISSION_DENIED');
     for (const [data, expected] of [
-      [{ mode: 'SAME', requestId: requestId(), extra: true }, 'INVALID_ARGUMENT'],
-      [{ strategy: 'RANDOM', target: 'TEAM_A', requestId: requestId() }, 'INVALID_ARGUMENT'],
-      [{ strategy: 'MANUAL', target: 'BOTH', missionId: 'm02', requestId: requestId() }, 'INVALID_ARGUMENT'],
-      [{ strategy: 'MANUAL', target: 'TEAM_A', missionId: 'final_01', requestId: requestId() }, 'INVALID_MISSION'],
+      [{ mode: 'SAME', requestId: requestId(), expectedSessionId: SESSION_ID, extra: true }, 'INVALID_ARGUMENT'],
+      [{ strategy: 'RANDOM', target: 'TEAM_A', requestId: requestId(), expectedSessionId: SESSION_ID }, 'INVALID_ARGUMENT'],
+      [{ strategy: 'MANUAL', target: 'BOTH', missionId: 'm02', requestId: requestId(), expectedSessionId: SESSION_ID }, 'INVALID_ARGUMENT'],
+      [{ strategy: 'MANUAL', target: 'TEAM_A', missionId: 'final_01', requestId: requestId(), expectedSessionId: SESSION_ID }, 'INVALID_MISSION'],
     ]) {
       const result = await call('assignMissions', data, admin.idToken);
       assert.equal(result.body.error.details.reason, expected, JSON.stringify(result.body));
@@ -146,12 +147,37 @@ describe('trusted mission administration callable integration', () => {
     assert.deepEqual(await read('game_config/current'), before);
   });
 
+  test('stale sessions reject every mission admin action before config, catalog, or receipt writes', async () => {
+    const admin = await makeAdmin();
+    await seedConfig('DAY1_ACTIVE');
+    await seed('missions/m02', { id: 'm02', title: 'preserve stale-session fixture', points: 5 });
+    const beforeConfig = await read('game_config/current');
+    const beforeMission = await read('missions/m02');
+    const modeId = requestId();
+    const assignmentId = requestId();
+    const syncId = requestId();
+    const stale = 'stale_admin_mission_session';
+
+    const results = await Promise.all([
+      call('setMissionMode', { mode: 'SAME', requestId: modeId, expectedSessionId: stale }, admin.idToken),
+      call('assignMissions', { strategy: 'RANDOM', target: 'BOTH', requestId: assignmentId, expectedSessionId: stale }, admin.idToken),
+      call('syncMissionCatalog', { requestId: syncId, expectedSessionId: stale }, admin.idToken),
+    ]);
+    for (const result of results) assert.equal(result.body.error.details.reason, 'SESSION_CHANGED');
+
+    assert.deepEqual(await read('game_config/current'), beforeConfig);
+    assert.deepEqual(await read('missions/m02'), beforeMission);
+    assert.equal(await read(`admins/${admin.localId}/missionModeRequests/${modeId}`), null);
+    assert.equal(await read(`admins/${admin.localId}/missionAssignmentRequests/${assignmentId}`), null);
+    assert.equal(await read(`admins/${admin.localId}/missionCatalogSyncRequests/${syncId}`), null);
+  });
+
   test('concurrent identical random request writes one assignment, log and receipt', async () => {
     const admin = await makeAdmin();
     await seedConfig('DAY1_ACTIVE', { missionMode: 'DIFFERENT' });
-    await call('syncMissionCatalog', { requestId: requestId() }, admin.idToken);
+    await call('syncMissionCatalog', { requestId: requestId(), expectedSessionId: SESSION_ID }, admin.idToken);
     const id = requestId();
-    const data = { strategy: 'RANDOM', target: 'BOTH', requestId: id };
+    const data = { strategy: 'RANDOM', target: 'BOTH', requestId: id, expectedSessionId: SESSION_ID };
     const [one, two] = await Promise.all([call('assignMissions', data, admin.idToken), call('assignMissions', data, admin.idToken)]);
     assert.equal(one.body.result.ok, true, JSON.stringify(one.body));
     assert.equal(two.body.result.ok, true, JSON.stringify(two.body));

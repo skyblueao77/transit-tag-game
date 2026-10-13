@@ -22,6 +22,8 @@ import { firebaseAdminScoreAdjustmentGateway } from '../src/infrastructure/fireb
 import { prepareGameReset, executeGameReset } from '../src/application/gameReset';
 import type { PrepareGameResetPreview } from '../src/application/gameplayPorts';
 import { firebaseAdminGameResetGateway } from '../src/infrastructure/firebase/adminGameResetActions';
+import { initializeGameSession } from '../src/application/initializeGameSession';
+import { firebaseGameSessionInitializationGateway } from '../src/infrastructure/firebase/adminSessionActions';
 import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
 import { db } from '../src/infrastructure/firebase/firebaseClient';
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
@@ -49,6 +51,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetSuccess, setResetSuccess] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [sessionInitializationBusy, setSessionInitializationBusy] = useState(false);
+  const sessionInitializationRequestIdRef = useRef<string | null>(null);
   const [searchDuration, setSearchDuration] = useState(10); 
   const [manualMissionId, setManualMissionId] = useState('');
   const [emergencyProjections, setEmergencyProjections] = useState<EmergencyLocationProjection[]>([]);
@@ -79,6 +83,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     }
     return subscribeEmergencyLocationProjections(
       emergencyPlayerIds,
+      config.gameSessionId ?? '',
       projections => {
         setEmergencyProjections(projections);
         setProjectionUnavailable(false);
@@ -89,7 +94,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
         setProjectionUnavailable(true);
       },
     );
-  }, [isAuthorized, emergencyPlayerIds]);
+  }, [isAuthorized, emergencyPlayerIds, config.gameSessionId]);
 
   const PENALTY_LIST = [
     "次の新幹線の乗車可能時間を「1時間30分」に短縮せよ",
@@ -118,12 +123,39 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     }
   };
 
+  const requireSessionId = (): string | null => {
+    if (config.gameSessionId) return config.gameSessionId;
+    alert('ゲームセッション初期化待ちです。先にSession初期化を実行してください。');
+    return null;
+  };
+
+  const handleInitializeGameSession = async (): Promise<void> => {
+    if (sessionInitializationBusy || isProcessing) return;
+    sessionInitializationRequestIdRef.current ??= crypto.randomUUID();
+    setSessionInitializationBusy(true);
+    try {
+      const result = await initializeGameSession({ requestId: sessionInitializationRequestIdRef.current }, firebaseGameSessionInitializationGateway);
+      if (result.ok === false) {
+        alert(`Session初期化に失敗しました: ${result.reason}`);
+        return;
+      }
+      sessionInitializationRequestIdRef.current = null;
+      alert(result.alreadyInitialized
+        ? `Sessionは初期化済みです: ${result.gameSessionId}`
+        : `Sessionを初期化しました: ${result.gameSessionId}`);
+    } finally {
+      setSessionInitializationBusy(false);
+    }
+  };
+
   const handlePhaseAction = async (action: 'START_DAY1' | 'PAUSE' | 'RESUME' | 'END_DAY1' | 'START_DAY2' | 'START_FINAL' | 'END_GAME'): Promise<void> => {
     if (isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     if (!confirm(`フェーズ操作「${action}」を実行しますか？`)) return;
     setIsProcessing(true);
     try {
-      const result = await transitionGamePhase({ action, requestId: crypto.randomUUID() }, firebaseAdminPhaseGateway);
+      const result = await transitionGamePhase({ action, requestId: crypto.randomUUID(), expectedSessionId }, firebaseAdminPhaseGateway);
       if (result.ok === false) alert(`フェーズ操作に失敗しました: ${result.reason}`);
     } catch {
       alert('フェーズ操作に失敗しました');
@@ -150,6 +182,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleForceRoleSwap = async (): Promise<void> => {
     if (roleSwapBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     if (!confirm('Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※鬼側は30分間の待機状態になります。')) return;
 
     roleSwapBusyRef.current = true;
@@ -157,7 +191,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     const requestId = roleSwapRequestIdRef.current ?? crypto.randomUUID();
     roleSwapRequestIdRef.current = requestId;
     try {
-      const result = await swapTeamRoles({ requestId }, firebaseAdminGameStateGateway);
+      const result = await swapTeamRoles({ requestId, expectedSessionId }, firebaseAdminGameStateGateway);
       if (result.ok === false) {
         alert('交代に失敗しました。通信状態を確認して再試行してください。');
         return;
@@ -172,12 +206,14 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleResumePlayer = async (user: User): Promise<void> => {
     if (resumeBusyRef.current.has(user.id)) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     if (!confirm(`${user.name} をすべての待機状態から復帰させますか？`)) return;
 
     resumeBusyRef.current.add(user.id);
     setResumingPlayerIds(new Set(resumeBusyRef.current));
     try {
-      const result = await resumePlayer({ targetId: user.id }, firebaseAdminGameStateGateway);
+      const result = await resumePlayer({ targetId: user.id, expectedSessionId }, firebaseAdminGameStateGateway);
       if (result.ok === false) {
         alert('Playerの復帰に失敗しました。権限と通信状態を確認してください。');
       }
@@ -188,6 +224,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   };
   const handleLocationReveal = async (scope: AdminRevealScope): Promise<void> => {
     if (revealBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     const target = scope === 'GLOBAL' ? '全員' : `Team ${scope === 'TEAM_A' ? 'A' : 'B'}`;
     if (!confirm(`${target}の最新位置を ${searchDuration} 分間、スナップショット公開しますか？`)) return;
 
@@ -196,7 +234,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     const requestId = revealRequestIdsRef.current[scope] ?? crypto.randomUUID();
     revealRequestIdsRef.current[scope] = requestId;
     try {
-      const result = await revealPlayerLocations({ scope, durationMinutes: searchDuration, requestId }, firebaseAdminRevealGateway);
+      const result = await revealPlayerLocations({ scope, durationMinutes: searchDuration, requestId, expectedSessionId }, firebaseAdminRevealGateway);
       if (result.ok === false) {
         alert(result.reason === 'ZERO_VALID_LOCATIONS'
           ? '最新の有効な位置情報がありません。Playerの位置更新後に再試行してください。'
@@ -231,6 +269,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleAdjustTeamScore = async (): Promise<void> => {
     if (scoreBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     const delta = Number(scoreDeltaInput);
     if (!Number.isSafeInteger(delta) || delta === 0 || delta < -1000 || delta > 1000) {
       alert('補正値は -1000〜1000 の0以外の整数で入力してください。');
@@ -248,7 +288,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     scoreBusyRef.current = true;
     setIsProcessing(true);
     try {
-      const result = await adjustTeamScore({ team: scoreTeam, delta, reasonCode: scoreReasonCode, requestId }, firebaseAdminScoreAdjustmentGateway);
+      const result = await adjustTeamScore({ team: scoreTeam, delta, reasonCode: scoreReasonCode, requestId, expectedSessionId }, firebaseAdminScoreAdjustmentGateway);
       if (result.ok === false) {
         alert(`スコア補正に失敗しました: ${result.reason}`);
         return;
@@ -269,6 +309,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleToggleMissionMode = async (): Promise<void> => {
     if (missionBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     const pending = pendingMissionModeRef.current;
     const next = pending?.mode ?? (config.missionMode === 'SAME' ? 'DIFFERENT' : 'SAME');
     const requestId = pending?.requestId ?? crypto.randomUUID();
@@ -276,7 +318,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     missionBusyRef.current = true;
     setIsProcessing(true);
     try {
-      const result = await setMissionMode({ mode: next, requestId }, firebaseAdminMissionGateway);
+      const result = await setMissionMode({ mode: next, requestId, expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
         alert(`モード切り替えに失敗しました: ${result.reason}`);
         return;
@@ -291,6 +333,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleManualAssign = async (team: 'A' | 'B'): Promise<void> => {
     if (missionBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     if (!manualMissionId) return alert('ミッションを選択してください');
     if (!confirm(`Team ${team} に指定ミッションを配信しますか？`)) return;
     const target = team === 'A' ? 'TEAM_A' : 'TEAM_B';
@@ -298,7 +342,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     missionBusyRef.current = true;
     setIsProcessing(true);
     try {
-      const result = await assignMissions({ strategy: 'MANUAL', target, missionId: manualMissionId, requestId: missionRequestId(key) }, firebaseAdminMissionGateway);
+      const result = await assignMissions({ strategy: 'MANUAL', target, missionId: manualMissionId, requestId: missionRequestId(key), expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
         alert(`ミッション配信に失敗しました: ${result.reason}`);
         return;
@@ -313,12 +357,14 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleShuffleMissions = async (): Promise<void> => {
     if (missionBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     if (!confirm('サーバーで選んだミッションを両チームへ配信しますか？')) return;
     const key = 'random-assignment';
     missionBusyRef.current = true;
     setIsProcessing(true);
     try {
-      const result = await assignMissions({ strategy: 'RANDOM', target: 'BOTH', requestId: missionRequestId(key) }, firebaseAdminMissionGateway);
+      const result = await assignMissions({ strategy: 'RANDOM', target: 'BOTH', requestId: missionRequestId(key), expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
         alert(`ランダム配信に失敗しました: ${result.reason}`);
         return;
@@ -332,12 +378,14 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
   };
 
   const handleSyncMissionCatalog = async (): Promise<void> => {
-    if (missionBusyRef.current || isProcessing || !confirm('Normal / Final Mission catalogを安全に同期しますか？未知のMissionは削除されません。')) return;
+    if (missionBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId || !confirm('Normal / Final Mission catalogを安全に同期しますか？未知のMissionは削除されません。')) return;
     const key = 'catalog-sync';
     missionBusyRef.current = true;
     setIsProcessing(true);
     try {
-      const result = await syncMissionCatalog({ requestId: missionRequestId(key) }, firebaseAdminMissionGateway);
+      const result = await syncMissionCatalog({ requestId: missionRequestId(key), expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
         alert(`ミッションcatalog同期に失敗しました: ${result.reason}`);
         return;
@@ -352,6 +400,8 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handlePrepareGameReset = async (): Promise<void> => {
     if (resetBusyRef.current || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     resetBusyRef.current = true;
     setIsProcessing(true);
     setResetPreview(null);
@@ -360,7 +410,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     setResetSuccess(null);
     resetRequestIdRef.current = null;
     try {
-      const result = await prepareGameReset({}, firebaseAdminGameResetGateway);
+      const result = await prepareGameReset({ expectedSessionId }, firebaseAdminGameResetGateway);
       if (result.ok === false) {
         setResetError(`Reset Previewに失敗しました: ${result.reason}`);
         return;
@@ -374,6 +424,12 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   const handleExecuteGameReset = async (): Promise<void> => {
     if (resetBusyRef.current || isProcessing || !resetPreview || resetConfirmationText !== 'RESET') return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
+    if (expectedSessionId !== resetPreview.currentSessionId) {
+      setResetError('PreviewのSessionが現在のSessionと一致しません: SESSION_CHANGED');
+      return;
+    }
     resetBusyRef.current = true;
     setIsProcessing(true);
     setResetError(null);
@@ -382,6 +438,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       const result = await executeGameReset({
         confirmationToken: resetPreview.confirmationToken,
         requestId: resetRequestIdRef.current,
+        expectedSessionId,
       }, firebaseAdminGameResetGateway);
       if (result.ok === false) {
         setResetError(`Resetは実行されませんでした: ${result.reason}`);
@@ -429,7 +486,20 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
 
   return (
     <div className="p-4 pb-32 space-y-6 text-slate-800 bg-slate-100 min-h-screen">
-      
+      <section className="rounded-2xl border-2 border-blue-100 bg-white p-5 shadow-sm">
+        <h3 className="font-black text-slate-800">Game Session</h3>
+        <p className="mt-2 break-all text-xs text-slate-600">
+          {config.gameSessionId
+            ? `Current: ${config.gameSessionId} (schema ${config.sessionSchemaVersion ?? 'invalid'})`
+            : '未初期化。初期化するまでGameplay操作とPlayer登録は停止します。'}
+        </p>
+        <button type="button" onClick={() => void handleInitializeGameSession()}
+          disabled={sessionInitializationBusy || isProcessing}
+          className="mt-3 w-full rounded-xl bg-blue-700 py-3 font-black text-white disabled:opacity-50">
+          {sessionInitializationBusy ? 'Sessionを確認中…' : config.gameSessionId ? 'Session状態を確認' : 'Game Sessionを初期化'}
+        </button>
+      </section>
+
       {/* 1. フェーズ管理 */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter"><Play size={20} /> Phase Control</h3>

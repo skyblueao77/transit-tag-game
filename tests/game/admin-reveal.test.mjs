@@ -4,17 +4,18 @@ import { resolveAdminRevealPlan } from '../../src/game/adminReveal.ts';
 import { EMERGENCY_LOCATION_FRESHNESS_MS } from '../../src/game/emergencyLocationProjection.ts';
 
 const now = 1_800_000_000_000;
+const gameSessionId = 'session-current';
 
 function player(id, team = 'A', status = 'ACTIVE') {
   return { id, team, status };
 }
 
 function location(id, overrides = {}) {
-  return { id, latitude: 35.1, longitude: 139.1, updatedAt: now - 1_000, ...overrides };
+  return { id, gameSessionId, latitude: 35.1, longitude: 139.1, updatedAt: now - 1_000, ...overrides };
 }
 
 function resolve(scope, roster, locations, durationMinutes = 5) {
-  return resolveAdminRevealPlan({ scope, durationMinutes, roster, locations, now });
+  return resolveAdminRevealPlan({ scope, durationMinutes, roster, locations, gameSessionId, now });
 }
 
 describe('Admin Reveal Core', () => {
@@ -55,7 +56,7 @@ describe('Admin Reveal Core', () => {
       assert.equal(result.durationMilliseconds, 60_000);
       assert.equal(result.expiresAt, now + 60_000);
       assert.deepEqual(result.snapshots[0], {
-        playerId: 'p', latitude: 35.1, longitude: 139.1,
+        playerId: 'p', gameSessionId, latitude: 35.1, longitude: 139.1,
         capturedAt: now, expiresAt: now + 60_000, revealScope: scope,
       });
     }

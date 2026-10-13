@@ -19,14 +19,16 @@ const defaults = {
 
 describe('Firebase snapshot mappers', () => {
   test('maps document IDs into player and mission records', () => {
-    assert.deepEqual(mapUserDocument('uid-1', { name: 'Player' }), {
+    assert.deepEqual(mapUserDocument('uid-1', {
+      id: 'spoofed-id', name: 'Player', gameSessionId: 'bad/session', ignored: true,
+    }), {
       id: 'uid-1', name: 'Player',
     });
     assert.deepEqual(mapPlayerDocuments([
       { id: 'uid-1', data: { name: 'Player' } },
     ]), [{ id: 'uid-1', name: 'Player' }]);
     assert.deepEqual(mapMissionDocuments([
-      { id: 'mission-1', data: { title: 'Mission' } },
+      { id: 'mission-1', data: { title: 'Mission', ignored: true } },
     ]), [{ id: 'mission-1', title: 'Mission' }]);
   });
 
@@ -36,9 +38,9 @@ describe('Firebase snapshot mappers', () => {
     assert.equal('sessionStartedAt' in legacy, false);
     assert.equal('sessionSchemaVersion' in legacy, false);
     assert.deepEqual(mapGameConfigDocument({
-      gameSessionId: 'session-1', sessionStartedAt: 123, sessionSchemaVersion: 1,
+      gameSessionId: 'session-1', sessionStartedAt: 123, sessionSchemaVersion: 2,
     }, defaults), {
-      ...defaults, gameSessionId: 'session-1', sessionStartedAt: 123, sessionSchemaVersion: 1,
+      ...defaults, gameSessionId: 'session-1', sessionStartedAt: 123, sessionSchemaVersion: 2,
     });
     const invalid = mapGameConfigDocument({ gameSessionId: '', sessionStartedAt: 'bad', sessionSchemaVersion: -1 }, defaults);
     assert.equal('gameSessionId' in invalid, false);
@@ -48,29 +50,30 @@ describe('Firebase snapshot mappers', () => {
 
   test('maps missing and existing private-location documents', () => {
     assert.equal(mapPrivateLocation(null), null);
-    assert.deepEqual(mapPrivateLocation({ latitude: 35, longitude: 139 }), {
-      latitude: 35, longitude: 139,
+    assert.equal(mapPrivateLocation({ latitude: 35, longitude: 139 }), null);
+    assert.deepEqual(mapPrivateLocation({ gameSessionId: 'session-2', latitude: 35, longitude: 139 }), {
+      gameSessionId: 'session-2', latitude: 35, longitude: 139,
     });
   });
 
   test('maps only valid Emergency projection fields to plain numeric timestamps', () => {
     const timestamp = millis => ({ toMillis: () => millis });
     assert.deepEqual(mapEmergencyLocationProjection('uid-1', {
-      playerId: 'uid-1', latitude: 35, longitude: 139,
+      playerId: 'uid-1', gameSessionId: 'session-2', latitude: 35, longitude: 139,
       projectedAt: timestamp(200), sourceLocationUpdatedAt: timestamp(100), expiresAt: timestamp(300),
       safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY', ignored: 'not mapped',
-    }), {
-      playerId: 'uid-1', latitude: 35, longitude: 139,
+    }, 'session-2'), {
+      playerId: 'uid-1', gameSessionId: 'session-2', latitude: 35, longitude: 139,
       projectedAt: 200, sourceLocationUpdatedAt: 100, expiresAt: 300,
       safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
     });
     assert.equal(mapEmergencyLocationProjection('other', {
-      playerId: 'uid-1', latitude: 35, longitude: 139,
+      playerId: 'uid-1', gameSessionId: 'session-2', latitude: 35, longitude: 139,
       projectedAt: timestamp(200), sourceLocationUpdatedAt: timestamp(100), expiresAt: timestamp(300),
       safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
-    }), null);
+    }, 'different-session'), null);
     assert.equal(mapEmergencyLocationProjection('uid-1', {
-      playerId: 'uid-1', latitude: 91, longitude: 139,
+      playerId: 'uid-1', gameSessionId: 'session-2', latitude: 91, longitude: 139,
       projectedAt: timestamp(200), sourceLocationUpdatedAt: timestamp(100), expiresAt: timestamp(300),
       safetyStatus: 'EMERGENCY', projectionKind: 'EMERGENCY',
     }), null);
@@ -80,11 +83,11 @@ describe('Firebase snapshot mappers', () => {
     const timestamp = millis => ({ toMillis: () => millis });
     assert.deepEqual(mapExposedLocationDocuments([
       { id: 'uid-1', data: {
-        playerId: 'uid-1', latitude: 35, longitude: 139,
+        playerId: 'uid-1', gameSessionId: 'session-2', latitude: 35, longitude: 139,
         capturedAt: timestamp(50), expiresAt: timestamp(100), revealScope: 'TEAM_A', ignored: 'field',
       } },
       { id: 'uid-2', data: {
-        latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100),
+        gameSessionId: 'session-2', latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100),
       } },
       { id: 'uid-3', data: {
         latitude: 91, longitude: 139, capturedAt: timestamp(50), expiresAt: timestamp(100),
@@ -98,12 +101,12 @@ describe('Firebase snapshot mappers', () => {
       { id: 'uid-6', data: {
         latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: 100,
       } },
-    ]), {
+    ], 'session-2'), {
       'uid-1': {
-        latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'TEAM_A',
+        gameSessionId: 'session-2', latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'TEAM_A',
       },
       'uid-2': {
-        latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'INDIVIDUAL',
+        gameSessionId: 'session-2', latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'INDIVIDUAL',
       },
     });
   });

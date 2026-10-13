@@ -4,6 +4,8 @@ import { describe, test } from 'node:test';
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
+const SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
+const STALE_SESSION_ID = '123e4567-e89b-42d3-a456-426614174001';
 let sequence = 0;
 
 async function createAuthUser() {
@@ -65,6 +67,7 @@ async function seedPrivateLocation(auth, { latitude = 35.1, longitude = 139.1, u
       latitude: { doubleValue: latitude },
       longitude: { doubleValue: longitude },
       updatedAt: { timestampValue: new Date(updatedAt).toISOString() },
+      gameSessionId: { stringValue: SESSION_ID },
     } }),
   });
   assert.equal(response.ok, true, `Private location write failed: ${response.status}`);
@@ -86,13 +89,16 @@ async function waitForProjection(uid, predicate) {
 }
 
 async function call(data, token) {
+  const requestData = data !== null && typeof data === 'object' && !Array.isArray(data)
+    ? { ...data, expectedSessionId: data.expectedSessionId ?? SESSION_ID }
+    : data;
   const response = await fetch(`http://127.0.0.1:5001/${projectId}/asia-northeast1/requestSafetyAction`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: requestData }),
   });
   return { status: response.status, body: await response.json() };
 }
@@ -105,6 +111,7 @@ async function createPlayer({ team = 'A', status = 'ACTIVE', waitingUntil = 0, n
     name: `${name} ${sequence}`,
     team,
     status,
+    gameSessionId: SESSION_ID,
     waitingUntil,
     shinkansenStartTime: null,
     score: 23,
@@ -113,6 +120,9 @@ async function createPlayer({ team = 'A', status = 'ACTIVE', waitingUntil = 0, n
   });
   await seedDocument('game_config/current', {
     gameStatus: 'GAME_OVER',
+    gameSessionId: SESSION_ID,
+    sessionStartedAt: 1_700_000_000_000,
+    sessionSchemaVersion: 2,
     teamARole: 'ONI',
     teamBRole: 'RUNNER',
     teamAScore: 40,
@@ -249,6 +259,27 @@ describe('Safety Action callable emulator integration', () => {
     assert.equal(safetyLog(await readDocument('game_config/current', auth.idToken)).length, 0);
   });
 
+  test('stale Session Safety Action is denied before Player, Config, or projection writes', async () => {
+    const auth = await createPlayer();
+    await seedPrivateLocation(auth);
+    const [playerBefore, configBefore] = await Promise.all([
+      readDocument(`users/${auth.localId}`, auth.idToken),
+      readDocument('game_config/current', auth.idToken),
+    ]);
+
+    const denied = await call({
+      action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: STALE_SESSION_ID,
+    }, auth.idToken);
+
+    assert.equal(denied.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual(await readDocument(`users/${auth.localId}`, auth.idToken), playerBefore);
+    assert.deepEqual(await readDocument('game_config/current', auth.idToken), configBefore);
+    const projection = await fetch(`${firestoreBase}/emergencyLocationProjections/${auth.localId}`, {
+      headers: { Authorization: 'Bearer owner' },
+    });
+    assert.equal(projection.status, 404);
+  });
+
   test('same Emergency requests sent concurrently create only one log', async () => {
     const auth = await createPlayer();
     const request = { action: 'EMERGENCY', reasonCode: 'OTHER' };
@@ -279,14 +310,15 @@ describe('Safety Action callable emulator integration', () => {
     const emergency = await createPlayer({ team: 'A', status: 'EMERGENCY', name: 'Emergency', invincibleCards: 0, invincibleUntil: 0 });
     const retired = await createPlayer({ team: 'B', status: 'RETIRED', name: 'Retired', invincibleCards: 0, invincibleUntil: 0 });
     await seedDocument('game_config/current', {
-      gameStatus: 'DAY1_ACTIVE', teamARole: 'ONI', teamBRole: 'RUNNER',
-      teamAScore: 10, teamBScore: 20, logs: [],
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: SESSION_ID,
+      sessionStartedAt: 1_700_000_000_000, sessionSchemaVersion: 2,
+      teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 10, teamBScore: 20, logs: [],
     });
 
     const response = await fetch(`http://127.0.0.1:5001/${projectId}/asia-northeast1/capturePlayer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${oni.idToken}` },
-      body: JSON.stringify({ data: { targetId: runner.localId } }),
+      body: JSON.stringify({ data: { targetId: runner.localId, expectedSessionId: SESSION_ID } }),
     });
     const capture = await response.json();
     assert.equal(capture.result?.ok, true, JSON.stringify(capture));

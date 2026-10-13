@@ -13,6 +13,7 @@ export async function revealPlayerLocations(
       scope: input.scope,
       durationMinutes: input.durationMinutes,
       requestId: input.requestId,
+      expectedSessionId: input.expectedSessionId,
     });
   } catch {
     return { ok: false, reason: 'PERSISTENCE_ERROR' };

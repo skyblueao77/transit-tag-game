@@ -15,6 +15,7 @@ const requestSafetyActionCallable = httpsCallable<SafetyActionInput, SafetyActio
 const knownReasons = new Set<SafetyActionFailureReason>([
   'UNAUTHENTICATED',
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
   'PLAYER_NOT_FOUND',
   'CONFIG_NOT_FOUND',
   'INVALID_PLAYER_STATE',

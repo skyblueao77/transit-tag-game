@@ -15,6 +15,7 @@ const callable = httpsCallable<CompleteMissionInput, CompleteMissionResult>(
 const knownReasons = new Set<CompleteMissionFailureReason>([
   'UNAUTHENTICATED',
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
   'PLAYER_NOT_FOUND',
   'PLAYER_NOT_ACTIVE',
   'INVALID_PLAYER_TEAM',
@@ -41,7 +42,10 @@ function failureReason(error: unknown): CompleteMissionFailureReason {
 export const firebaseMissionCompletionGateway: MissionCompletionGateway = {
   async completeMission(input): Promise<CompleteMissionResult> {
     try {
-      const response = await callable({ missionId: input.missionId });
+      const response = await callable({
+        missionId: input.missionId,
+        expectedSessionId: input.expectedSessionId,
+      });
       return response.data;
     } catch (error) {
       return { ok: false, reason: failureReason(error) };

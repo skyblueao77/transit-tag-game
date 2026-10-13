@@ -4,6 +4,7 @@ export { completeMission } from './mission/completeMission';
 export { processWaitingLifecycleSchedule, resumeWaiting, startWaiting } from './waiting/waitingActions';
 export { requestSafetyAction } from './safety/requestSafetyAction';
 export { resumePlayer, swapTeamRoles } from './admin/adminGameStateActions';
+export { initializeGameSession } from './admin/gameSessionActions';
 export { transitionGamePhase } from './admin/adminPhaseActions';
 export { setMissionMode, assignMissions, syncMissionCatalog } from './admin/adminMissionActions';
 export { adjustTeamScore } from './admin/adminScoreAdjustmentActions';

@@ -7,6 +7,7 @@ const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
 const functionsBase = `http://127.0.0.1:5001/${projectId}/asia-northeast1/completeMission`;
 let idSequence = 0;
+let currentSessionId = 'session_integration_default';
 
 async function createAuthUser() {
   const response = await fetch(`${authBase}:signUp?key=demo-key`, {
@@ -59,14 +60,14 @@ function field(document, name) {
   return value;
 }
 
-async function callMission(token, missionId) {
+async function callMission(token, missionId, expectedSessionId = currentSessionId) {
   const response = await fetch(functionsBase, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ data: { missionId } }),
+    body: JSON.stringify({ data: { missionId, expectedSessionId } }),
   });
   return { status: response.status, body: await response.json() };
 }
@@ -75,8 +76,10 @@ async function setupMission(team = 'A') {
   idSequence += 1;
   const user = await createAuthUser();
   const missionId = `integration_mission_${idSequence}`;
+  currentSessionId = `integration_session_${idSequence}`;
   await seedDocument(`users/${user.localId}`, {
     id: user.localId,
+    gameSessionId: currentSessionId,
     team,
     name: `Integration ${team}`,
     status: 'ACTIVE',
@@ -88,6 +91,9 @@ async function setupMission(team = 'A') {
     points: 25,
   });
   await seedDocument('game_config/current', {
+    gameSessionId: currentSessionId,
+    sessionStartedAt: Date.now(),
+    sessionSchemaVersion: 2,
     gameStatus: 'DAY1_ACTIVE',
     activeMissionA: team === 'A' ? missionId : 'not-active',
     activeMissionB: team === 'B' ? missionId : 'not-active',
@@ -110,7 +116,7 @@ describe('completeMission callable emulator integration', () => {
       readDocument(`users/${user.localId}`, user.idToken),
       readDocument('game_config/current', user.idToken),
       readDocument(
-        `missionCompletions/${createMissionCompletionId('A', missionId)}`,
+        `missionCompletions/${createMissionCompletionId(currentSessionId, 'A', missionId)}`,
         user.idToken,
       ),
     ]);
@@ -119,6 +125,7 @@ describe('completeMission callable emulator integration', () => {
     assert.equal(field(completion, 'team'), 'A');
     assert.equal(field(completion, 'missionId'), missionId);
     assert.equal(field(completion, 'completedBy'), user.localId);
+    assert.equal(field(completion, 'gameSessionId'), currentSessionId);
     assert.equal(typeof completion.fields.completedAt.timestampValue, 'string');
     assert.ok(field(config, 'logs').length > 0);
   });
@@ -136,6 +143,57 @@ describe('completeMission callable emulator integration', () => {
     ]);
     assert.equal(field(player, 'score'), 25);
     assert.ok(field(config, 'teamAScore') >= 25);
+  });
+
+  test('stale expected Session rejects without Player, Config, Completion, or log writes', async () => {
+    const { user, missionId } = await setupMission('A');
+    const sessionId = currentSessionId;
+    const [playerBefore, configBefore] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+    ]);
+
+    const response = await callMission(user.idToken, missionId, 'stale-session-id');
+
+    assert.equal(response.body.error.details.reason, 'SESSION_CHANGED');
+    const [playerAfter, configAfter, completion] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+      fetch(`${firestoreBase}/missionCompletions/${createMissionCompletionId(sessionId, 'A', missionId)}`, {
+        headers: { Authorization: `Bearer ${user.idToken}` },
+      }),
+    ]);
+    assert.deepEqual(playerAfter.fields, playerBefore.fields);
+    assert.deepEqual(configAfter.fields, configBefore.fields);
+    assert.equal(completion.status, 404);
+  });
+
+  test('same Team/Mission can complete again in a different Session while legacy receipt remains', async () => {
+    const { user, missionId } = await setupMission('A');
+    const oldSessionId = currentSessionId;
+    assert.equal((await callMission(user.idToken, missionId)).body.result.ok, true);
+
+    const nextSessionId = `${oldSessionId}_next`;
+    currentSessionId = nextSessionId;
+    await seedDocument(`users/${user.localId}`, {
+      id: user.localId, gameSessionId: nextSessionId, team: 'A', name: 'Integration A',
+      status: 'ACTIVE', score: 0, invincibleCards: 0,
+    });
+    await seedDocument('game_config/current', {
+      gameSessionId: nextSessionId, sessionStartedAt: Date.now(), sessionSchemaVersion: 2,
+      gameStatus: 'DAY1_ACTIVE', activeMissionA: missionId, activeMissionB: 'not-active',
+      activeFinalMissionId: '', teamAScore: 0, teamBScore: 0, logs: [],
+    });
+
+    const response = await callMission(user.idToken, missionId);
+    assert.equal(response.body.result.ok, true, JSON.stringify(response.body));
+    const [oldCompletion, newCompletion] = await Promise.all([
+      readDocument(`missionCompletions/${createMissionCompletionId(oldSessionId, 'A', missionId)}`, user.idToken),
+      readDocument(`missionCompletions/${createMissionCompletionId(nextSessionId, 'A', missionId)}`, user.idToken),
+    ]);
+    assert.equal(field(oldCompletion, 'gameSessionId'), oldSessionId);
+    assert.equal(field(newCompletion, 'gameSessionId'), nextSessionId);
+    assert.notEqual(oldCompletion.name, newCompletion.name);
   });
 
   test('rejects unauthenticated callable requests', async () => {
@@ -171,7 +229,7 @@ async function callCapture(token, targetId, extra = {}) {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ data: { targetId, ...extra } }),
+      body: JSON.stringify({ data: { targetId, expectedSessionId: currentSessionId, ...extra } }),
     },
   );
   return { status: response.status, body: await response.json() };
@@ -180,6 +238,7 @@ async function callCapture(token, targetId, extra = {}) {
 async function setupCapture({ invincibleTarget = false } = {}) {
   captureSequence += 1;
   const suffix = `capture_${captureSequence}`;
+  currentSessionId = `capture_session_${captureSequence}`;
   const captors = await Promise.all([createAuthUser(), createAuthUser()]);
   const targets = await Promise.all([createAuthUser(), createAuthUser()]);
   const players = [
@@ -206,6 +265,7 @@ async function setupCapture({ invincibleTarget = false } = {}) {
   ];
   await Promise.all(players.map(player => seedDocument(`users/${player.id}`, {
     id: player.id,
+    gameSessionId: currentSessionId,
     team: player.team,
     name: player.name,
     status: player.status,
@@ -214,6 +274,9 @@ async function setupCapture({ invincibleTarget = false } = {}) {
     invincibleUntil: player.invincibleUntil,
   })));
   await seedDocument('game_config/current', {
+    gameSessionId: currentSessionId,
+    sessionStartedAt: Date.now(),
+    sessionSchemaVersion: 2,
     gameStatus: 'DAY1_ACTIVE',
     teamARole: 'ONI',
     teamBRole: 'RUNNER',
@@ -274,6 +337,25 @@ describe('capturePlayer callable emulator integration', () => {
     const response = await callCapture(null, targets[0].localId);
     assert.ok(response.body.error);
     assert.equal(response.body.error.status, 'UNAUTHENTICATED');
+  });
+
+  test('stale capture Session rejects before changing any player or Config', async () => {
+    const { captors, targets, players } = await setupCapture();
+    const before = await Promise.all([
+      readDocument('game_config/current', captors[0].idToken),
+      ...players.map(player => readDocument(`users/${player.id}`, captors[0].idToken)),
+    ]);
+
+    const response = await callCapture(captors[0].idToken, targets[0].localId, {
+      expectedSessionId: 'stale-capture-session',
+    });
+
+    assert.equal(response.body.error.details.reason, 'SESSION_CHANGED');
+    const after = await Promise.all([
+      readDocument('game_config/current', captors[0].idToken),
+      ...players.map(player => readDocument(`users/${player.id}`, captors[0].idToken)),
+    ]);
+    assert.deepEqual(after.map(document => document.fields), before.map(document => document.fields));
   });
 
   test('rejects an unknown target without changing authoritative state', async () => {
@@ -346,7 +428,7 @@ async function callPowerup(token, data = {}) {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ data }),
+      body: JSON.stringify({ data: { expectedSessionId: currentSessionId, ...data } }),
     },
   );
   return { status: response.status, body: await response.json() };
@@ -354,9 +436,11 @@ async function callPowerup(token, data = {}) {
 
 async function setupPowerup({ team = 'A', role = 'RUNNER', status = 'ACTIVE', cards = 2, phase = 'DAY1_ACTIVE' } = {}) {
   powerupSequence += 1;
+  currentSessionId = `powerup_session_${powerupSequence}`;
   const user = await createAuthUser();
   await seedDocument(`users/${user.localId}`, {
     id: user.localId,
+    gameSessionId: currentSessionId,
     team,
     name: `Powerup Player ${powerupSequence}`,
     status,
@@ -366,6 +450,9 @@ async function setupPowerup({ team = 'A', role = 'RUNNER', status = 'ACTIVE', ca
     waitingUntil: 1_800_000_000_000,
   });
   await seedDocument('game_config/current', {
+    gameSessionId: currentSessionId,
+    sessionStartedAt: Date.now(),
+    sessionSchemaVersion: 2,
     gameStatus: phase,
     teamARole: team === 'A' ? role : 'ONI',
     teamBRole: team === 'B' ? role : 'ONI',
@@ -429,6 +516,24 @@ describe('activateInvincibility callable emulator integration', () => {
     assert.equal(field(player, 'invincibleCards'), 2);
     assert.equal(field(player, 'invincibleUntil'), 0);
     assert.equal(field(config, 'logs').length, 0);
+  });
+
+  test('stale Session activation rejects before Player or Config writes', async () => {
+    const user = await setupPowerup();
+    const [playerBefore, configBefore] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+    ]);
+
+    const response = await callPowerup(user.idToken, { expectedSessionId: 'stale-powerup-session' });
+
+    assert.equal(response.body.error.details.reason, 'SESSION_CHANGED');
+    const [playerAfter, configAfter] = await Promise.all([
+      readDocument(`users/${user.localId}`, user.idToken),
+      readDocument('game_config/current', user.idToken),
+    ]);
+    assert.deepEqual(playerAfter.fields, playerBefore.fields);
+    assert.deepEqual(configAfter.fields, configBefore.fields);
   });
 
   test('rejects no cards, wrong role, paused phase, and non-ACTIVE status without writes', async () => {

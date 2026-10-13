@@ -26,7 +26,7 @@ interface Props {
   privateLocation: PrivateLocation | null;
   exposedLocations: Record<string, ExposedLocation>;
   gameConfig: GameConfig;
-  onUpdatePrivateLocation: (input: Coordinates & { playerId: string }) => Promise<UpdatePrivateLocationResult>;
+  onUpdatePrivateLocation: (input: Coordinates & { playerId: string; expectedSessionId: string }) => Promise<UpdatePrivateLocationResult>;
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
@@ -83,7 +83,7 @@ const MapView: React.FC<Props> = ({
 
   // 位置情報更新
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
-    if (!currentUser || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
+    if (!currentUser || !gameConfig.gameSessionId || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
     if (!navigator.onLine) return;
 
     const now = Date.now();
@@ -93,6 +93,7 @@ const MapView: React.FC<Props> = ({
     try {
       const result = await onUpdatePrivateLocation({
         playerId: currentUser.id,
+        expectedSessionId: gameConfig.gameSessionId,
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
       });
@@ -104,7 +105,7 @@ const MapView: React.FC<Props> = ({
     } catch (error) {
       console.error('Failed to update location:', error);
     }
-  }, [currentUser, gameConfig.gameStatus, onUpdatePrivateLocation]);
+  }, [currentUser, gameConfig.gameStatus, gameConfig.gameSessionId, onUpdatePrivateLocation]);
 
   // watchPosition
   useEffect(() => {

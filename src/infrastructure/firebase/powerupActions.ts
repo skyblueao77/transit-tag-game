@@ -15,6 +15,7 @@ const callable = httpsCallable<ActivateInvincibilityInput, ActivateInvincibility
 const knownReasons = new Set<ActivateInvincibilityFailureReason>([
   'UNAUTHENTICATED',
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
   'PLAYER_NOT_FOUND',
   'CONFIG_NOT_FOUND',
   'INVALID_PLAYER_STATE',

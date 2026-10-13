@@ -155,14 +155,6 @@ const App: React.FC = () => {
         setUserLoading(false);
       },
     );
-    const unsubscribePrivateLocation = subscribePrivateLocation(
-      authUserId,
-      setPrivateLocation,
-      error => {
-        console.error('Error fetching private location:', error);
-        setPrivateLocation(null);
-      },
-    );
 
     const unsubscribeUsers = subscribePlayers(
       setAllUsers,
@@ -171,10 +163,25 @@ const App: React.FC = () => {
 
     return () => {
       unsubscribeCurrentUser();
-      unsubscribePrivateLocation();
       unsubscribeUsers();
     };
   }, [authUserId]);
+
+  useEffect(() => {
+    if (!authUserId || !gameConfig.gameSessionId) {
+      setPrivateLocation(null);
+      return;
+    }
+    return subscribePrivateLocation(
+      authUserId,
+      gameConfig.gameSessionId,
+      setPrivateLocation,
+      error => {
+        console.error('Error fetching private location:', error);
+        setPrivateLocation(null);
+      },
+    );
+  }, [authUserId, gameConfig.gameSessionId]);
 
   useEffect(() => {
     if (!authUserId) {
@@ -185,10 +192,11 @@ const App: React.FC = () => {
     setExposedLocations({});
     return subscribeExposedLocations(
       playerIds,
+      gameConfig.gameSessionId ?? '',
       setExposedLocations,
       error => console.error('Error fetching exposed locations:', error),
     );
-  }, [authUserId, exposedPlayerIdsJson]);
+  }, [authUserId, exposedPlayerIdsJson, gameConfig.gameSessionId]);
 
   useEffect(() => {
     if (!authUserId) return;
@@ -231,13 +239,14 @@ const App: React.FC = () => {
     emergencyHeartbeat.current.sync({
       status: currentUser?.status,
       playerId: currentUser?.id,
+      expectedSessionId: gameConfig.gameSessionId,
       authUserId,
       geolocation: 'geolocation' in navigator ? navigator.geolocation : null,
       updatePrivateLocation: handleUpdatePrivateLocation,
       isCurrentPlayer: () => Boolean(currentUser?.id) && authUserIdRef.current === currentUser?.id,
       isOnline: () => navigator.onLine,
     });
-  }, [authUserId, currentUser?.id, currentUser?.status, handleUpdatePrivateLocation]);
+  }, [authUserId, currentUser?.id, currentUser?.status, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
 
   useEffect(() => () => emergencyHeartbeat.current.stop(), []);
 
@@ -245,7 +254,7 @@ const App: React.FC = () => {
   // 押した瞬間のprivate locationをスナップショットとして5分間表示。
   // 本人がその後移動してもピンは動かない。
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
-    if (!currentUser || !canRevealLocation(gameConfig.gameStatus)) return;
+    if (!currentUser || !gameConfig.gameSessionId || !canRevealLocation(gameConfig.gameStatus)) return;
 
     if (!confirm('現在地を公開しますか？\n\n公開された座標は5分間地図上に固定表示されます。\n（その後移動してもピンはその場に残ります）')) return;
 
@@ -267,6 +276,7 @@ const App: React.FC = () => {
           try {
             const privateResult = await handleUpdatePrivateLocation({
               playerId: currentUser.id,
+              expectedSessionId: gameConfig.gameSessionId,
               latitude: pos.coords.latitude,
               longitude: pos.coords.longitude,
             });
@@ -274,7 +284,9 @@ const App: React.FC = () => {
 
             const exposeResult = await exposeLocation({
               playerId: currentUser.id,
+              expectedSessionId: gameConfig.gameSessionId,
               privateLocation: {
+                gameSessionId: gameConfig.gameSessionId,
                 latitude: pos.coords.latitude,
                 longitude: pos.coords.longitude,
               },
@@ -308,7 +320,8 @@ const App: React.FC = () => {
     try {
       const exposeResult = await exposeLocation({
         playerId: currentUser.id,
-        privateLocation: { latitude: snapLat, longitude: snapLng },
+        expectedSessionId: gameConfig.gameSessionId ?? '',
+        privateLocation: privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null,
         phase: gameConfig.gameStatus,
         now,
         duration: EXPOSE_DURATION,
@@ -323,12 +336,18 @@ const App: React.FC = () => {
       console.error('Location expose error:', error);
       alert('通信エラー：位置の公開に失敗しました。');
     }
-  }, [currentUser, privateLocation, gameConfig.gameStatus, handleUpdatePrivateLocation, addGameLog]);
+  }, [currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation, addGameLog]);
 
   // Mission scoring, identity, duplicate enforcement, and logging are server-authoritative.
   const handleScoreUpdate = useCallback(
-    (missionId: string) => completeMission({ missionId }, firebaseMissionCompletionGateway),
-    [],
+    (missionId: string) => {
+      if (!gameConfig.gameSessionId) {
+        alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+        return Promise.resolve({ ok: false as const, reason: 'SESSION_CHANGED' as const });
+      }
+      return completeMission({ missionId, expectedSessionId: gameConfig.gameSessionId }, firebaseMissionCompletionGateway);
+    },
+    [gameConfig.gameSessionId],
   );
 
   const handleSafetyAction = useCallback(async (
@@ -341,7 +360,11 @@ const App: React.FC = () => {
     safetyActionBusyRef.current = true;
     setSafetyActionBusy(true);
     try {
-      const result = await requestSafetyAction({ action, reasonCode }, firebaseSafetyActionGateway);
+      if (!gameConfig.gameSessionId) {
+        alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+        return;
+      }
+      const result = await requestSafetyAction({ action, reasonCode, expectedSessionId: gameConfig.gameSessionId }, firebaseSafetyActionGateway);
       setSafetyDialogOpen(false);
       if (result.ok === false) {
         alert(result.reason === 'RETIRED_TERMINAL'
@@ -354,6 +377,7 @@ const App: React.FC = () => {
         ? await updateEmergencyLocationOnce({
             status: 'EMERGENCY',
             playerId: currentUser.id,
+            expectedSessionId: gameConfig.gameSessionId,
             authUserId: currentUser.id,
             geolocation: 'geolocation' in navigator ? navigator.geolocation : null,
             updatePrivateLocation: handleUpdatePrivateLocation,
@@ -380,7 +404,7 @@ const App: React.FC = () => {
       safetyActionBusyRef.current = false;
       setSafetyActionBusy(false);
     }
-  }, [currentUser, handleUpdatePrivateLocation]);
+  }, [currentUser, handleUpdatePrivateLocation, gameConfig.gameSessionId]);
 
   // Capture validation, state changes, reward, and logging are server-authoritative.
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {
@@ -389,19 +413,27 @@ const App: React.FC = () => {
     const target = allUsers.find(user => user.id === targetId);
     if (!target || !confirm(`${target.name} を捕獲しましたか？`)) return;
 
-    const result = await capturePlayer({ targetId }, firebaseCaptureGateway);
+    if (!gameConfig.gameSessionId) {
+      alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+      return;
+    }
+    const result = await capturePlayer({ targetId, expectedSessionId: gameConfig.gameSessionId }, firebaseCaptureGateway);
     if (result.ok === false) {
       alert(result.reason === 'CAPTURE_REJECTED'
         ? 'このプレイヤーは捕獲できません。'
         : '捕獲処理に失敗しました。');
     }
-  }, [currentUser, allUsers]);
+  }, [currentUser, allUsers, gameConfig.gameSessionId]);
 
   // 無敵カード使用
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {
     if (!currentUser || !confirm('無敵カードを使いますか？（30分間有効）')) return;
 
-    const result = await activateInvincibility({}, firebaseInvincibilityGateway);
+    if (!gameConfig.gameSessionId) {
+      alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+      return;
+    }
+    const result = await activateInvincibility({ expectedSessionId: gameConfig.gameSessionId }, firebaseInvincibilityGateway);
     if (result.ok === false) {
       alert(result.reason === 'NO_CARDS'
         ? '無敵カードがありません。'
@@ -410,24 +442,29 @@ const App: React.FC = () => {
     }
 
     alert('無敵モード発動！');
-  }, [currentUser]);
+  }, [currentUser, gameConfig.gameSessionId]);
 
   // Waiting eligibility, deadline, persistence, and logging are server-authoritative.
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
     if (!currentUser || !confirm('新幹線移動（1時間待機）を開始しますか？')) return;
+    if (!gameConfig.gameSessionId) {
+      alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+      return;
+    }
 
-    const result = await startWaiting({}, firebaseWaitingGateway);
+    const result = await startWaiting({ expectedSessionId: gameConfig.gameSessionId }, firebaseWaitingGateway);
     if (!result.ok) {
       alert('現在の状態では待機を開始できません。');
       return;
     }
     alert('待機モードに入りました。お疲れ様でした。');
-  }, [currentUser]);
+  }, [currentUser, gameConfig.gameSessionId]);
 
   const handleResumeWaiting = useCallback(async (): Promise<void> => {
-    const result = await resumeWaiting({}, firebaseWaitingGateway);
+    if (!gameConfig.gameSessionId) return;
+    const result = await resumeWaiting({ expectedSessionId: gameConfig.gameSessionId }, firebaseWaitingGateway);
     if (result.ok === false) console.error('Waiting resume request was rejected:', result.reason);
-  }, []);
+  }, [gameConfig.gameSessionId]);
 
   // ---- 画面分岐 ----
 
@@ -439,7 +476,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (!currentUser && !isAdminPath) return <SetupView onComplete={setCurrentUser} />;
+  if (!currentUser && !isAdminPath) return <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />;
 
   // ゲームオーバー画面
   if ((gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) && !isAdminPath) {
@@ -645,7 +682,7 @@ const App: React.FC = () => {
                     users={allUsers}
                     logs={locationLogs}
                     currentUser={currentUser}
-                    privateLocation={privateLocation}
+                    privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
                     exposedLocations={exposedLocations}
                     gameConfig={gameConfig}
                     onUpdatePrivateLocation={handleUpdatePrivateLocation}

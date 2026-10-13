@@ -1,12 +1,13 @@
 import { FINAL_MISSIONS } from '../../../src/game/finalMissions';
 import { resolveAdminPhaseTransition } from '../../../src/game/adminPhaseTransition';
 import type { AdminPhaseAction } from '../../../src/game/adminPhaseTransition';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
-export type AdminPhaseFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'TRANSITION_NOT_ALLOWED' | 'FINAL_MISSION_NOT_FOUND' | 'PERSISTENCE_ERROR';
+export type AdminPhaseFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'SESSION_CHANGED' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'TRANSITION_NOT_ALLOWED' | 'FINAL_MISSION_NOT_FOUND' | 'PERSISTENCE_ERROR';
 export class AdminPhaseServiceError extends Error {
   constructor(readonly reason: AdminPhaseFailureReason) { super(reason); this.name = 'AdminPhaseServiceError'; }
 }
-export interface AdminPhaseReceipt { action: AdminPhaseAction; requestId: string; oldPhase: string; newPhase: string; selectedFinalMissionId?: string; duplicate?: boolean }
+export interface AdminPhaseReceipt { action: AdminPhaseAction; requestId: string; gameSessionId: string; oldPhase: string; newPhase: string; selectedFinalMissionId?: string; duplicate?: boolean }
 export interface AdminPhaseTransaction {
   readAdmin(uid: string): Promise<boolean>;
   readReceipt(uid: string, requestId: string): Promise<Record<string, unknown> | null>;
@@ -22,14 +23,16 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const missionTypes = ['CHECKIN', 'PHOTO'];
 function fail(reason: AdminPhaseFailureReason): never { throw new AdminPhaseServiceError(reason); }
 function record(v: unknown): v is Record<string, unknown> { return v !== null && typeof v === 'object' && !Array.isArray(v); }
-function parseRequest(v: unknown): { action: AdminPhaseAction; requestId: string } {
-  if (!record(v) || Object.keys(v).length !== 2 || !Object.hasOwn(v, 'action') || !Object.hasOwn(v, 'requestId')
+function parseRequest(v: unknown): { action: AdminPhaseAction; requestId: string; expectedSessionId: string } {
+  if (!record(v) || Object.keys(v).length !== 3 || !Object.hasOwn(v, 'action') || !Object.hasOwn(v, 'requestId') || !Object.hasOwn(v, 'expectedSessionId')
       || typeof v.action !== 'string' || !actions.includes(v.action as AdminPhaseAction)
-      || typeof v.requestId !== 'string' || !uuid.test(v.requestId)) fail('INVALID_ARGUMENT');
-  return { action: v.action as AdminPhaseAction, requestId: v.requestId };
+      || typeof v.requestId !== 'string' || !uuid.test(v.requestId)
+      || !isValidGameSessionId(v.expectedSessionId)) fail('INVALID_ARGUMENT');
+  return { action: v.action as AdminPhaseAction, requestId: v.requestId, expectedSessionId: v.expectedSessionId };
 }
-function parseReceipt(value: Record<string, unknown>, action: AdminPhaseAction, requestId: string): AdminPhaseSuccess {
+function parseReceipt(value: Record<string, unknown>, action: AdminPhaseAction, requestId: string, expectedSessionId: string): AdminPhaseSuccess {
   if (value.action !== action || value.requestId !== requestId || typeof value.oldPhase !== 'string' || typeof value.newPhase !== 'string') fail('PERSISTENCE_ERROR');
+  if (value.gameSessionId !== expectedSessionId) fail('SESSION_CHANGED');
   return { ok: true, action, oldPhase: value.oldPhase, newPhase: value.newPhase, ...(typeof value.selectedFinalMissionId === 'string' ? { selectedFinalMissionId: value.selectedFinalMissionId } : {}), duplicate: true };
 }
 function validMission(value: Record<string, unknown> | null, id: string): boolean {
@@ -43,7 +46,7 @@ function logList(config: Record<string, unknown>, log: Record<string, unknown>):
 }
 export async function transitionGamePhaseForAdmin(authUid: string, request: unknown, store: AdminPhaseStore, runtime: AdminPhaseRuntime): Promise<AdminPhaseSuccess> {
   if (typeof authUid !== 'string' || authUid.length === 0) fail('UNAUTHENTICATED');
-  const { action, requestId } = parseRequest(request);
+  const { action, requestId, expectedSessionId } = parseRequest(request);
   const now = runtime.now();
   const random = action === 'START_FINAL' ? runtime.random() : 0;
   const logId = runtime.createId();
@@ -53,10 +56,11 @@ export async function transitionGamePhaseForAdmin(authUid: string, request: unkn
   try {
     return await store.runTransaction(async tx => {
       if (!await tx.readAdmin(authUid)) fail('PERMISSION_DENIED');
-      const prior = await tx.readReceipt(authUid, requestId);
-      if (prior) return parseReceipt(prior, action, requestId);
       const config = await tx.readConfig();
       if (!config) fail('CONFIG_NOT_FOUND');
+      if (!validateExpectedSession(config, expectedSessionId).valid) fail('SESSION_CHANGED');
+      const prior = await tx.readReceipt(authUid, requestId);
+      if (prior) return parseReceipt(prior, action, requestId, expectedSessionId);
       let mission: Record<string, unknown> | null = null;
       if (action === 'START_FINAL') mission = await tx.readMission(selectedId!);
       const resolved = resolveAdminPhaseTransition({ currentPhase: config.gameStatus, action, now, ...(selectedId ? { finalMissionId: selectedId } : {}) });
@@ -67,7 +71,7 @@ export async function transitionGamePhaseForAdmin(authUid: string, request: unkn
       }
       if (action === 'START_FINAL' && !validMission(mission, selectedId!)) fail('FINAL_MISSION_NOT_FOUND');
       const audit = { id: logId, timestamp: now, type: 'SYSTEM', actorUid: authUid, action, oldPhase: resolved.oldPhase, newPhase: resolved.newPhase, ...(selectedId ? { selectedFinalMissionId: selectedId } : {}), message: `フェーズ変更: ${resolved.newPhase}${selectedId ? ` (Final Mission: ${selectedId})` : ''}` };
-      const receipt: AdminPhaseReceipt = { action, requestId, oldPhase: resolved.oldPhase, newPhase: resolved.newPhase, ...(selectedId ? { selectedFinalMissionId: selectedId } : {}) };
+      const receipt: AdminPhaseReceipt = { action, requestId, gameSessionId: expectedSessionId, oldPhase: resolved.oldPhase, newPhase: resolved.newPhase, ...(selectedId ? { selectedFinalMissionId: selectedId } : {}) };
       tx.writeTransition(authUid, requestId, { ...resolved.updates, logs: logList(config, audit) }, receipt);
       return { ok: true, action, oldPhase: resolved.oldPhase, newPhase: resolved.newPhase, ...(selectedId ? { selectedFinalMissionId: selectedId } : {}), duplicate: false };
     });

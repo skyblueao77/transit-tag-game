@@ -6,10 +6,12 @@ import type {
   CaptureSuccess,
 } from '../../../src/game/capture';
 import type { GameStatus, Role } from '../../../src/game/types';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type CaptureFailureReason =
   | 'UNAUTHENTICATED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'TARGET_NOT_FOUND'
   | 'INVALID_CAPTOR_TEAM'
@@ -152,11 +154,13 @@ function createCaptureLog(
 export async function capturePlayerForPlayer(
   captorId: string,
   targetId: unknown,
+  expectedSessionId: unknown,
   store: CaptureStore,
   runtime: CaptureRuntime,
 ): Promise<CaptureCompletionResult> {
   if (!captorId) throw new CaptureServiceError('UNAUTHENTICATED');
   if (!isValidTargetId(targetId)) throw new CaptureServiceError('INVALID_ARGUMENT');
+  if (!isValidGameSessionId(expectedSessionId)) throw new CaptureServiceError('SESSION_CHANGED');
 
   const now = runtime.now();
   const logId = runtime.createLogId();
@@ -166,12 +170,11 @@ export async function capturePlayerForPlayer(
 
   try {
     return await store.runTransaction(async transaction => {
-      const [config, users] = await Promise.all([
-        transaction.readGameConfig(),
-        transaction.readUsers(captorId, targetId),
-      ]);
+      const config = await transaction.readGameConfig();
       if (!config) throw new CaptureServiceError('GAME_CONFIG_NOT_FOUND');
-
+      const session = validateExpectedSession(config, expectedSessionId);
+      if (!session.valid) throw new CaptureServiceError('SESSION_CHANGED');
+      const users = await transaction.readUsers(captorId, targetId);
       const usersById = new Map(users.map(user => [user.id, user]));
       const captorDocument = usersById.get(captorId);
       if (!captorDocument) throw new CaptureServiceError('PLAYER_NOT_FOUND');

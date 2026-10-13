@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
-  completeMissionForPlayer,
+  completeMissionForPlayer as completeMissionService,
   createMissionCompletionId,
   MissionServiceError,
 } from '../lib/functions/src/mission/missionService.js';
+
+const SESSION_ID = 'session_test_2';
+
+function completeMissionForPlayer(uid, missionId, store, runtime) {
+  return completeMissionService(uid, { missionId, expectedSessionId: SESSION_ID }, store, runtime);
+}
 
 function fixture(overrides = {}) {
   const state = {
@@ -16,6 +22,9 @@ function fixture(overrides = {}) {
       invincibleCards: 2,
     },
     config: {
+      gameSessionId: SESSION_ID,
+      sessionStartedAt: 1_700_000_000_000,
+      sessionSchemaVersion: 2,
       gameStatus: 'DAY1_ACTIVE',
       activeMissionA: 'mission-1',
       activeMissionB: 'mission-1',
@@ -27,17 +36,18 @@ function fixture(overrides = {}) {
     mission: { title: 'Test mission', points: 25 },
     completions: new Set(),
     writes: [],
+    reads: [],
     ...overrides,
   };
   const store = {
     async runTransaction(work) {
       let pendingWrite;
       const transaction = {
-        readPlayer: async () => state.player,
-        readGameConfig: async () => state.config,
-        readMission: async () => state.mission,
-        readCompletion: async id => state.completions.has(id),
-        writeMissionCompletion: write => { pendingWrite = structuredClone(write); },
+        readPlayer: async () => { state.reads.push('player'); return state.player; },
+        readGameConfig: async () => { state.reads.push('config'); return state.config; },
+        readMission: async () => { state.reads.push('mission'); return state.mission; },
+        readCompletion: async id => { state.reads.push('completion'); return state.completions.has(id); },
+        writeMissionCompletion: write => { state.reads.push('write'); pendingWrite = structuredClone(write); },
       };
       const result = await work(transaction);
       if (pendingWrite) {
@@ -231,6 +241,7 @@ describe('server mission completion service', () => {
 
     const write = data.state.writes[0];
     assert.deepEqual(write.completion, {
+      gameSessionId: SESSION_ID,
       missionId: 'mission-1',
       team: 'A',
       completedBy: 'uid-a',
@@ -238,7 +249,7 @@ describe('server mission completion service', () => {
       luckyReward: true,
       isFinalMission: false,
     });
-    assert.equal(write.completionId, createMissionCompletionId('A', 'mission-1'));
+    assert.equal(write.completionId, createMissionCompletionId(SESSION_ID, 'A', 'mission-1'));
     assert.equal(write.logs.length, 200);
     assert.equal(write.logs[0].type, 'MISSION');
     assert.equal(write.logs[0].timestamp, 1_700_000_000_000);
@@ -254,11 +265,85 @@ describe('server mission completion service', () => {
     }, playerIdentityBefore);
   });
 
-  test('completion ids are deterministic, team-scoped, and slash-safe', () => {
-    const idA = createMissionCompletionId('A', 'mission/with/slashes');
-    assert.equal(idA, createMissionCompletionId('A', 'mission/with/slashes'));
-    assert.notEqual(idA, createMissionCompletionId('B', 'mission/with/slashes'));
+  test('completion ids are deterministic, Session/Team-scoped, and slash-safe', () => {
+    const idA = createMissionCompletionId(SESSION_ID, 'A', 'mission-1');
+    assert.equal(idA, createMissionCompletionId(SESSION_ID, 'A', 'mission-1'));
+    assert.notEqual(idA, createMissionCompletionId('session_next', 'A', 'mission-1'));
+    assert.notEqual(idA, createMissionCompletionId(SESSION_ID, 'B', 'mission-1'));
     assert.doesNotMatch(idA, /\//);
+  });
+
+  test('rejects missing or stale expected Session before reading Player or writing', async () => {
+    for (const expectedSessionId of [undefined, '']) {
+      const data = fixture();
+      await rejectsWith('INVALID_ARGUMENT', () => completeMissionService(
+        'uid-a', { missionId: 'mission-1', ...(expectedSessionId === undefined ? {} : { expectedSessionId }) },
+        data.store, fixedRuntime(),
+      ));
+      assert.equal(data.state.writes.length, 0);
+    }
+    const stale = fixture();
+    await rejectsWith('SESSION_CHANGED', () => completeMissionService(
+      'uid-a', { missionId: 'mission-1', expectedSessionId: 'session_old' }, stale.store, fixedRuntime(),
+    ));
+    assert.equal(stale.state.writes.length, 0);
+  });
+
+  test('fails closed on missing, malformed, or stale Session boundaries before writes', async () => {
+    for (const expectedSessionId of [undefined, '', 'invalid/session', 42]) {
+      const data = fixture();
+      const input = { missionId: 'mission-1', ...(expectedSessionId === undefined ? {} : { expectedSessionId }) };
+      await rejectsWith('INVALID_ARGUMENT', () => completeMissionService('uid-a', input, data.store, fixedRuntime()));
+      assert.deepEqual(data.state.reads, []);
+      assert.equal(data.state.writes.length, 0);
+    }
+
+    for (const config of [
+      { ...fixture().state.config, gameSessionId: undefined },
+      { ...fixture().state.config, gameSessionId: 'bad/session' },
+      { ...fixture().state.config, sessionStartedAt: undefined },
+      { ...fixture().state.config, sessionSchemaVersion: 1 },
+    ]) {
+      const data = fixture({ config });
+      await rejectsWith('SESSION_CHANGED', () => completeMissionService('uid-a', {
+        missionId: 'mission-1', expectedSessionId: SESSION_ID,
+      }, data.store, fixedRuntime()));
+      assert.deepEqual(data.state.reads, ['config']);
+      assert.equal(data.state.writes.length, 0);
+    }
+
+    const stale = fixture();
+    await rejectsWith('SESSION_CHANGED', () => completeMissionService('uid-a', {
+      missionId: 'mission-1', expectedSessionId: 'session_stale',
+    }, stale.store, fixedRuntime()));
+    assert.deepEqual(stale.state.reads, ['config']);
+    assert.equal(stale.state.writes.length, 0);
+
+    const missingConfig = fixture({ config: null });
+    await rejectsWith('MISSION_NOT_ALLOWED', () => completeMissionService('uid-a', {
+      missionId: 'mission-1', expectedSessionId: SESSION_ID,
+    }, missingConfig.store, fixedRuntime()));
+    assert.deepEqual(missingConfig.state.reads, ['config']);
+    assert.equal(missingConfig.state.writes.length, 0);
+  });
+
+  test('reads Config, Player, Mission, and completion in Session-safe order', async () => {
+    const data = fixture();
+    await completeMissionForPlayer('uid-a', 'mission-1', data.store, fixedRuntime());
+    assert.deepEqual(data.state.reads, ['config', 'player', 'mission', 'completion', 'write']);
+  });
+
+  test('allows the same Team/Mission in a later Session without matching legacy IDs', async () => {
+    const data = fixture();
+    data.state.completions.add(createMissionCompletionId('legacy-session', 'A', 'mission-1'));
+    data.state.config.gameSessionId = 'session_next';
+    const result = await completeMissionService('uid-a', {
+      missionId: 'mission-1', expectedSessionId: 'session_next',
+    }, data.store, fixedRuntime());
+    assert.equal(result.ok, true);
+    assert.equal(data.state.writes[0].completion.gameSessionId, 'session_next');
+    assert.equal(data.state.writes[0].completionId,
+      createMissionCompletionId('session_next', 'A', 'mission-1'));
   });
 
   test('generates random and clock values once outside transaction retries', async () => {
