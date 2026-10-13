@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GameConfig, User, GameLog, Mission } from '../types';
+import { GameConfig, User, Mission } from '../types';
 import { MISSIONS } from '../constants';
 import {
   Users, Lock, Trash2, Shield, Trophy, Play,
-  AlertTriangle, Shuffle, XCircle, Flag, MapPin,
+  AlertTriangle, Shuffle, Flag, MapPin,
   RefreshCw 
 } from 'lucide-react';
 import { signInAdmin } from '../src/infrastructure/firebase/auth';
@@ -24,21 +24,19 @@ import type { PrepareGameResetPreview } from '../src/application/gameplayPorts';
 import { firebaseAdminGameResetGateway } from '../src/infrastructure/firebase/adminGameResetActions';
 import { initializeGameSession } from '../src/application/initializeGameSession';
 import { firebaseGameSessionInitializationGateway } from '../src/infrastructure/firebase/adminSessionActions';
-import { firebaseGameLogStore } from '../src/infrastructure/firebase/gameplayStores';
-import { db } from '../src/infrastructure/firebase/firebaseClient';
+
 import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
 import type { EmergencyLocationProjection } from '../types';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
-import { doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+
 
 interface Props {
   config: GameConfig;
-  setConfig: (update: GameConfig | ((prev: GameConfig) => GameConfig)) => Promise<void>;
   users: User[];
   missions: Mission[];
 }
 
-const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = [] }) => {
+const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(false);
@@ -96,32 +94,6 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     );
   }, [isAuthorized, emergencyPlayerIds, config.gameSessionId]);
 
-  const PENALTY_LIST = [
-    "次の新幹線の乗車可能時間を「1時間30分」に短縮せよ",
-    "位置情報の公開が3時間の間「15分毎」になる（自己管理せよ）",
-    "「在来線特急」の利用が3時間禁止！",
-    "ミッション終了後「1時間」位置情報を常に開示せよ",
-    "ミッション終了後「1時間」新幹線・特急の利用を禁止！",
-    "GPSを30分間開示せよ（管理者サーチボタンを起動する）",
-    "次に乗る列車を公開せよ(乗車駅、発車時刻、行先をLINEへ)",
-    "その場で30分間待機せよ（タイマーを各自セット）",
-    "最速で東京駅に向かえ",
-    "優等列車の利用禁止（普通列車のみ移動可。快速・急行・特急等は不可）"
-  ];
-
-  const addGameLog = async (message: string, type: GameLog['type']): Promise<void> => {
-    try {
-      const newLog: GameLog = {
-        id: Math.random().toString(36).substring(7),
-        timestamp: Date.now(),
-        message,
-        type,
-      };
-      await firebaseGameLogStore.append(newLog, config.logs ?? []);
-    } catch (error) {
-      console.error('Log error:', error);
-    }
-  };
 
   const requireSessionId = (): string | null => {
     if (config.gameSessionId) return config.gameSessionId;
@@ -163,22 +135,6 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       setIsProcessing(false); 
     }
   };
-// 放送メッセージを消去する関数
-  const handleClearBroadcast = async () => {
-    try {
-      setIsProcessing(true);
-      await updateDoc(doc(db, 'game_config', 'current'), { 
-        broadcastMessage: '', 
-        broadcastTime: Date.now() 
-      });
-      alert('通知を消去しました');
-    } catch {
-      alert('消去に失敗しました');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-  // AdminView.tsx の内部に追加
 
   const handleForceRoleSwap = async (): Promise<void> => {
     if (roleSwapBusyRef.current || isProcessing) return;
@@ -249,23 +205,6 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
     }
   };
 
-  const handleSendRandomPenalty = async (targetTeam: 'A' | 'B') => {
-    const penalty = PENALTY_LIST[Math.floor(Math.random() * PENALTY_LIST.length)];
-    if (!confirm(`Team ${targetTeam} に罰: ${penalty}`)) return;
-    setIsProcessing(true);
-    try {
-      await updateDoc(doc(db, 'game_config', 'current'), { 
-        broadcastMessage: `【Team ${targetTeam} への罰】\n${penalty}`, 
-        broadcastTime: Date.now() 
-      });
-      await addGameLog(`Team ${targetTeam} ペナルティ: ${penalty}`, 'SYSTEM');
-      alert(`送信完了`);
-    } catch (error) { 
-      alert('失敗'); 
-    } finally { 
-      setIsProcessing(false); 
-    }
-  };
 
   const handleAdjustTeamScore = async (): Promise<void> => {
     if (scoreBusyRef.current || isProcessing) return;
@@ -553,21 +492,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
                 : '未設定'}
             </div>
             
-            <div className="flex items-center gap-2">  
-              <input
-                type="time"
-                onChange={async (e) => {
-                  if (!e.target.value) return;
-                  const [h, m] = e.target.value.split(':').map(Number);
-                  const target = new Date();
-                  target.setHours(h, m, 0, 0);
-                  if (target.getTime() < Date.now()) target.setDate(target.getDate() + 1);
-                  await updateDoc(doc(db, 'game_config', 'current'), { nextRevealTime: target.getTime() });
-                  alert(`次の位置公開を ${e.target.value} にセットしました`);
-                }}
-                className="w-full bg-white text-amber-600 font-black px-3 py-2 rounded-xl outline-none text-center"
-              />
-            </div>
+            <p className="text-xs font-bold text-white/80">時刻の直接変更はSecurity Rules強化に伴い停止中です。</p>
           </div>
         <div className="bg-white/10 p-3 rounded-2xl border border-white/20">
             <label htmlFor="duration-input" className="block text-[9px] font-black uppercase opacity-70 mb-1">Search Duration (Min)</label>            <div className="flex items-center gap-3">
@@ -588,20 +513,11 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
         <h3 className="font-black flex items-center gap-2 mb-1 text-red-500"><AlertTriangle size={20} /> Penalty Roulette</h3>
         <p className="text-[10px] text-white/50 font-bold mb-4 uppercase">ミッション失敗時などのランダム罰</p>
         <div className="grid grid-cols-2 gap-3">
-          <button onClick={() => handleSendRandomPenalty('A')} disabled={isProcessing} className="py-4 bg-red-600/20 text-red-500 rounded-2xl font-black text-xs border border-red-600/50 active:bg-red-600">Team A へ</button>
-          <button onClick={() => handleSendRandomPenalty('B')} disabled={isProcessing} className="py-4 bg-blue-600/20 text-blue-500 rounded-2xl font-black text-xs border border-blue-600/50 active:bg-blue-600">Team B へ</button>
+          <button disabled className="py-4 bg-red-600/20 text-red-500/50 rounded-2xl font-black text-xs border border-red-600/30">Team A へ</button>
+          <button disabled className="py-4 bg-blue-600/20 text-blue-500/50 rounded-2xl font-black text-xs border border-blue-600/30">Team B へ</button>
         </div>
-
-        {/* --- これを追加 --- */}
-        {config.broadcastMessage && (
-          <button 
-            onClick={handleClearBroadcast}
-            disabled={isProcessing}
-            className="w-full py-2 bg-white/10 text-white/40 rounded-xl font-bold text-[10px] border border-white/5 flex items-center justify-center gap-2 active:bg-white/20"
-          >
-            <XCircle size={14} /> 表示中の通知を全員の画面から消去
-          </button>
-        )}
+        <p className="mt-3 text-[10px] font-bold text-white/60">通知・Penalty送信はTrusted操作への移行まで停止中です。</p>
+        {config.broadcastMessage && <p className="text-[10px] text-white/60">表示中の通知は直接消去できません。</p>}
 
       </section>
 
@@ -658,6 +574,7 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
       {/* 3. プレイヤー管理 */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter"><Users size={20} /> Players ({users.length})</h3>
+        <p className="mb-3 text-xs font-bold text-slate-500">安全なPlayer削除機能へ移行するまで、個別削除は利用できません。</p>
         <div className="space-y-3">
           {users.map(u => (
             <div key={u.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex justify-between items-center">
@@ -671,13 +588,11 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
               </div>
             <div className="flex gap-1.5">
                 {/* 1. 【復活】役割の個別入れ替えボタン（シールド） */}
-                <button 
-                  onClick={async () => { 
-                    await setDoc(doc(db, 'users', u.id), { 
-                      role: u.role === 'ONI' ? 'RUNNER' : 'ONI' 
-                    }, { merge: true }); 
-                  }} 
-                  className={`p-2 rounded-xl border ${u.role === 'ONI' ? 'bg-slate-900 text-white' : 'bg-white text-slate-400'}`}
+                <button
+                  type="button"
+                  disabled
+                  title="個別Role変更はTrusted操作へ移行するまで停止中です。"
+                  className={`p-2 rounded-xl border opacity-40 ${u.role === 'ONI' ? 'bg-slate-900 text-white' : 'bg-white text-slate-400'}`}
                 >
                   <Shield size={16} />
                 </button>
@@ -692,13 +607,11 @@ const AdminView: React.FC<Props> = ({ config, setConfig, users = [], missions = 
                 </button>
 
                 {/* 3. 削除ボタン */}
-                <button 
-                  onClick={async () => { 
-                    if (confirm('削除しますか？')) { 
-                      await deleteDoc(doc(db, 'users', u.id)); 
-                    } 
-                  }} 
-                  className="p-2 bg-red-50 text-red-500 rounded-xl border border-red-100"
+                <button
+                  type="button"
+                  disabled
+                  title="安全なPlayer削除機能へ移行予定です。"
+                  className="p-2 bg-red-50 text-red-300 rounded-xl border border-red-100 cursor-not-allowed"
                 >
                   <Trash2 size={16} />
                 </button>

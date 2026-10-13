@@ -1,4 +1,4 @@
-import { doc, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
+import { doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 

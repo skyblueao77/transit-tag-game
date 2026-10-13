@@ -14,23 +14,62 @@ service cloud.firestore {
     }
 
     function hasCurrentGameSession() {
-      return exists(/databases/$(database)/documents/game_config/current)
-        && get(/databases/$(database)/documents/game_config/current).data.gameSessionId is string
-        && get(/databases/$(database)/documents/game_config/current).data.sessionStartedAt is int
-        && get(/databases/$(database)/documents/game_config/current).data.sessionSchemaVersion is int
-        && get(/databases/$(database)/documents/game_config/current).data.sessionSchemaVersion >= 2;
+      let configPath = /databases/$(database)/documents/game_config/current;
+      return exists(configPath)
+        && get(configPath).data.gameSessionId is string
+        && get(configPath).data.gameSessionId.size() > 0
+        && get(configPath).data.sessionStartedAt is int
+        && get(configPath).data.sessionStartedAt >= 0
+        && get(configPath).data.sessionSchemaVersion is int
+        && get(configPath).data.sessionSchemaVersion >= 2;
     }
 
-
-    function ownerStatusChangeIsValid() {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']);
+    function validPlayerCreate(uid) {
+      let configPath = /databases/$(database)/documents/game_config/current;
+      let data = request.resource.data;
+      return signedIn()
+        && !isAdmin()
+        && request.auth.uid == uid
+        && hasCurrentGameSession()
+        && data.keys().hasOnly([
+          'id', 'name', 'role', 'team', 'color', 'score', 'status',
+          'gameSessionId', 'invincibleCards'
+        ])
+        && data.keys().hasAll([
+          'id', 'name', 'role', 'team', 'color', 'score', 'status',
+          'gameSessionId', 'invincibleCards'
+        ])
+        && data.id == uid
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 80
+        && data.role == 'RUNNER'
+        && data.team in ['A', 'B']
+        && data.color is string
+        && data.status == 'ACTIVE'
+        && data.score is int
+        && data.score == 0
+        && data.invincibleCards is int
+        && data.invincibleCards == 0
+        && data.gameSessionId == get(configPath).data.gameSessionId;
     }
 
-    function userDocumentHasNoCoordinateFields() {
-      return !request.resource.data.keys().hasAny([
-        'privateLatitude', 'privateLongitude', 'latitude', 'longitude',
-        'lastLat', 'lastLng', 'exposedLat', 'exposedLng', 'locationExposedUntil'
-      ]);
+    function validOwnerProfileUpdate(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80;
+    }
+
+    function isCurrentParticipant(uid) {
+      return signedIn()
+        && hasCurrentGameSession()
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
+        && get(/databases/$(database)/documents/users/$(uid)).data.gameSessionId
+          == get(/databases/$(database)/documents/game_config/current).data.gameSessionId;
     }
 
     match /admins/{uid} {
@@ -39,7 +78,7 @@ service cloud.firestore {
     }
 
     match /privateLocations/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow read: if signedIn() && request.auth.uid == uid;
       allow create, update: if signedIn()
         && request.auth.uid == uid
         && hasCurrentGameSession()
@@ -57,9 +96,7 @@ service cloud.firestore {
     }
 
     function isRevealViewer() {
-      return signedIn() && (isAdmin()
-        || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.team in ['A', 'B']));
+      return signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
     }
 
     function validExposedLocation(uid) {
@@ -84,8 +121,7 @@ service cloud.firestore {
         && data.expiresAt is timestamp
         && request.time < data.expiresAt
         && (!data.keys().hasAny(['playerId']) || data.playerId == uid)
-        && exists(playerPath)
-        && get(playerPath).data.team in ['A', 'B']
+        && isCurrentParticipant(uid)
         && get(playerPath).data.status != 'EMERGENCY'
         && get(playerPath).data.status != 'RETIRED'
         && ((!data.keys().hasAny(['revealScope']))
@@ -107,6 +143,7 @@ service cloud.firestore {
 
     function validOwnerExposedLocationWrite(uid) {
       return signedIn()
+        && !isAdmin()
         && request.auth.uid == uid
         && hasCurrentGameSession()
         && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt'])
@@ -122,8 +159,7 @@ service cloud.firestore {
         && request.resource.data.expiresAt is timestamp
         && request.time < request.resource.data.expiresAt
         && request.resource.data.expiresAt <= request.time + duration.value(5, 'm')
-        && exists(/databases/$(database)/documents/users/$(uid))
-        && get(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
+        && isCurrentParticipant(uid)
         && get(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY'
         && get(/databases/$(database)/documents/users/$(uid)).data.status != 'RETIRED'
         && exists(/databases/$(database)/documents/game_config/current)
@@ -176,7 +212,7 @@ service cloud.firestore {
         && resource.data.expiresAt > request.time
         && resource.data.safetyStatus == 'EMERGENCY'
         && resource.data.projectionKind == 'EMERGENCY'
-        && exists(/databases/$(database)/documents/users/$(uid))
+        && isCurrentParticipant(uid)
         && get(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY';
     }
 
@@ -190,39 +226,14 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if signedIn();
-      allow create: if signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.id == uid
-        && hasCurrentGameSession()
-        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-        && request.resource.data.team in ['A', 'B']
-        && request.resource.data.status == 'ACTIVE'
-        && request.resource.data.score == 0
-        && request.resource.data.invincibleCards == 0
-        && (!request.resource.data.keys().hasAny(['invincibleUntil'])
-          || request.resource.data.invincibleUntil == 0)
-        && (!request.resource.data.keys().hasAny(['waitingUntil'])
-          || request.resource.data.waitingUntil == 0)
-        && (!request.resource.data.keys().hasAny(['shinkansenStartTime'])
-          || request.resource.data.shinkansenStartTime == null)
-        && userDocumentHasNoCoordinateFields();
-      // Player-owned profile updates remain available, but status and
-      // authoritative gameplay fields are writable only by trusted actions.
-      allow update: if (isAdmin() && userDocumentHasNoCoordinateFields()
-          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['gameSessionId']))
-        || (signedIn() && request.auth.uid == uid
-          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-            'score', 'team', 'invincibleCards', 'invincibleUntil',
-            'waitingUntil', 'shinkansenStartTime', 'gameSessionId'
-          ])
-          && ownerStatusChangeIsValid()
-          && userDocumentHasNoCoordinateFields());
-      allow delete: if isAdmin();
+      allow create: if validPlayerCreate(uid);
+      allow update: if validOwnerProfileUpdate(uid);
+      allow delete: if false;
     }
 
     match /missions/{missionId} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if false;
     }
 
     match /missionCompletions/{completionId} {
@@ -230,39 +241,9 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    function revealDeadlinesAreClear(data) {
-      return (!data.keys().hasAny(['locationRevealUntil'])
-          || data.locationRevealUntil == null || data.locationRevealUntil == 0)
-        && (!data.keys().hasAny(['teamARevealUntil'])
-          || data.teamARevealUntil == null || data.teamARevealUntil == 0)
-        && (!data.keys().hasAny(['teamBRevealUntil'])
-          || data.teamBRevealUntil == null || data.teamBRevealUntil == 0);
-    }
-
-    function revealDeadlineIsUnchangedOrClear(oldData, newData, field) {
-      return !newData.keys().hasAny([field])
-        || newData[field] == null
-        || newData[field] == 0
-        || (oldData.keys().hasAny([field]) && newData[field] == oldData[field]);
-    }
-
-    function revealDeadlinesAreUnchangedOrClear(oldData, newData) {
-      return revealDeadlineIsUnchangedOrClear(oldData, newData, 'locationRevealUntil')
-        && revealDeadlineIsUnchangedOrClear(oldData, newData, 'teamARevealUntil')
-        && revealDeadlineIsUnchangedOrClear(oldData, newData, 'teamBRevealUntil');
-    }
-
     match /game_config/{configId} {
       allow read: if signedIn();
-      allow create: if isAdmin() && revealDeadlinesAreClear(request.resource.data)
-        && !request.resource.data.keys().hasAny(['gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion']);
-      allow update: if isAdmin()
-        && revealDeadlinesAreUnchangedOrClear(resource.data, request.resource.data)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion'
-        ]);
-      allow delete: if isAdmin()
-        && !resource.data.keys().hasAny(['gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion']);
+      allow write: if false;
     }
 
     match /{document=**} {

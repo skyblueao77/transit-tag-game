@@ -19,7 +19,7 @@ import {
   XCircle,
   Clock
 } from 'lucide-react';
-import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, GameLog, Role, Mission } from './types';
+import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, Role, Mission } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
@@ -49,7 +49,7 @@ import {
   signOutCurrentUser,
   subscribeAuthUserId,
 } from './src/infrastructure/firebase/auth';
-import { firebaseGameLogStore } from './src/infrastructure/firebase/gameplayStores';
+
 import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
 import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
 import { firebaseInvincibilityGateway } from './src/infrastructure/firebase/powerupActions';
@@ -111,21 +111,6 @@ const App: React.FC = () => {
     }
   }), []);
 
-  const addGameLog = useCallback(async (message: string, type: GameLog['type']): Promise<void> => {
-    const newLog: GameLog = {
-      id: Math.random().toString(36).substring(7),
-      timestamp: Date.now(),
-      message,
-      type,
-    };
-
-    const currentLogs: GameLog[] = gameConfig.logs ?? [];
-    try {
-      await firebaseGameLogStore.append(newLog, currentLogs);
-    } catch (error) {
-      console.error('Failed to add game log:', error);
-    }
-  }, [gameConfig.logs]);
 
   // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
   const isAdmin = useMemo(
@@ -206,7 +191,7 @@ const App: React.FC = () => {
     );
   }, [authUserId]);
 
-  // GameConfig 購読 & 初期ドキュメント作成
+  // GameConfig is read-only from clients; missing config remains uninitialized.
   useEffect(() => {
     if (!authUserId) return;
     return subscribeGameConfig(
@@ -221,10 +206,6 @@ const App: React.FC = () => {
       error => {
         console.error('Error fetching game config data:', error);
         alert('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
-      },
-      error => {
-        console.error('Failed to set initial game config:', error);
-        alert('初期ゲーム設定の保存に失敗しました。通信環境をご確認ください。');
       },
     );
   }, [authUserId, lastBroadcastTime]);
@@ -295,10 +276,7 @@ const App: React.FC = () => {
               duration: EXPOSE_DURATION,
             }, firebaseExposedLocationStore);
             if (exposeResult.ok === false) throw new Error(exposeResult.reason);
-            await addGameLog(
-              `Team ${currentUser.team} ${currentUser.name} が現在地を公開しました（5分間）`,
-              'SYSTEM'
-            );
+
             alert('現在地を公開しました。5分後に自動で非公開になります。');
           } catch (error) {
             console.error('Location expose error:', error);
@@ -327,16 +305,13 @@ const App: React.FC = () => {
         duration: EXPOSE_DURATION,
       }, firebaseExposedLocationStore);
       if (exposeResult.ok === false) throw new Error(exposeResult.reason);
-      await addGameLog(
-        `Team ${currentUser.team} ${currentUser.name} が現在地を公開しました（5分間）`,
-        'SYSTEM'
-      );
+
       alert('現在地を公開しました。5分後に自動で非公開になります。');
     } catch (error) {
       console.error('Location expose error:', error);
       alert('通信エラー：位置の公開に失敗しました。');
     }
-  }, [currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation, addGameLog]);
+  }, [currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
 
   // Mission scoring, identity, duplicate enforcement, and logging are server-authoritative.
   const handleScoreUpdate = useCallback(
@@ -710,7 +685,7 @@ const App: React.FC = () => {
                 element={
                   <AdminView
                     config={gameConfig}
-                    setConfig={async () => {}}
+
                     users={allUsers}
                     missions={missions}
                   />
