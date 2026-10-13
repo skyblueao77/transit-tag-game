@@ -18,7 +18,7 @@ const store: AdminPhaseStore = { runTransaction: work => firestore.runTransactio
   writeTransition: (uid, requestId, config, receipt: AdminPhaseReceipt) => { transaction.update(configRef, config as never); transaction.create(admins.doc(uid).collection('phaseTransitionRequests').doc(requestId), receipt); },
 })) };
 function code(reason: string): HttpsError['code'] { switch (reason) {
-  case 'UNAUTHENTICATED': return 'unauthenticated'; case 'PERMISSION_DENIED': return 'permission-denied'; case 'INVALID_ARGUMENT': return 'invalid-argument';
+  case 'UNAUTHENTICATED': return 'unauthenticated'; case 'PERMISSION_DENIED': return 'permission-denied'; case 'INVALID_ARGUMENT': return 'invalid-argument'; case 'SESSION_CHANGED': return 'failed-precondition';
   case 'CONFIG_NOT_FOUND': case 'FINAL_MISSION_NOT_FOUND': return 'not-found'; case 'INVALID_CONFIG': case 'TRANSITION_NOT_ALLOWED': return 'failed-precondition'; default: return 'internal';
 } }
 export const transitionGamePhase = onCall({ region: 'asia-northeast1' }, async request => {

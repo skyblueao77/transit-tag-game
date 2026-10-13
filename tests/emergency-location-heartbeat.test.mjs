@@ -35,6 +35,7 @@ function fixture({ status = 'EMERGENCY', authUserId = 'player-1', playerId = 'pl
   const input = {
     status,
     playerId,
+    expectedSessionId: 'session-current',
     authUserId,
     geolocation,
     updatePrivateLocation: async update => {
@@ -68,8 +69,8 @@ describe('Emergency private-location heartbeat', () => {
 
     assert.equal(geolocationCalls.length, 2);
     assert.deepEqual(updates, [
-      { playerId: 'player-1', latitude: 35.6812, longitude: 139.7671 },
-      { playerId: 'player-1', latitude: 35.6812, longitude: 139.7671 },
+      { playerId: 'player-1', expectedSessionId: 'session-current', latitude: 35.6812, longitude: 139.7671 },
+      { playerId: 'player-1', expectedSessionId: 'session-current', latitude: 35.6812, longitude: 139.7671 },
     ]);
     controller.stop();
   });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { revealPlayerLocations } from '../src/application/adminReveal.ts';
 
-const input = { scope: 'TEAM_A', durationMinutes: 10, requestId: 'retry-key' };
+const input = { scope: 'TEAM_A', durationMinutes: 10, requestId: 'retry-key', expectedSessionId: 'session-current' };
 const success = {
   ok: true,
   scope: 'TEAM_A',
@@ -13,7 +13,7 @@ const success = {
 };
 
 describe('Admin Reveal application use case', () => {
-  test('forwards only scope, duration, and requestId and preserves trusted result', async () => {
+  test('forwards scope, duration, requestId, and current Session and preserves trusted result', async () => {
     const calls = [];
     const gateway = {
       revealPlayerLocations: async intent => {

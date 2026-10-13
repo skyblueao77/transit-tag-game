@@ -6,11 +6,16 @@ export { revealPlayerLocations } from './adminReveal.ts';
 export { assignMissions, setMissionMode, syncMissionCatalog } from './adminMissionActions.ts';
 export { adjustTeamScore } from './adminScoreAdjustment.ts';
 export { executeGameReset, prepareGameReset } from './gameReset.ts';
+export { initializeGameSession } from './initializeGameSession.ts';
 export { capturePlayer } from './capturePlayer.ts';
 export { completeMission } from './completeMission.ts';
 export { exposeLocation } from './exposeLocation.ts';
 export { updatePrivateLocation } from './updatePrivateLocation.ts';
 export type {
+  InitializeGameSessionFailureReason,
+  InitializeGameSessionGateway,
+  InitializeGameSessionInput,
+  InitializeGameSessionResult,
   ActivateInvincibilityFailureReason,
   ActivateInvincibilityInput,
   ActivateInvincibilityResult,

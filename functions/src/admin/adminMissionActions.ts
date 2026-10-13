@@ -68,6 +68,8 @@ function callableCode(reason: string): HttpsError['code'] {
     case 'UNAUTHENTICATED': return 'unauthenticated';
     case 'PERMISSION_DENIED': return 'permission-denied';
     case 'INVALID_ARGUMENT': return 'invalid-argument';
+    case 'SESSION_CHANGED': return 'failed-precondition';
+    case 'REQUEST_ID_REUSED': return 'already-exists';
     case 'CONFIG_NOT_FOUND': return 'not-found';
     case 'INVALID_CONFIG':
     case 'INVALID_PHASE':

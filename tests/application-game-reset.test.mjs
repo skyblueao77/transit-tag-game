@@ -10,20 +10,21 @@ const preview = {
 };
 
 describe('game reset application use cases', () => {
-  test('forwards an empty prepare intent and returns the safe preview result', async () => {
+  test('forwards the subscribed Session for Preview and returns the safe result', async () => {
     const received = [];
     const result = { ok: true, preview };
-    assert.deepEqual(await prepareGameReset({}, { prepareGameReset: async input => { received.push(input); return result; } }), result);
-    assert.deepEqual(received, [{}]);
+    const input = { expectedSessionId: 'current-session' };
+    assert.deepEqual(await prepareGameReset(input, { prepareGameReset: async value => { received.push(value); return result; } }), result);
+    assert.deepEqual(received, [input]);
   });
 
-  test('forwards only confirmation token and request ID, and maps server readiness rejection', async () => {
+  test('forwards confirmation token, request ID, and Session; execution remains disabled', async () => {
     const received = [];
-    const input = { confirmationToken: 'token', requestId: 'request' };
+    const input = { confirmationToken: 'token', requestId: 'request', expectedSessionId: 'current-session' };
     const rejected = { ok: false, reason: 'RESET_NOT_READY' };
     assert.deepEqual(await executeGameReset(input, { executeGameReset: async value => { received.push(value); return rejected; } }), rejected);
     assert.deepEqual(received, [input]);
-    assert.deepEqual(Object.keys(received[0]).sort(), ['confirmationToken', 'requestId']);
+    assert.deepEqual(Object.keys(received[0]).sort(), ['confirmationToken', 'expectedSessionId', 'requestId']);
     assert.deepEqual(await executeGameReset(input, { executeGameReset: async () => ({ ok: false, reason: 'CONFIRMATION_STALE' }) }), { ok: false, reason: 'CONFIRMATION_STALE' });
   });
 

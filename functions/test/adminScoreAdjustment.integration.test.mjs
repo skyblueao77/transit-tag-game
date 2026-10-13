@@ -7,6 +7,8 @@ const authUrl = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/account
 const functionsUrl = `http://127.0.0.1:5001/${projectId}/asia-northeast1`;
 const firestoreClearUrl = `http://127.0.0.1:8080/emulator/v1/projects/${projectId}/databases/(default)/documents`;
 const authClearUrl = `http://127.0.0.1:9099/emulator/v1/projects/${projectId}/accounts`;
+const SESSION_ID = 'score-adjustment-session';
+const STALE_SESSION_ID = 'previous-score-adjustment-session';
 let sequence = 0;
 
 async function clearEmulatorState() {
@@ -75,12 +77,13 @@ async function createAdmin() {
 async function seedConfig(extra = {}) {
   await seed('game_config/current', {
     teamAScore: 20, teamBScore: 30, logs: [], gameStatus: 'DAY1_ACTIVE',
+    gameSessionId: SESSION_ID, sessionStartedAt: 1_700_000_000_000, sessionSchemaVersion: 2,
     missionMode: 'DIFFERENT', activeMissionA: null, activeMissionB: null,
     teamARole: 'RUNNER', teamBRole: 'ONI', untouched: 'preserve', ...extra,
   });
 }
-function adjustment(team, delta, reasonCode = 'CORRECTION', id = requestId()) {
-  return { team, delta, reasonCode, requestId: id };
+function adjustment(team, delta, reasonCode = 'CORRECTION', id = requestId(), expectedSessionId = SESSION_ID) {
+  return { team, delta, reasonCode, requestId: id, expectedSessionId };
 }
 
 describe('trusted Team score adjustment callable integration', () => {
@@ -159,13 +162,29 @@ describe('trusted Team score adjustment callable integration', () => {
     assert.equal(config.logs.filter(log => log.action === 'adjustTeamScore').length, 3);
   });
 
+  test('stale Session adjustment is denied before Config or receipt writes', async () => {
+    const admin = await createAdmin();
+    await seedConfig();
+    const request = adjustment('A', 6);
+    const before = await read('game_config/current');
+
+    const denied = await call('adjustTeamScore', { ...request, expectedSessionId: STALE_SESSION_ID }, admin.idToken);
+
+    assert.equal(denied.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual(await read('game_config/current'), before);
+    assert.equal(await read(`admins/${admin.localId}/scoreAdjustmentRequests/${request.requestId}`), null);
+  });
+
   test('adjustment after Mission Completion uses the latest Config score and preserves Player score', async () => {
     const player = await createUser();
     const admin = await createAdmin();
-    await seed(`users/${player.localId}`, { id: player.localId, name: 'Runner', team: 'A', status: 'ACTIVE', score: 3, invincibleCards: 0 });
+    await seed(`users/${player.localId}`, {
+      id: player.localId, name: 'Runner', team: 'A', status: 'ACTIVE', score: 3,
+      invincibleCards: 0, gameSessionId: SESSION_ID,
+    });
     await seed('missions/m01', { id: 'm01', points: 10, type: 'CHECKIN', title: 'Mission' });
     await seedConfig({ gameStatus: 'DAY1_ACTIVE', activeMissionA: 'm01', teamAScore: 0 });
-    const completion = await call('completeMission', { missionId: 'm01' }, player.idToken);
+    const completion = await call('completeMission', { missionId: 'm01', expectedSessionId: SESSION_ID }, player.idToken);
     assert.equal(completion.body.result.ok, true, JSON.stringify(completion.body));
     const beforeAdjustment = await read('game_config/current');
     const playerBefore = await read(`users/${player.localId}`);

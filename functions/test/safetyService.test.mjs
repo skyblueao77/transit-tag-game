@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
-  requestSafetyActionForPlayer,
+  requestSafetyActionForPlayer as requestSafetyActionService,
   SafetyServiceError,
 } from '../lib/functions/src/safety/safetyService.js';
 
 const now = 1_800_000_000_000;
+const sessionId = 'session_safety_2';
+function requestSafetyActionForPlayer(uid, request, store, runtime) {
+  return requestSafetyActionService(uid, request && typeof request === 'object' && !Array.isArray(request)
+    ? { ...request, expectedSessionId: request.expectedSessionId ?? sessionId } : request, store, runtime);
+}
 
 function basePlayer(overrides = {}) {
   return {
@@ -16,7 +21,7 @@ function basePlayer(overrides = {}) {
 }
 
 function baseConfig(overrides = {}) {
-  return { gameStatus: 'GAME_OVER', logs: [], ...overrides };
+  return { gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2, gameStatus: 'GAME_OVER', logs: [], ...overrides };
 }
 
 function fixture({ player = basePlayer(), config = baseConfig(), documentId = 'uid-a' } = {}) {
@@ -88,6 +93,48 @@ describe('server Safety Action service', () => {
     await rejectsWithoutWrites('INVALID_GAME_CONFIG', { config: baseConfig({ logs: 'invalid' }) });
   });
 
+  test('requires the current Config Session before reading or writing Player state', async () => {
+    for (const request of [
+      { action: 'EMERGENCY', reasonCode: 'OTHER' },
+      { action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: '' },
+      { action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: 'bad/session' },
+    ]) {
+      const { state, store } = fixture();
+      const reason = Object.hasOwn(request, 'expectedSessionId') ? 'SESSION_CHANGED' : 'INVALID_ARGUMENT';
+      await assert.rejects(requestSafetyActionService('uid-a', request, store, runtime()), error => error.reason === reason);
+      assert.deepEqual(state.events, []);
+      assert.deepEqual(state.writes, []);
+    }
+
+    for (const config of [
+      baseConfig({ gameSessionId: undefined }),
+      baseConfig({ gameSessionId: 'bad/session' }),
+      baseConfig({ sessionStartedAt: undefined }),
+      baseConfig({ sessionSchemaVersion: 1 }),
+    ]) {
+      const { state, store } = fixture({ config });
+      await assert.rejects(requestSafetyActionService('uid-a', {
+        action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: sessionId,
+      }, store, runtime()), error => error.reason === 'SESSION_CHANGED');
+      assert.deepEqual(state.events, ['read-config']);
+      assert.deepEqual(state.writes, []);
+    }
+
+    const stale = fixture();
+    await assert.rejects(requestSafetyActionService('uid-a', {
+      action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: 'session_stale',
+    }, stale.store, runtime()), error => error.reason === 'SESSION_CHANGED');
+    assert.deepEqual(stale.state.events, ['read-config']);
+    assert.deepEqual(stale.state.writes, []);
+
+    const missingConfig = fixture({ config: null });
+    await assert.rejects(requestSafetyActionService('uid-a', {
+      action: 'EMERGENCY', reasonCode: 'OTHER', expectedSessionId: sessionId,
+    }, missingConfig.store, runtime()), error => error.reason === 'CONFIG_NOT_FOUND');
+    assert.deepEqual(missingConfig.state.events, ['read-config']);
+    assert.deepEqual(missingConfig.state.writes, []);
+  });
+
   test('rejects malformed requests and action/reason mismatches with zero writes', async () => {
     for (const request of [null, [], 'x', {}, { action: 'UNKNOWN', reasonCode: 'OTHER' },
       { action: 'EMERGENCY' }, { action: 'EMERGENCY', reasonCode: 'OTHER', message: 'extra' },
@@ -125,7 +172,7 @@ describe('server Safety Action service', () => {
       assert.equal(state.player.score, before.score);
       assert.equal(state.player.team, before.team);
       assert.equal(state.writes.length, 2);
-      assert.deepEqual(state.events, ['read-player', 'read-config', 'write-player', 'write-logs']);
+      assert.deepEqual(state.events, ['read-config', 'read-player', 'write-player', 'write-logs']);
       assert.equal(state.config.logs.length, 1);
       assert.deepEqual(state.config.logs[0], {
         id: 'server-safety-log', timestamp: now,

@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
-  activateInvincibilityForPlayer,
+  activateInvincibilityForPlayer as activateInvincibilityService,
   InvincibilityServiceError,
 } from '../lib/functions/src/powerup/invincibilityService.js';
 import { INVINCIBILITY_DURATION_MS } from '../../src/game/time.ts';
 
 const fixedNow = 1_700_000_000_000;
+const sessionId = 'session_powerup_2';
+function activateInvincibilityForPlayer(uid, store, runtime) {
+  return activateInvincibilityService(uid, sessionId, store, runtime);
+}
 
 function basePlayer(overrides = {}) {
   return {
@@ -24,6 +28,7 @@ function basePlayer(overrides = {}) {
 
 function baseConfig(overrides = {}) {
   return {
+    gameSessionId: sessionId, sessionStartedAt: fixedNow, sessionSchemaVersion: 2,
     gameStatus: 'DAY1_ACTIVE',
     teamARole: 'RUNNER',
     teamBRole: 'ONI',
@@ -35,14 +40,14 @@ function baseConfig(overrides = {}) {
 }
 
 function fixture({ player = basePlayer(), config = baseConfig() } = {}) {
-  const state = { player, config, writes: [] };
+  const state = { player, config, writes: [], reads: [] };
   const store = {
     async runTransaction(work) {
       let pendingWrite;
       const transaction = {
-        readPlayer: async () => state.player,
-        readGameConfig: async () => state.config,
-        writeInvincibility: write => { pendingWrite = structuredClone(write); },
+        readPlayer: async () => { state.reads.push('player'); return state.player; },
+        readGameConfig: async () => { state.reads.push('config'); return state.config; },
+        writeInvincibility: write => { state.reads.push('write'); pendingWrite = structuredClone(write); },
       };
       const result = await work(transaction);
       if (pendingWrite) {
@@ -88,6 +93,43 @@ describe('server invincibility service', () => {
   test('rejects missing player or game config without authoritative writes', async () => {
     await assertRejectedWithoutWrites('PLAYER_NOT_FOUND', { player: null });
     await assertRejectedWithoutWrites('CONFIG_NOT_FOUND', { config: null });
+  });
+
+  test('rejects missing, malformed, stale, or invalid Config Sessions before Player reads or writes', async () => {
+    for (const expectedSessionId of [undefined, '', 'bad/session', 7]) {
+      const { state, store } = fixture();
+      await rejectsWith('SESSION_CHANGED', () => activateInvincibilityService(
+        'uid-a', expectedSessionId, store, fixedRuntime(),
+      ));
+      assert.deepEqual(state.reads, []);
+      assert.equal(state.writes.length, 0);
+    }
+
+    for (const config of [
+      baseConfig({ gameSessionId: undefined }),
+      baseConfig({ gameSessionId: 'bad/session' }),
+      baseConfig({ sessionStartedAt: undefined }),
+      baseConfig({ sessionSchemaVersion: 1 }),
+    ]) {
+      const { state, store } = fixture({ config });
+      await rejectsWith('SESSION_CHANGED', () => activateInvincibilityForPlayer('uid-a', store, fixedRuntime()));
+      assert.deepEqual(state.reads, ['config']);
+      assert.equal(state.writes.length, 0);
+    }
+
+    const stale = fixture();
+    await rejectsWith('SESSION_CHANGED', () => activateInvincibilityService(
+      'uid-a', 'session_stale', stale.store, fixedRuntime(),
+    ));
+    assert.deepEqual(stale.state.reads, ['config']);
+    assert.equal(stale.state.writes.length, 0);
+
+    const missingConfig = fixture({ config: null });
+    await rejectsWith('CONFIG_NOT_FOUND', () => activateInvincibilityForPlayer(
+      'uid-a', missingConfig.store, fixedRuntime(),
+    ));
+    assert.deepEqual(missingConfig.state.reads, ['config']);
+    assert.equal(missingConfig.state.writes.length, 0);
   });
 
   test('rejects malformed identity, participant team, status, cards, and deadline without writes', async () => {
@@ -212,7 +254,7 @@ describe('server invincibility service', () => {
       }),
     };
     await activateInvincibilityForPlayer('uid-a', store, fixedRuntime());
-    assert.deepEqual(events, ['player-read', 'config-read', 'write']);
+    assert.deepEqual(events, ['config-read', 'player-read', 'write']);
   });
 
   test('obtains clock and log id once outside retryable transaction work', async () => {

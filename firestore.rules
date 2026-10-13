@@ -13,6 +13,14 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
+    function hasCurrentGameSession() {
+      return exists(/databases/$(database)/documents/game_config/current)
+        && get(/databases/$(database)/documents/game_config/current).data.gameSessionId is string
+        && get(/databases/$(database)/documents/game_config/current).data.sessionStartedAt is int
+        && get(/databases/$(database)/documents/game_config/current).data.sessionSchemaVersion is int
+        && get(/databases/$(database)/documents/game_config/current).data.sessionSchemaVersion >= 2;
+    }
+
 
     function ownerStatusChangeIsValid() {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']);
@@ -34,8 +42,10 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow create, update: if signedIn()
         && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['latitude', 'longitude', 'updatedAt'])
-        && request.resource.data.keys().hasAll(['latitude', 'longitude', 'updatedAt'])
+        && hasCurrentGameSession()
+        && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
+        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         && request.resource.data.latitude is number
         && request.resource.data.latitude >= -90
         && request.resource.data.latitude <= 90
@@ -59,9 +69,11 @@ service cloud.firestore {
       return exists(configPath)
         && get(configPath).data.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
         && data.keys().hasOnly([
-          'playerId', 'latitude', 'longitude', 'capturedAt', 'expiresAt', 'revealScope'
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt', 'revealScope'
         ])
-        && data.keys().hasAll(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && hasCurrentGameSession()
+        && data.gameSessionId == get(configPath).data.gameSessionId
+        && data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt'])
         && data.latitude is number
         && data.latitude >= -90
         && data.latitude <= 90
@@ -96,8 +108,10 @@ service cloud.firestore {
     function validOwnerExposedLocationWrite(uid) {
       return signedIn()
         && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
-        && request.resource.data.keys().hasAll(['latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && hasCurrentGameSession()
+        && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && request.resource.data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt'])
+        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         && request.resource.data.latitude is number
         && request.resource.data.latitude >= -90
         && request.resource.data.latitude <= 90
@@ -117,7 +131,10 @@ service cloud.firestore {
     }
 
     function ownerMayReplaceSnapshot() {
-      return !resource.data.keys().hasAny(['revealScope'])
+      return !resource.data.keys().hasAny(['gameSessionId'])
+        || !hasCurrentGameSession()
+        || resource.data.gameSessionId != get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+        || !resource.data.keys().hasAny(['revealScope'])
         || resource.data.revealScope == 'INDIVIDUAL'
         || !(resource.data.expiresAt is timestamp)
         || resource.data.expiresAt <= request.time;
@@ -134,14 +151,16 @@ service cloud.firestore {
     }
 
     function validEmergencyProjection(uid) {
-      return resource.data.keys().hasOnly([
-          'playerId', 'latitude', 'longitude', 'projectedAt',
+      return hasCurrentGameSession()
+        && resource.data.keys().hasOnly([
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
           'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
         ])
         && resource.data.keys().hasAll([
-          'playerId', 'latitude', 'longitude', 'projectedAt',
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
           'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
         ])
+        && resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         && resource.data.playerId == uid
         && resource.data.latitude is number
         && resource.data.latitude >= -90
@@ -174,6 +193,8 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.id == uid
+        && hasCurrentGameSession()
+        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         && request.resource.data.team in ['A', 'B']
         && request.resource.data.status == 'ACTIVE'
         && request.resource.data.score == 0
@@ -187,11 +208,12 @@ service cloud.firestore {
         && userDocumentHasNoCoordinateFields();
       // Player-owned profile updates remain available, but status and
       // authoritative gameplay fields are writable only by trusted actions.
-      allow update: if (isAdmin() && userDocumentHasNoCoordinateFields())
+      allow update: if (isAdmin() && userDocumentHasNoCoordinateFields()
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['gameSessionId']))
         || (signedIn() && request.auth.uid == uid
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
             'score', 'team', 'invincibleCards', 'invincibleUntil',
-            'waitingUntil', 'shinkansenStartTime'
+            'waitingUntil', 'shinkansenStartTime', 'gameSessionId'
           ])
           && ownerStatusChangeIsValid()
           && userDocumentHasNoCoordinateFields());
@@ -232,10 +254,15 @@ service cloud.firestore {
 
     match /game_config/{configId} {
       allow read: if signedIn();
-      allow create: if isAdmin() && revealDeadlinesAreClear(request.resource.data);
+      allow create: if isAdmin() && revealDeadlinesAreClear(request.resource.data)
+        && !request.resource.data.keys().hasAny(['gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion']);
       allow update: if isAdmin()
-        && revealDeadlinesAreUnchangedOrClear(resource.data, request.resource.data);
-      allow delete: if isAdmin();
+        && revealDeadlinesAreUnchangedOrClear(resource.data, request.resource.data)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion'
+        ]);
+      allow delete: if isAdmin()
+        && !resource.data.keys().hasAny(['gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion']);
     }
 
     match /{document=**} {

@@ -5,6 +5,8 @@ const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
 
+const CURRENT_SESSION_ID = 'session_rules_current';
+const SESSION_STARTED_AT = 1_800_000_000_000;
 let anonymousToken;
 let userAToken;
 let userAUid;
@@ -64,9 +66,10 @@ function fields(values) {
   };
 }
 
-function privateLocationFields(latitude = 35.6812, longitude = 139.7671) {
+function privateLocationFields(latitude = 35.6812, longitude = 139.7671, gameSessionId = CURRENT_SESSION_ID) {
   return {
     fields: {
+      gameSessionId: { stringValue: gameSessionId },
       latitude: { doubleValue: latitude },
       longitude: { doubleValue: longitude },
       updatedAt: { timestampValue: '2026-01-01T00:00:00Z' },
@@ -77,6 +80,7 @@ function privateLocationFields(latitude = 35.6812, longitude = 139.7671) {
 function exposedLocationFields(latitude = 35.6812, longitude = 139.7671, extras = {}) {
   const now = Date.now();
   return fields({
+    gameSessionId: extras.gameSessionId ?? CURRENT_SESSION_ID,
     latitude,
     longitude,
     capturedAt: new Date(now - 1_000),
@@ -86,11 +90,12 @@ function exposedLocationFields(latitude = 35.6812, longitude = 139.7671, extras 
   });
 }
 
-function emergencyProjectionFields(playerId, { expiresAt = Date.now() + 60_000 } = {}) {
+function emergencyProjectionFields(playerId, { expiresAt = Date.now() + 60_000, gameSessionId = CURRENT_SESSION_ID } = {}) {
   const projectedAt = Date.now();
   return {
     fields: {
       playerId: { stringValue: playerId },
+      gameSessionId: { stringValue: gameSessionId },
       latitude: { doubleValue: 35.6812 },
       longitude: { doubleValue: 139.7671 },
       projectedAt: { timestampValue: new Date(projectedAt).toISOString() },
@@ -134,16 +139,19 @@ before(async () => {
   adminToken = (await auth('signUp', { email: 'admin@example.test', password: 'test-password-123' })).idToken;
 
   await seed(`users/${userAUid}`, {
-    id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0, invincibleCards: 1, invincibleUntil: 0,
+    id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'User A', status: 'ACTIVE', score: 0, invincibleCards: 1, invincibleUntil: 0,
   });
   await seed(`users/${userBUid}`, {
-    id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0,
+    id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0,
   });
   await seed('missions/mission-1', { title: 'Test mission' });
   await seed('missionCompletions/seed-team-mission', {
     missionId: 'mission-1', team: 'A', completedBy: userAUid, points: 15,
   });
-  await seed('game_config/current', { status: 'WAITING' });
+  await seed('game_config/current', {
+      status: 'WAITING', gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+    });
   await seed(`users/${unknownViewerUid}`, {
     id: unknownViewerUid, team: 'ADMIN', name: 'Unknown viewer', status: 'ACTIVE', score: 0, invincibleCards: 0,
   });
@@ -166,7 +174,7 @@ describe('Firestore Security Rules', () => {
 
   test('rejects unauthenticated user creation and coordinate fields in public user documents', async () => {
     const validCreate = {
-      id: userDUid, team: 'A', name: 'User D', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'User D', status: 'ACTIVE', score: 0, invincibleCards: 0,
     };
     assert.equal((await firestore(`users/${userDUid}`, {
       method: 'PATCH',
@@ -193,7 +201,7 @@ describe('Firestore Security Rules', () => {
       token: userCToken,
       method: 'PATCH',
       body: fields({
-        id: userCUid, team: 'A', name: 'User C', status: 'ACTIVE', score: 0, invincibleCards: 0,
+        id: userCUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'User C', status: 'ACTIVE', score: 0, invincibleCards: 0,
       }),
     })).status, 200);
   });
@@ -203,7 +211,7 @@ describe('Firestore Security Rules', () => {
       token: userAToken,
       method: 'PATCH',
       body: fields({
-        id: userAUid, team: 'A', name: 'Updated A', status: 'ACTIVE', score: 0,
+        id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Updated A', status: 'ACTIVE', score: 0,
         invincibleCards: 1, invincibleUntil: 0,
       }),
     })).status, 200);
@@ -245,7 +253,7 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(`users/${userBUid}`, {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ name: 'Updated by admin' }),
+      body: fields({ name: 'Updated by admin', gameSessionId: CURRENT_SESSION_ID }),
     })).status, 200);
   });
 
@@ -276,7 +284,7 @@ describe('Firestore Security Rules', () => {
       })).status, 403, `Owner status ${status} should be denied`);
     }
     const adminUser = status => fields({
-      id: userBUid, team: 'B', name: 'User B', status, score: 0,
+      id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'User B', status, score: 0,
       invincibleCards: 0, invincibleUntil: 0,
     });
     assert.equal((await firestore(`users/${userBUid}`, {
@@ -292,7 +300,7 @@ describe('Firestore Security Rules', () => {
       token: userAToken,
       method: 'PATCH',
       body: fields({
-        id: userAUid, team: 'A', name: 'Still editable', status: 'ACTIVE', score: 0,
+        id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Still editable', status: 'ACTIVE', score: 0,
         invincibleCards: 1, invincibleUntil: 0,
       }),
     })).status, 200);
@@ -357,7 +365,7 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(`users/${userBUid}`, {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ invincibleCards: 2, invincibleUntil: futureDeadline }),
+      body: fields({ gameSessionId: CURRENT_SESSION_ID, invincibleCards: 2, invincibleUntil: futureDeadline }),
     })).status, 200);
   });
 
@@ -388,6 +396,11 @@ describe('Firestore Security Rules', () => {
       method: 'PATCH',
       body: privateLocationFields(0, 0),
     })).status, 200);
+    assert.equal((await firestore(`privateLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: privateLocationFields(0, 0, 'old-session'),
+    })).status, 403);
     assert.equal((await firestore(`privateLocations/${userAUid}`, { token: userAToken })).status, 200);
     assert.equal((await firestore(`privateLocations/${userAUid}`, { token: userBToken })).status, 403);
     assert.equal((await firestore(`privateLocations/${userAUid}`, {
@@ -461,15 +474,23 @@ describe('Firestore Security Rules', () => {
 
   test('protects exposed location snapshots and rejects legacy snapshot fields', async () => {
     await seed(`users/${userAUid}`, {
-      id: userAUid, team: 'A', name: 'User A', status: 'ACTIVE', score: 0, invincibleCards: 1, invincibleUntil: 0,
+      id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'User A', status: 'ACTIVE', score: 0, invincibleCards: 1, invincibleUntil: 0,
     });
     await seed(`users/${userBUid}`, {
-      id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0,
+      id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0,
     });
-    await seed('game_config/current', { gameStatus: 'DAY1_ACTIVE' });
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+    });
     assert.equal((await firestore(`exposedLocations/${userAUid}`)).status, 403);
     assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userAToken })).status, 404);
 
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(0, 0, { gameSessionId: 'old-session' }),
+    })).status, 403);
     assert.equal((await firestore(`exposedLocations/${userAUid}`, {
       token: userAToken,
       method: 'PATCH',
@@ -553,18 +574,20 @@ describe('Firestore Security Rules', () => {
     })).status, 403);
 
     await seed('users/' + userBUid, {
-      id: userBUid, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'User B', status: 'ACTIVE', score: 0, invincibleCards: 0,
     });
     await seed('game_config/current', {
-      gameStatus: 'DAY1_ACTIVE', teamARevealUntil: new Date(Date.now() + 60_000),
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+      teamARevealUntil: new Date(Date.now() + 60_000),
     });
     await seed(`exposedLocations/${userAUid}`, {
-      latitude: 35.1, longitude: 139.1, playerId: userAUid,
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1, playerId: userAUid,
       capturedAt: new Date(), expiresAt: new Date(Date.now() + 60_000), revealScope: 'TEAM_A',
     });
     assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userBToken })).status, 200);
     await seed(`exposedLocations/${userBUid}`, {
-      latitude: 35.1, longitude: 139.1, playerId: userBUid,
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1, playerId: userBUid,
       capturedAt: new Date(), expiresAt: new Date(Date.now() + 60_000), revealScope: 'TEAM_A',
     });
     assert.equal((await firestore(`exposedLocations/${userBUid}`, { token: userAToken })).status, 403);
@@ -575,7 +598,7 @@ describe('Firestore Security Rules', () => {
       body: exposedLocationFields(2, 2),
     })).status, 403, 'Owner cannot replace a live Admin-scoped snapshot');
     await seed(`exposedLocations/${userAUid}`, {
-      latitude: 35.1, longitude: 139.1, playerId: userAUid,
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1, playerId: userAUid,
       capturedAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1), revealScope: 'TEAM_A',
     });
     assert.equal((await firestore(`exposedLocations/${userAUid}`, {
@@ -584,16 +607,53 @@ describe('Firestore Security Rules', () => {
       body: exposedLocationFields(2, 2),
     })).status, 200, 'Owner can replace an expired Admin snapshot');
 
+    const nextSessionId = 'rules-next-session';
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: nextSessionId,
+      sessionStartedAt: SESSION_STARTED_AT + 1, sessionSchemaVersion: 2,
+    });
+    await seed(`users/${userAUid}`, {
+      id: userAUid, gameSessionId: nextSessionId, team: 'A', name: 'User A',
+      status: 'ACTIVE', score: 0, invincibleCards: 1,
+    });
+    await seed(`exposedLocations/${userAUid}`, {
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1,
+      playerId: userAUid, capturedAt: new Date(), expiresAt: new Date(Date.now() + 60_000),
+      revealScope: 'GLOBAL',
+    });
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userAToken })).status, 403,
+      'Owner cannot read a live snapshot from the old Session');
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: exposedLocationFields(2, 2, { gameSessionId: nextSessionId }),
+    })).status, 200, 'Owner can replace a stale Session snapshot immediately');
+    assert.equal((await firestore(`exposedLocations/${userAUid}`, { token: userAToken })).status, 200,
+      'The replacement current Session snapshot is readable');
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+    });
+    await seed(`users/${userAUid}`, {
+      id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'User A',
+      status: 'ACTIVE', score: 0, invincibleCards: 1,
+    });
+    await seed(`exposedLocations/${userAUid}`, {
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1,
+      playerId: userAUid, capturedAt: new Date(Date.now() - 60_000),
+      expiresAt: new Date(Date.now() - 1), revealScope: 'GLOBAL',
+    });
+
     await seed(`users/${userEUid}`, {
       id: userEUid, team: 'A', name: 'User E', status: 'ACTIVE', score: 0, invincibleCards: 0,
     });
     await seed(`exposedLocations/${userEUid}`, {
-      latitude: 35.1, longitude: 139.1, playerId: userEUid,
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1, playerId: userEUid,
       capturedAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1), revealScope: 'TEAM_A',
     });
     assert.equal((await firestore(`exposedLocations/${userEUid}`, { token: userAToken })).status, 403);
     await seed(`exposedLocations/${userEUid}`, {
-      latitude: 35.1, longitude: 139.1, playerId: userEUid,
+      gameSessionId: CURRENT_SESSION_ID, latitude: 35.1, longitude: 139.1, playerId: userEUid,
       capturedAt: new Date(), expiresAt: Date.now() + 60_000, revealScope: 'TEAM_A',
     });
     assert.equal((await firestore(`exposedLocations/${userEUid}`, { token: userAToken })).status, 403);
@@ -674,14 +734,14 @@ describe('Firestore Security Rules', () => {
       token: userDToken,
       method: 'PATCH',
       body: fields({
-        id: userDUid, team: 'A', name: 'Projection Player', status: 'ACTIVE', score: 0,
-        invincibleCards: 0,
+        id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Projection Player', status: 'ACTIVE',
+        score: 0, invincibleCards: 0,
       }),
     })).status, 200);
     assert.equal((await firestore(`users/${userDUid}`, {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ status: 'EMERGENCY' }),
+      body: fields({ id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Projection Player', status: 'EMERGENCY', score: 0, invincibleCards: 0 }),
     })).status, 200);
 
     const path = `emergencyLocationProjections/${userDUid}`;
@@ -690,6 +750,8 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(path, { token: userDToken, method: 'PATCH', body: freshProjection })).status, 403);
     assert.equal((await firestore(path, { token: adminToken, method: 'PATCH', body: freshProjection })).status, 403);
 
+    assert.equal((await firestore(path, { token: 'owner', method: 'PATCH', body: emergencyProjectionFields(userDUid, { gameSessionId: 'old-session' }) })).status, 200);
+    assert.equal((await firestore(path, { token: adminToken })).status, 403);
     assert.equal((await firestore(path, { token: 'owner', method: 'PATCH', body: freshProjection })).status, 200);
     for (const token of [userDToken, adminToken]) {
       assert.equal((await firestore(path, {
@@ -715,7 +777,7 @@ describe('Firestore Security Rules', () => {
     await firestore(`users/${userDUid}`, {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ status: 'RETIRED' }),
+      body: fields({ id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Projection Player', status: 'RETIRED', score: 0, invincibleCards: 0 }),
     });
     assert.equal((await firestore(path, { token: adminToken })).status, 403);
   });
@@ -730,7 +792,10 @@ describe('Firestore Security Rules', () => {
     };
 
     for (const field of Object.keys(deadlineFields)) {
-      await seed('game_config/current', { gameStatus: 'DAY1_ACTIVE' });
+      await seed('game_config/current', {
+        gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID,
+        sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+      });
       assert.equal((await firestore('game_config/current', {
         token: adminToken,
         method: 'PATCH',
@@ -739,7 +804,8 @@ describe('Firestore Security Rules', () => {
     }
 
     await seed('game_config/current', {
-      gameStatus: 'DAY1_ACTIVE', ...deadlineFields,
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2, ...deadlineFields,
     });
     assert.equal((await firestore('game_config/current', {
       token: adminToken,
@@ -750,13 +816,13 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore('game_config/current', {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ gameStatus: 'DAY1_ACTIVE', announcement: 'ordinary update', ...deadlineFields }),
+      body: fields({ gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2, announcement: 'ordinary update', ...deadlineFields }),
     })).status, 200, 'Admin may update unrelated Config fields with unchanged deadlines');
 
     const reset = await firestore('game_config/current', {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ gameStatus: 'PRE_GAME' }),
+      body: fields({ gameStatus: 'PRE_GAME', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2 }),
     });
     assert.equal(reset.status, 200, 'Reset may clear Reveal deadlines');
     const resetConfig = await reset.json();
@@ -765,16 +831,45 @@ describe('Firestore Security Rules', () => {
     }
   });
 
+  test('Admin clients cannot create, change, or delete authoritative Session metadata', async () => {
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+    });
+    assert.equal((await firestore('game_config/current', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({
+        gameStatus: 'DAY1_ACTIVE', gameSessionId: 'client-session',
+        sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2,
+      }),
+    })).status, 403, 'Admin cannot change gameSessionId');
+    assert.equal((await firestore('game_config/current', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ gameStatus: 'DAY1_ACTIVE', sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2 }),
+    })).status, 403, 'Admin cannot remove gameSessionId');
+    assert.equal((await firestore('game_config/current', {
+      token: adminToken,
+      method: 'DELETE',
+    })).status, 403, 'Admin cannot delete an initialized Config');
+    assert.equal((await firestore('game_config/client-created', {
+      token: adminToken,
+      method: 'PATCH',
+      body: fields({ gameSessionId: 'client-session', sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2 }),
+    })).status, 403, 'Admin cannot create Config with Session metadata');
+  });
+
   test('allows an administrator to perform management writes', async () => {
     assert.equal((await firestore('game_config/current', {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ status: 'RUNNING' }),
+      body: fields({ status: 'RUNNING', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2 }),
     })).status, 200);
     assert.equal((await firestore('game_config/current', {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ announcement: 'Updated by Admin' }),
+      body: fields({ announcement: 'Updated by Admin', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT, sessionSchemaVersion: 2 }),
     })).status, 200);
     assert.equal((await firestore('missions/mission-1', {
       token: adminToken,
@@ -784,7 +879,7 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(`users/${userBUid}`, {
       token: adminToken,
       method: 'PATCH',
-      body: fields({ status: 'WAITING', waitingUntil: Date.now() + 60 * 60 * 1000, shinkansenStartTime: null }),
+      body: fields({ id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'User B', status: 'WAITING', score: 0, invincibleCards: 0, waitingUntil: Date.now() + 60 * 60 * 1000, shinkansenStartTime: null }),
     })).status, 200);
     assert.equal((await firestore(`users/${userBUid}`, {
       token: adminToken,

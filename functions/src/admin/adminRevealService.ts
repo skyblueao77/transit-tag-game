@@ -9,11 +9,14 @@ import type {
   AdminRevealScope,
   AdminRevealSnapshot,
 } from '../../../src/game/adminReveal';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type AdminRevealFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
+  | 'REQUEST_ID_REUSED'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_GAME_CONFIG'
   | 'INVALID_ROSTER'
@@ -36,6 +39,7 @@ export interface AdminRevealDocument {
 export interface AdminRevealReceipt {
   action: 'revealPlayerLocations';
   requestId: string;
+  gameSessionId: string;
   scope: AdminRevealScope;
   expiresAt: number;
   projectedCount: number;
@@ -86,12 +90,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseRequest(request: unknown): { scope: AdminRevealScope; durationMinutes: number; requestId: string } {
+function parseRequest(request: unknown): { scope: AdminRevealScope; durationMinutes: number; requestId: string; expectedSessionId: string } {
   if (!isRecord(request)
-    || Object.keys(request).length !== 3
+    || Object.keys(request).length !== 4
     || !Object.prototype.hasOwnProperty.call(request, 'scope')
     || !Object.prototype.hasOwnProperty.call(request, 'durationMinutes')
     || !Object.prototype.hasOwnProperty.call(request, 'requestId')
+    || !Object.prototype.hasOwnProperty.call(request, 'expectedSessionId')
+    || !isValidGameSessionId(request.expectedSessionId)
     || (request.scope !== 'GLOBAL' && request.scope !== 'TEAM_A' && request.scope !== 'TEAM_B')
     || typeof request.durationMinutes !== 'number'
     || !Number.isInteger(request.durationMinutes)
@@ -105,6 +111,7 @@ function parseRequest(request: unknown): { scope: AdminRevealScope; durationMinu
     scope: request.scope,
     durationMinutes: request.durationMinutes,
     requestId: request.requestId,
+    expectedSessionId: request.expectedSessionId,
   };
 }
 
@@ -153,7 +160,7 @@ function privateLocationTargetIds(roster: readonly AdminRevealPlayer[], scope: A
     .map(player => player.id);
 }
 
-function readReceipt(data: Record<string, unknown>, requestId: string): AdminRevealSuccess {
+function readReceipt(data: Record<string, unknown>, requestId: string, expectedSessionId: string): AdminRevealSuccess {
   const expiresAt = timestampMillis(data.expiresAt);
   if (data.action !== 'revealPlayerLocations'
     || data.requestId !== requestId
@@ -163,6 +170,7 @@ function readReceipt(data: Record<string, unknown>, requestId: string): AdminRev
     || !Number.isInteger(data.skippedCount) || (data.skippedCount as number) < 0) {
     throw new AdminRevealServiceError('PERSISTENCE_ERROR');
   }
+  if (data.gameSessionId !== expectedSessionId) throw new AdminRevealServiceError('REQUEST_ID_REUSED');
   return {
     ok: true,
     scope: data.scope,
@@ -194,7 +202,7 @@ export async function revealPlayerLocationsForAdmin(
   if (typeof authUid !== 'string' || authUid.length === 0) {
     throw new AdminRevealServiceError('UNAUTHENTICATED');
   }
-  const { scope, durationMinutes, requestId } = parseRequest(request);
+  const { scope, durationMinutes, requestId, expectedSessionId } = parseRequest(request);
   const now = runtime.now();
   const logId = runtime.createLogId();
   if (!Number.isFinite(now) || now < 0 || typeof logId !== 'string' || logId.length === 0) {
@@ -206,14 +214,13 @@ export async function revealPlayerLocationsForAdmin(
       if (!await transaction.readAdmin(authUid)) {
         throw new AdminRevealServiceError('PERMISSION_DENIED');
       }
+      const config = validateConfig(await transaction.readGameConfig());
+      if (!validateExpectedSession(config, expectedSessionId).valid) {
+        throw new AdminRevealServiceError('SESSION_CHANGED');
+      }
       const priorReceipt = await transaction.readReceipt(authUid, requestId);
-      if (priorReceipt) return readReceipt(priorReceipt, requestId);
-
-      const [rawConfig, rosterDocuments] = await Promise.all([
-        transaction.readGameConfig(),
-        transaction.readParticipantRoster(),
-      ]);
-      const config = validateConfig(rawConfig);
+      if (priorReceipt) return readReceipt(priorReceipt, requestId, expectedSessionId);
+      const rosterDocuments = await transaction.readParticipantRoster();
       const roster = validateRoster(rosterDocuments);
       const targetIds = privateLocationTargetIds(roster, scope);
       const [privateLocations] = await Promise.all([
@@ -225,8 +232,9 @@ export async function revealPlayerLocationsForAdmin(
         latitude: document.data.latitude,
         longitude: document.data.longitude,
         updatedAt: timestampMillis(document.data.updatedAt),
+        gameSessionId: typeof document.data.gameSessionId === 'string' ? document.data.gameSessionId : undefined,
       }));
-      const plan = resolveAdminRevealPlan({ scope, durationMinutes, roster, locations, now });
+      const plan = resolveAdminRevealPlan({ scope, durationMinutes, roster, locations, gameSessionId: expectedSessionId, now });
       if (!plan.allowed) throwCoreRejection(plan.reason);
       if (plan.snapshots.length + 2 > MAX_TRANSACTION_WRITES) {
         throw new AdminRevealServiceError('WRITE_LIMIT_EXCEEDED');
@@ -235,6 +243,7 @@ export async function revealPlayerLocationsForAdmin(
       const receipt: AdminRevealReceipt = {
         action: 'revealPlayerLocations',
         requestId,
+        gameSessionId: expectedSessionId,
         scope,
         expiresAt: plan.expiresAt,
         projectedCount: plan.snapshots.length,

@@ -20,7 +20,7 @@ const sessionIds = [
   '223e4567-e89b-42d3-a456-426614174002',
   '223e4567-e89b-42d3-a456-426614174003',
 ];
-const config = { gameStatus: 'DAY1_ACTIVE', teamAScore: 5, teamBScore: 9, logs: [{ id: 'prior' }] };
+const config = { gameStatus: 'DAY1_ACTIVE', gameSessionId: sessionIds[0], sessionStartedAt: now, sessionSchemaVersion: 2, teamAScore: 5, teamBScore: 9, logs: [{ id: 'prior' }] };
 const requestId = '323e4567-e89b-42d3-a456-426614174000';
 
 function makeFixture({ admin = true, gameConfig = config, participants, collections, failWrite = false } = {}) {
@@ -41,6 +41,7 @@ function makeFixture({ admin = true, gameConfig = config, participants, collecti
     }),
     confirmations: new Map(),
     writes: [],
+    reads: [],
     failWrite,
     queue: Promise.resolve(),
   };
@@ -53,11 +54,11 @@ function makeFixture({ admin = true, gameConfig = config, participants, collecti
       try {
         const pending = [];
         const tx = {
-          readAdmin: async actor => actor === uid && state.admin,
-          readConfig: async () => state.config === null ? null : { data: structuredClone(state.config), revision: state.configRevision },
-          readParticipants: async () => structuredClone(state.participants),
-          readCollection: async name => structuredClone(state.collections[name]),
-          readConfirmation: async (actor, token) => structuredClone(state.confirmations.get(`${actor}:${token}`) ?? null),
+          readAdmin: async actor => { state.reads.push('admin'); return actor === uid && state.admin; },
+          readConfig: async () => { state.reads.push('config'); return state.config === null ? null : { data: structuredClone(state.config), revision: state.configRevision }; },
+          readParticipants: async () => { state.reads.push('participants'); return structuredClone(state.participants); },
+          readCollection: async name => { state.reads.push(`collection:${name}`); return structuredClone(state.collections[name]); },
+          readConfirmation: async (actor, token) => { state.reads.push('confirmation'); return structuredClone(state.confirmations.get(`${actor}:${token}`) ?? null); },
           createConfirmation: (actor, token, confirmation) => {
             state.writes.push(`confirmation:${actor}:${token}`);
             pending.push(() => state.confirmations.set(`${actor}:${token}`, structuredClone(confirmation)));
@@ -88,10 +89,10 @@ async function rejects(reason, callback) {
 }
 
 async function prepare(fixture) {
-  return prepareGameResetForAdmin(uid, {}, fixture.store, fixture.runtime);
+  return prepareGameResetForAdmin(uid, { expectedSessionId: fixture.state.config?.gameSessionId ?? sessionIds[0] }, fixture.store, fixture.runtime);
 }
 
-async function execute(fixture, token, input = { confirmationToken: token, requestId }) {
+async function execute(fixture, token, input = { confirmationToken: token, requestId, expectedSessionId: fixture.state.config.gameSessionId }) {
   return executeGameResetForAdmin(uid, input, fixture.store, fixture.runtime);
 }
 
@@ -105,10 +106,65 @@ describe('trusted game reset foundation service', () => {
     const absent = makeFixture({ gameConfig: null });
     await rejects('CONFIG_NOT_FOUND', () => prepare(absent));
     const malformed = makeFixture({ gameConfig: { ...config, sessionSchemaVersion: 1 } });
-    await rejects('INVALID_CONFIG', () => prepare(malformed));
+    await rejects('SESSION_CHANGED', () => prepare(malformed));
     assert.equal(nonAdmin.state.confirmations.size, 0);
     assert.equal(absent.state.confirmations.size, 0);
     assert.equal(malformed.state.confirmations.size, 0);
+  });
+
+  test('prepare requires the expected Config Session before reading reset scope or writing a token', async () => {
+    const missing = makeFixture();
+    await rejects('INVALID_ARGUMENT', () => prepareGameResetForAdmin(uid, {}, missing.store, missing.runtime));
+    const malformed = makeFixture();
+    await rejects('INVALID_ARGUMENT', () => prepareGameResetForAdmin(uid, { expectedSessionId: 'not-a-session-uuid' }, malformed.store, malformed.runtime));
+    assert.deepEqual(missing.state.reads, []);
+    assert.deepEqual(malformed.state.reads, []);
+    assert.deepEqual(missing.state.writes, []);
+    assert.deepEqual(malformed.state.writes, []);
+
+    for (const [gameConfig, reason] of [
+      [null, 'CONFIG_NOT_FOUND'],
+      [{ ...config, sessionStartedAt: undefined }, 'SESSION_CHANGED'],
+      [{ ...config, gameSessionId: 'bad/session' }, 'SESSION_CHANGED'],
+      [{ ...config, gameSessionId: undefined }, 'INVALID_CONFIG'],
+    ]) {
+      const fixture = makeFixture({ gameConfig });
+      await rejects(reason, () => prepareGameResetForAdmin(uid, { expectedSessionId: sessionIds[0] }, fixture.store, fixture.runtime));
+      assert.deepEqual(fixture.state.reads, ['admin', 'config']);
+      assert.deepEqual(fixture.state.writes, []);
+    }
+
+    const stale = makeFixture();
+    await rejects('SESSION_CHANGED', () => prepareGameResetForAdmin(uid, { expectedSessionId: sessionIds[1] }, stale.store, stale.runtime));
+    assert.deepEqual(stale.state.reads, ['admin', 'config']);
+    assert.deepEqual(stale.state.writes, []);
+  });
+
+  test('execute requires the expected Config Session before reading confirmation or reset scope', async () => {
+    for (const [input, reason] of [
+      [{ confirmationToken: tokenIds[0], requestId }, 'INVALID_ARGUMENT'],
+      [{ confirmationToken: tokenIds[0], requestId, expectedSessionId: 'bad' }, 'INVALID_ARGUMENT'],
+      [{ confirmationToken: tokenIds[0], requestId, expectedSessionId: sessionIds[1] }, 'SESSION_CHANGED'],
+    ]) {
+      const fixture = makeFixture();
+      await rejects(reason, () => executeGameResetForAdmin(uid, input, fixture.store, fixture.runtime));
+      assert.deepEqual(fixture.state.writes, []);
+      assert.deepEqual(fixture.state.reads, reason === 'INVALID_ARGUMENT' ? [] : ['admin', 'config']);
+    }
+
+    for (const [gameConfig, reason] of [
+      [null, 'CONFIG_NOT_FOUND'],
+      [{ ...config, sessionStartedAt: undefined }, 'SESSION_CHANGED'],
+      [{ ...config, gameSessionId: 'bad/session' }, 'SESSION_CHANGED'],
+      [{ ...config, gameSessionId: undefined }, 'INVALID_CONFIG'],
+    ]) {
+      const fixture = makeFixture({ gameConfig });
+      await rejects(reason, () => executeGameResetForAdmin(uid, {
+        confirmationToken: tokenIds[0], requestId, expectedSessionId: sessionIds[0],
+      }, fixture.store, fixture.runtime));
+      assert.deepEqual(fixture.state.reads, ['admin', 'config']);
+      assert.deepEqual(fixture.state.writes, []);
+    }
   });
 
   test('prepare returns privacy-safe A/B counts and stores actor- and Session-bound five-minute token', async () => {
@@ -118,22 +174,22 @@ describe('trusted game reset foundation service', () => {
       ok: true,
       confirmationToken: tokenIds[0],
       expiresAt: now + 5 * 60 * 1000,
-      currentSessionId: null,
+      currentSessionId: sessionIds[0],
       proposedSessionId: sessionIds[0],
-      sessionSchemaVersion: 0,
+      sessionSchemaVersion: 2,
       participantCount: 2,
       privateLocationCount: 1,
       exposedLocationCount: 1,
       emergencyProjectionCount: 1,
       estimatedWriteCount: 8,
       resetReady: false,
-      warningCodes: ['SESSION_SCOPE_NOT_READY'],
+      warningCodes: [],
     });
     assert.equal(JSON.stringify(result).includes('private player name'), false);
     assert.equal(JSON.stringify(result).includes('latitude'), false);
     const receipt = fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`);
     assert.equal(receipt.actorUid, uid);
-    assert.equal(receipt.currentSessionId, null);
+    assert.equal(receipt.currentSessionId, sessionIds[0]);
     assert.equal(receipt.proposedSessionId, sessionIds[0]);
     assert.equal(receipt.used, false);
     assert.equal(receipt.previewFingerprint.length, 64);
@@ -181,7 +237,7 @@ describe('trusted game reset foundation service', () => {
     used.state.confirmations.get(`${uid}:${tokenIds[0]}`).used = true;
     await rejects('CONFIRMATION_ALREADY_USED', () => execute(used, tokenIds[0]));
 
-    const changedSession = makeFixture({ gameConfig: { ...config, gameSessionId: sessionIds[2], sessionSchemaVersion: 1 } });
+    const changedSession = makeFixture({ gameConfig: { ...config, gameSessionId: sessionIds[2] } });
     await prepare(changedSession);
     changedSession.state.config.gameSessionId = sessionIds[3];
     changedSession.state.configRevision = 'config-revision-2';
@@ -203,12 +259,23 @@ describe('trusted game reset foundation service', () => {
     await rejects('RESET_TOO_LARGE', () => execute(large, tokenIds[0]));
   });
 
-  test('execute always rejects with RESET_NOT_READY and writes no gameplay, token, receipt, or log state', async () => {
-    for (const session of [
-      {},
-      { gameSessionId: sessionIds[2], sessionSchemaVersion: 1 },
-      { gameSessionId: sessionIds[3], sessionSchemaVersion: 2 },
-    ]) {
+  test('execute fails closed on mismatched and legacy confirmation Sessions', async () => {
+    for (const session of [sessionIds[1], undefined]) {
+      const fixture = makeFixture();
+      await prepare(fixture);
+      const confirmation = fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`);
+      if (session === undefined) delete confirmation.currentSessionId;
+      else confirmation.currentSessionId = session;
+      fixture.state.reads.length = 0;
+      fixture.state.writes.length = 0;
+      await rejects(session === undefined ? 'PERSISTENCE_ERROR' : 'SESSION_CHANGED', () => execute(fixture, tokenIds[0]));
+      assert.deepEqual(fixture.state.reads, ['admin', 'config', 'confirmation']);
+      assert.deepEqual(fixture.state.writes, []);
+    }
+  });
+
+  test('execute remains RESET_NOT_READY for a matching current Session and writes no state', async () => {
+    for (const session of [{}]) {
       const fixture = makeFixture({ gameConfig: { ...config, ...session } });
       await prepare(fixture);
       const configBefore = structuredClone(fixture.state.config);

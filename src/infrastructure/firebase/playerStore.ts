@@ -10,10 +10,12 @@ interface Coordinates {
 export async function createPlayerWithPrivateLocation(
   player: User,
   location: Coordinates,
+  expectedSessionId: string,
 ): Promise<void> {
   const batch = writeBatch(db);
-  batch.set(doc(db, 'users', player.id), player);
+  batch.set(doc(db, 'users', player.id), { ...player, gameSessionId: expectedSessionId });
   batch.set(doc(db, 'privateLocations', player.id), {
+    gameSessionId: expectedSessionId,
     latitude: location.latitude,
     longitude: location.longitude,
     updatedAt: serverTimestamp(),

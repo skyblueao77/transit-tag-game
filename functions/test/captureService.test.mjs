@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
-  capturePlayerForPlayer,
+  capturePlayerForPlayer as capturePlayerService,
   CaptureServiceError,
 } from '../lib/functions/src/capture/captureService.js';
 
 const fixedTime = 1_700_000_000_000;
+const sessionId = 'session_capture_2';
+function capturePlayerForPlayer(captorId, targetId, store, runtime) {
+  return capturePlayerService(captorId, targetId, sessionId, store, runtime);
+}
 
 function user(id, team, overrides = {}) {
   return {
@@ -25,6 +29,7 @@ function user(id, team, overrides = {}) {
 function fixture(overrides = {}) {
   const state = {
     config: {
+      gameSessionId: sessionId, sessionStartedAt: fixedTime, sessionSchemaVersion: 2,
       gameStatus: 'DAY1_ACTIVE',
       teamARole: 'ONI',
       teamBRole: 'RUNNER',
@@ -42,14 +47,15 @@ function fixture(overrides = {}) {
     ],
     writes: [],
     writeCalls: 0,
+    reads: [],
     ...overrides,
   };
   const store = {
     async runTransaction(work) {
       let pendingWrite;
       const transaction = {
-        readGameConfig: async () => state.config,
-        readUsers: async () => state.users,
+        readGameConfig: async () => { state.reads.push('config'); return state.config; },
+        readUsers: async () => { state.reads.push('users'); return state.users; },
         writeCapture: write => {
           state.writeCalls += 1;
           pendingWrite = structuredClone(write);
@@ -182,6 +188,54 @@ describe('server Capture service', () => {
       'oni-a', 'runner-b', malformedConfig.store, runtime(),
     ));
     assert.equal(malformedConfig.state.writeCalls, 0);
+  });
+
+  test('rejects missing, malformed, stale, or invalid Config Sessions before participant reads or writes', async () => {
+    for (const expectedSessionId of [undefined, '', 'bad/session', 7]) {
+      const data = fixture();
+      await rejectsWith('SESSION_CHANGED', undefined, () => capturePlayerService(
+        'oni-a', 'runner-b', expectedSessionId, data.store, runtime(),
+      ));
+      assert.deepEqual(data.state.reads, []);
+      assert.equal(data.state.writeCalls, 0);
+      assert.deepEqual(data.state.writes, []);
+    }
+
+    for (const config of [
+      { ...fixture().state.config, gameSessionId: undefined },
+      { ...fixture().state.config, gameSessionId: 'bad/session' },
+      { ...fixture().state.config, sessionStartedAt: undefined },
+      { ...fixture().state.config, sessionSchemaVersion: 1 },
+    ]) {
+      const data = fixture({ config });
+      await rejectsWith('SESSION_CHANGED', undefined, () => capturePlayerService(
+        'oni-a', 'runner-b', sessionId, data.store, runtime(),
+      ));
+      assert.deepEqual(data.state.reads, ['config']);
+      assert.equal(data.state.writeCalls, 0);
+      assert.deepEqual(data.state.writes, []);
+    }
+
+    const stale = fixture();
+    await rejectsWith('SESSION_CHANGED', undefined, () => capturePlayerService(
+      'oni-a', 'runner-b', 'session_stale', stale.store, runtime(),
+    ));
+    assert.deepEqual(stale.state.reads, ['config']);
+    assert.equal(stale.state.writeCalls, 0);
+
+    const missingConfig = fixture({ config: null });
+    await rejectsWith('GAME_CONFIG_NOT_FOUND', undefined, () => capturePlayerService(
+      'oni-a', 'runner-b', sessionId, missingConfig.store, runtime(),
+    ));
+    assert.deepEqual(missingConfig.state.reads, ['config']);
+    assert.equal(missingConfig.state.writeCalls, 0);
+  });
+
+  test('reads Config before participants before writing the capture', async () => {
+    const data = fixture();
+    await capturePlayerForPlayer('oni-a', 'runner-b', data.store, runtime());
+    assert.deepEqual(data.state.reads, ['config', 'users']);
+    assert.equal(data.state.writeCalls, 1);
   });
 
   test('uses Game Core for active phases and preserves its full success result', async () => {

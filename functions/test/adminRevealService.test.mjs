@@ -6,6 +6,7 @@ import {
 } from '../lib/functions/src/admin/adminRevealService.js';
 
 const now = 1_800_000_000_000;
+const sessionId = 'session_reveal_2';
 const adminUid = 'trusted-admin';
 const requestId = '123e4567-e89b-42d3-a456-426614174000';
 
@@ -20,15 +21,15 @@ function player(id, team = 'A', status = 'ACTIVE') {
 function location(id, overrides = {}) {
   return {
     id,
-    data: { latitude: 35.1, longitude: 139.1, updatedAt: timestamp(now - 1_000), ...overrides },
+    data: { gameSessionId: sessionId, latitude: 35.1, longitude: 139.1, updatedAt: timestamp(now - 1_000), ...overrides },
   };
 }
 
-function fixture({ roster = [player('a', 'A'), player('b', 'B')], locations = [location('a'), location('b')], config = { logs: [] }, admin = true, receipt = null, snapshots = [], fail = false } = {}) {
+function fixture({ roster = [player('a', 'A'), player('b', 'B')], locations = [location('a'), location('b')], config = { gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2, logs: [] }, admin = true, receipt = null, snapshots = [], fail = false } = {}) {
   const state = {
     roster: structuredClone(roster),
     locations: locations.map(document => ({ id: document.id, data: { ...document.data } })),
-    config: config === null ? null : structuredClone(config),
+    config: config === null ? null : structuredClone({ gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2, ...config }),
     admin,
     receipt,
     snapshots: new Map(snapshots),
@@ -88,7 +89,7 @@ function runtime() {
 }
 
 function request(overrides = {}) {
-  return { scope: 'GLOBAL', durationMinutes: 5, requestId, ...overrides };
+  return { scope: 'GLOBAL', durationMinutes: 5, requestId, expectedSessionId: sessionId, ...overrides };
 }
 
 async function rejectWithoutWrites(reason, options, intent = request()) {
@@ -100,6 +101,7 @@ async function rejectWithoutWrites(reason, options, intent = request()) {
   });
   assert.deepEqual(state.writes, []);
   assert.equal(state.snapshots.size, 0);
+  return state;
 }
 
 describe('Admin Reveal service', () => {
@@ -128,7 +130,7 @@ describe('Admin Reveal service', () => {
     assert.deepEqual(clock.calls(), { clockCalls: 1, idCalls: 1 });
     assert.equal(state.snapshots.size, 2);
     assert.deepEqual(state.snapshots.get('a'), {
-      playerId: 'a', latitude: 35.1, longitude: 139.1,
+      playerId: 'a', gameSessionId: sessionId, latitude: 35.1, longitude: 139.1,
       capturedAt: now, expiresAt: now + 300_000, revealScope: 'GLOBAL',
     });
     assert.equal(state.config.locationRevealUntil, now + 300_000);
@@ -170,7 +172,7 @@ describe('Admin Reveal service', () => {
     const { state, store } = fixture({ snapshots: [['a', priorSnapshot]] });
     await revealPlayerLocationsForAdmin(adminUid, request({ scope: 'TEAM_A' }), store, runtime());
     assert.deepEqual(state.snapshots.get('a'), {
-      playerId: 'a', latitude: 35.1, longitude: 139.1,
+      playerId: 'a', gameSessionId: sessionId, latitude: 35.1, longitude: 139.1,
       capturedAt: now, expiresAt: now + 300_000, revealScope: 'TEAM_A',
     });
   });
@@ -239,9 +241,44 @@ describe('Admin Reveal service', () => {
     await rejectWithoutWrites('WRITE_LIMIT_EXCEEDED', { roster: oversizedRoster, locations: oversizedLocations });
   });
 
+  test('rejects missing, malformed, stale, or invalid Config Sessions before roster reads or writes', async () => {
+    const missingExpected = { ...request() };
+    delete missingExpected.expectedSessionId;
+    for (const input of [missingExpected, request({ expectedSessionId: '' }), request({ expectedSessionId: 'bad/session' })]) {
+      const state = await rejectWithoutWrites('INVALID_ARGUMENT', {}, input);
+      assert.deepEqual(state.reads, []);
+    }
+
+    for (const options of [
+      { config: null },
+      { config: { gameSessionId: undefined, sessionStartedAt: now, sessionSchemaVersion: 2 } },
+      { config: { gameSessionId: 'bad/session', sessionStartedAt: now, sessionSchemaVersion: 2 } },
+      { config: { gameSessionId: sessionId, sessionStartedAt: undefined, sessionSchemaVersion: 2 } },
+      { config: { gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 1 } },
+    ]) {
+      const state = await rejectWithoutWrites(options.config === null ? 'CONFIG_NOT_FOUND' : 'SESSION_CHANGED', options);
+      assert.deepEqual(state.reads, [['admin', adminUid], ['config']]);
+    }
+
+    const stale = await rejectWithoutWrites('SESSION_CHANGED', {}, request({ expectedSessionId: 'session_stale' }));
+    assert.deepEqual(stale.reads, [['admin', adminUid], ['config']]);
+  });
+
+  test('rejects mismatched and legacy receipt Sessions without replaying or writing', async () => {
+    for (const session of ['session_stale', undefined]) {
+      const receipt = {
+        action: 'revealPlayerLocations', requestId, scope: 'TEAM_A',
+        expiresAt: timestamp(now + 100_000), projectedCount: 1, skippedCount: 0,
+        ...(session === undefined ? {} : { gameSessionId: session }),
+      };
+      const state = await rejectWithoutWrites('REQUEST_ID_REUSED', { receipt });
+      assert.deepEqual(state.reads, [['admin', adminUid], ['config'], ['receipt', adminUid, requestId]]);
+    }
+  });
+
   test('same request ID returns stable prior result without extending deadline, rewriting snapshots, or logging', async () => {
     const initialReceipt = {
-      action: 'revealPlayerLocations', requestId, scope: 'TEAM_A',
+      action: 'revealPlayerLocations', requestId, gameSessionId: sessionId, scope: 'TEAM_A',
       expiresAt: timestamp(now + 100_000), projectedCount: 1, skippedCount: 2,
     };
     const { state, store } = fixture({ receipt: initialReceipt });

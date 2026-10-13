@@ -4,6 +4,8 @@ import { describe, test } from 'node:test';
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
+const SESSION_ID = 'waiting-integration-session';
+const STALE_SESSION_ID = 'previous-waiting-integration-session';
 let sequence = 0;
 
 async function createAuthUser() {
@@ -60,7 +62,9 @@ async function call(name, token, data = {}) {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data: data !== null && typeof data === 'object' && !Array.isArray(data)
+      ? { ...data, expectedSessionId: data.expectedSessionId ?? SESSION_ID }
+      : data }),
   });
   return { status: response.status, body: await response.json() };
 }
@@ -73,6 +77,7 @@ async function setupPlayer({ team = 'A', roleA = 'RUNNER', roleB = 'ONI', status
     name: `Waiting Integration ${sequence}`,
     team,
     status,
+    gameSessionId: SESSION_ID,
     waitingUntil,
     shinkansenStartTime: null,
     score: 17,
@@ -80,6 +85,9 @@ async function setupPlayer({ team = 'A', roleA = 'RUNNER', roleB = 'ONI', status
     invincibleUntil: 0,
   });
   await seedDocument('game_config/current', {
+    gameSessionId: SESSION_ID,
+    sessionStartedAt: 1_700_000_000_000,
+    sessionSchemaVersion: 2,
     gameStatus,
     teamARole: roleA,
     teamBRole: roleB,
@@ -166,6 +174,32 @@ describe('Waiting callable emulator integration', () => {
     assert.equal(field(await readDocument(`users/${future.localId}`, future.idToken), 'status'), 'WAITING');
   });
 
+  test('stale Session start and resume requests are denied before writes', async () => {
+    const active = await setupPlayer();
+    const [activeBefore, activeConfigBefore] = await Promise.all([
+      readDocument(`users/${active.localId}`, active.idToken),
+      readDocument('game_config/current', active.idToken),
+    ]);
+    const staleStart = await call('startWaiting', active.idToken, { expectedSessionId: STALE_SESSION_ID });
+    assert.equal(staleStart.body.error.details.reason, 'SESSION_CHANGED');
+    const [activeAfter, activeConfigAfter] = await Promise.all([
+      readDocument(`users/${active.localId}`, active.idToken),
+      readDocument('game_config/current', active.idToken),
+    ]);
+    assert.deepEqual(activeAfter, activeBefore);
+    assert.deepEqual(activeConfigAfter, activeConfigBefore);
+
+    const waiting = await setupPlayer({ status: 'WAITING', waitingUntil: 1 });
+    const [waitingBefore, waitingConfigBefore] = await Promise.all([
+      readDocument(`users/${waiting.localId}`, waiting.idToken),
+      readDocument('game_config/current', waiting.idToken),
+    ]);
+    const staleResume = await call('resumeWaiting', waiting.idToken, { expectedSessionId: STALE_SESSION_ID });
+    assert.equal(staleResume.body.error.details.reason, 'SESSION_CHANGED');
+    assert.deepEqual(await readDocument(`users/${waiting.localId}`, waiting.idToken), waitingBefore);
+    assert.deepEqual(await readDocument('game_config/current', waiting.idToken), waitingConfigBefore);
+  });
+
   test('duplicate concurrent manual starts produce at most one state and log write', async () => {
     const user = await setupPlayer();
     const results = await Promise.all([
@@ -191,7 +225,7 @@ describe('Waiting callable emulator integration', () => {
     await seedDocument(`users/${target.localId}`, {
       id: target.localId,
       name: `Waiting Integration ${sequence}`,
-      team: 'B', status: 'WAITING', waitingUntil: 1,
+      team: 'B', status: 'WAITING', waitingUntil: 1, gameSessionId: SESSION_ID,
       shinkansenStartTime: null, score: 17, invincibleCards: 2, invincibleUntil: 0,
     });
     assert.deepEqual((await call('resumeWaiting', target.idToken)).body.result, { ok: true, resumed: true });

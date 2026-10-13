@@ -5,9 +5,11 @@ import {
 } from '../../../src/game/missions';
 import { calculateMissionScore } from '../../../src/game/scoring';
 import type { GameStatus } from '../../../src/game/types';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type MissionFailureReason =
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'PLAYER_NOT_ACTIVE'
   | 'INVALID_PLAYER_TEAM'
@@ -35,6 +37,7 @@ export interface MissionCompletionResult {
 export interface MissionCompletionWrite {
   completionId: string;
   completion: {
+    gameSessionId: string;
     missionId: string;
     team: 'A' | 'B';
     completedBy: string;
@@ -70,9 +73,9 @@ export interface MissionRuntime {
   now(): number;
 }
 
-export function createMissionCompletionId(team: 'A' | 'B', missionId: string): string {
+export function createMissionCompletionId(gameSessionId: string, team: 'A' | 'B', missionId: string): string {
   const digest = createHash('sha256')
-    .update(`${team}\0${missionId}`, 'utf8')
+    .update(JSON.stringify([gameSessionId, team, missionId]), 'utf8')
     .digest('hex');
   return `${team}_${digest}`;
 }
@@ -113,11 +116,18 @@ function createMissionLog(
 
 export async function completeMissionForPlayer(
   uid: string,
-  missionId: unknown,
+  input: unknown,
   store: MissionStore,
   runtime: MissionRuntime,
 ): Promise<MissionCompletionResult> {
-  if (!isValidMissionId(missionId)) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).length !== 2
+    || !Object.hasOwn(input, 'missionId') || !Object.hasOwn(input, 'expectedSessionId')) {
+    throw new MissionServiceError('INVALID_ARGUMENT');
+  }
+  const missionId = (input as Record<string, unknown>).missionId;
+  const expectedSessionId = (input as Record<string, unknown>).expectedSessionId;
+  if (!isValidMissionId(missionId) || !isValidGameSessionId(expectedSessionId)) {
     throw new MissionServiceError('INVALID_ARGUMENT');
   }
 
@@ -127,12 +137,13 @@ export async function completeMissionForPlayer(
 
   try {
     return await store.runTransaction(async transaction => {
-      const player = await transaction.readPlayer(uid);
       const config = await transaction.readGameConfig();
-      const mission = await transaction.readMission(missionId);
-
-      if (!player) throw new MissionServiceError('PLAYER_NOT_FOUND');
       if (!config) throw new MissionServiceError('MISSION_NOT_ALLOWED');
+      const session = validateExpectedSession(config, expectedSessionId);
+      if (!session.valid) throw new MissionServiceError('SESSION_CHANGED');
+      const player = await transaction.readPlayer(uid);
+      if (!player) throw new MissionServiceError('PLAYER_NOT_FOUND');
+      const mission = await transaction.readMission(missionId);
       if (!mission) throw new MissionServiceError('MISSION_NOT_FOUND');
 
       const team = player.team;
@@ -145,7 +156,7 @@ export async function completeMissionForPlayer(
 
       const gameStatus = config.gameStatus as GameStatus;
       const isFinalMission = gameStatus === 'FINAL_MISSION';
-      const completionId = createMissionCompletionId(team, missionId);
+      const completionId = createMissionCompletionId(session.gameSessionId, team, missionId);
       const alreadyCompleted = await transaction.readCompletion(completionId);
 
       if (alreadyCompleted) throw new MissionServiceError('ALREADY_COMPLETED');
@@ -192,6 +203,7 @@ export async function completeMissionForPlayer(
       transaction.writeMissionCompletion({
         completionId,
         completion: {
+          gameSessionId: session.gameSessionId,
           missionId,
           team,
           completedBy: uid,

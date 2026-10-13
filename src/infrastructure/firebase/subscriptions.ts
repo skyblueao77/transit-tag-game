@@ -53,16 +53,19 @@ export function subscribeMissions(
 
 export function subscribePrivateLocation(
   uid: string,
+  expectedSessionId: string,
   onValue: (location: PrivateLocation | null) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
   return onSnapshot(doc(db, 'privateLocations', uid), snapshot => {
-    onValue(snapshot.exists() ? mapPrivateLocation(snapshot.data()) : null);
+    const location = snapshot.exists() ? mapPrivateLocation(snapshot.data()) : null;
+    onValue(location?.gameSessionId === expectedSessionId ? location : null);
   }, onError);
 }
 
 export function subscribeExposedLocations(
   playerIds: readonly string[],
+  expectedSessionId: string,
   onValue: (locations: Record<string, ExposedLocation>) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
@@ -76,7 +79,7 @@ export function subscribeExposedLocations(
     snapshot => {
       const mapped = mapExposedLocationDocuments(snapshot.exists()
         ? [{ id: snapshot.id, data: snapshot.data() }]
-        : []);
+        : [], expectedSessionId);
       if (mapped[playerId]) values[playerId] = mapped[playerId];
       else delete values[playerId];
       publish();
@@ -96,6 +99,7 @@ export function subscribeExposedLocations(
 
 export function subscribeEmergencyLocationProjections(
   playerIds: readonly string[],
+  expectedSessionId: string,
   onValue: (projections: EmergencyLocationProjection[]) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
@@ -112,6 +116,7 @@ export function subscribeEmergencyLocationProjections(
       const projection = mapEmergencyLocationProjection(
         snapshot.id,
         snapshot.exists() ? snapshot.data() : null,
+        expectedSessionId,
       );
       if (projection) values.set(playerId, projection);
       else values.delete(playerId);

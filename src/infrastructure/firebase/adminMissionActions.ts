@@ -15,7 +15,7 @@ const setModeCallable = httpsCallable<SetMissionModeInput, SetMissionModeResult>
 const assignCallable = httpsCallable<AssignMissionsInput, AssignMissionsResult>(functions, 'assignMissions');
 const syncCallable = httpsCallable<SyncMissionCatalogInput, SyncMissionCatalogResult>(functions, 'syncMissionCatalog');
 const knownReasons = new Set<AdminMissionFailureReason>([
-  'UNAUTHENTICATED', 'PERMISSION_DENIED', 'INVALID_ARGUMENT', 'CONFIG_NOT_FOUND',
+  'UNAUTHENTICATED', 'PERMISSION_DENIED', 'INVALID_ARGUMENT', 'SESSION_CHANGED', 'REQUEST_ID_REUSED', 'CONFIG_NOT_FOUND',
   'INVALID_CONFIG', 'INVALID_PHASE', 'ASSIGNMENT_NOT_ALLOWED', 'INVALID_MISSION', 'PERSISTENCE_ERROR',
 ]);
 

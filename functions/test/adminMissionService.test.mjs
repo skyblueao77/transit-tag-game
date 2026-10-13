@@ -5,9 +5,10 @@ import { ADMIN_MISSION_CATALOG, AdminMissionServiceError, administerMissionForAd
 const uid = 'trusted-admin';
 const requestId = '123e4567-e89b-42d3-a456-426614174000';
 const now = 1_800_000_000_000;
-const modeRequest = (mode, id = requestId, extra = {}) => ({ action: 'setMissionMode', mode, requestId: id, ...extra });
+const sessionId = 'session_mission_2';
+const modeRequest = (mode, id = requestId, extra = {}) => ({ action: 'setMissionMode', mode, requestId: id, expectedSessionId: sessionId, ...extra });
 function missionMap(entries = []) { return Object.fromEntries(entries.map(mission => [mission.id, structuredClone(mission)])); }
-function config(extra = {}) { return { gameStatus: 'PRE_GAME', missionMode: 'DIFFERENT', activeMissionA: 'm-old-a', activeMissionB: 'm-old-b', activeFinalMissionId: 'final_01', teamAScore: 13, teamBScore: 17, logs: [], untouched: 'preserve', ...extra }; }
+function config(extra = {}) { return { gameSessionId: sessionId, sessionStartedAt: now, sessionSchemaVersion: 2, gameStatus: 'PRE_GAME', missionMode: 'DIFFERENT', activeMissionA: 'm-old-a', activeMissionB: 'm-old-b', activeFinalMissionId: 'final_01', teamAScore: 13, teamBScore: 17, logs: [], untouched: 'preserve', ...extra }; }
 function fixture({ admin = true, gameConfig = config(), missions = {}, failWrite = false } = {}) {
   const state = { admin, config: gameConfig && structuredClone(gameConfig), missions: structuredClone(missions), receipts: new Map(), writes: [], reads: [], failWrite };
   const store = {
@@ -35,9 +36,9 @@ function fixture({ admin = true, gameConfig = config(), missions = {}, failWrite
   const runtime = { now: () => { calls.now += 1; return now; }, createId: () => { calls.id += 1; return 'server-log-id'; }, random: () => { calls.random += 1; return calls.random === 1 ? 0.1 : 0.7; } };
   return { state, store, runtime, calls };
 }
-const manual = (target, missionId, id = requestId) => ({ action: 'assignMissions', strategy: 'MANUAL', target, missionId, requestId: id });
-const random = (id = requestId) => ({ action: 'assignMissions', strategy: 'RANDOM', target: 'BOTH', requestId: id });
-const sync = (id = requestId) => ({ action: 'syncMissionCatalog', requestId: id });
+const manual = (target, missionId, id = requestId) => ({ action: 'assignMissions', strategy: 'MANUAL', target, missionId, requestId: id, expectedSessionId: sessionId });
+const random = (id = requestId) => ({ action: 'assignMissions', strategy: 'RANDOM', target: 'BOTH', requestId: id, expectedSessionId: sessionId });
+const sync = (id = requestId) => ({ action: 'syncMissionCatalog', requestId: id, expectedSessionId: sessionId });
 async function rejected(reason, callback) {
   await assert.rejects(callback, error => error instanceof AdminMissionServiceError && error.reason === reason);
 }
@@ -79,6 +80,55 @@ describe('trusted mission administration service', () => {
     const unauth = fixture();
     await rejected('UNAUTHENTICATED', () => administerMissionForAdmin('', modeRequest('SAME'), unauth.store, unauth.runtime));
     assert.equal(unauth.state.writes.length, 0);
+  });
+
+  test('rejects missing, malformed, stale, or invalid Config Sessions before receipts or writes', async () => {
+    const missingExpected = { ...modeRequest('SAME') };
+    delete missingExpected.expectedSessionId;
+    for (const input of [missingExpected, modeRequest('SAME', requestId, { expectedSessionId: '' }),
+      modeRequest('SAME', requestId, { expectedSessionId: 'bad/session' })]) {
+      const f = fixture();
+      await rejected('INVALID_ARGUMENT', () => administerMissionForAdmin(uid, input, f.store, f.runtime));
+      assert.deepEqual(f.state.reads, []);
+      assert.deepEqual(f.state.writes, []);
+    }
+
+    for (const setup of [
+      { gameConfig: config({ gameSessionId: undefined }) },
+      { gameConfig: config({ gameSessionId: 'bad/session' }) },
+      { gameConfig: config({ sessionStartedAt: undefined }) },
+      { gameConfig: config({ sessionSchemaVersion: 1 }) },
+      { gameConfig: null },
+    ]) {
+      const f = fixture(setup);
+      await rejected(setup.gameConfig === null ? 'CONFIG_NOT_FOUND' : 'SESSION_CHANGED', () =>
+        administerMissionForAdmin(uid, modeRequest('SAME'), f.store, f.runtime));
+      assert.deepEqual(f.state.reads, [`admin:${uid}`, 'config']);
+      assert.deepEqual(f.state.writes, []);
+    }
+
+    const stale = fixture();
+    await rejected('SESSION_CHANGED', () => administerMissionForAdmin(
+      uid, modeRequest('SAME', requestId, { expectedSessionId: 'session_stale' }), stale.store, stale.runtime,
+    ));
+    assert.deepEqual(stale.state.reads, [`admin:${uid}`, 'config']);
+    assert.deepEqual(stale.state.writes, []);
+  });
+
+  test('rejects mismatched and legacy receipt Sessions without replaying or writing', async () => {
+    for (const session of ['session_stale', undefined]) {
+      const f = fixture();
+      f.state.receipts.set(`${uid}:setMissionMode:${requestId}`, {
+        action: 'setMissionMode', requestId,
+        ...(session === undefined ? {} : { gameSessionId: session }),
+        result: { ok: true, action: 'setMissionMode', mode: 'SAME', changed: true, duplicate: false },
+      });
+      await rejected('REQUEST_ID_REUSED', () => administerMissionForAdmin(
+        uid, modeRequest('SAME'), f.store, f.runtime,
+      ));
+      assert.deepEqual(f.state.reads, [`admin:${uid}`, 'config', 'receipt:setMissionMode']);
+      assert.deepEqual(f.state.writes, []);
+    }
   });
 
   test('manual Team A/B assignment validates canonical persisted data and changes only requested active field', async () => {
@@ -140,7 +190,7 @@ describe('trusted mission administration service', () => {
     const differentResult = await administerMissionForAdmin(uid, random(), different.store, different.runtime);
     assert.notEqual(differentResult.activeMissionA, differentResult.activeMissionB);
     const stored = different.state.receipts.get(`${uid}:assignMissions:${requestId}`);
-    const duplicateStore = { runTransaction: work => work({ readAdmin: async () => true, readReceipt: async () => stored, readConfig: async () => { throw Error('no config read'); }, readMissions: async () => { throw Error('no mission read'); }, updateConfig: () => { throw Error('no write'); }, upsertMission: () => { throw Error('no write'); }, createReceipt: () => { throw Error('no write'); } }) };
+    const duplicateStore = { runTransaction: work => work({ readAdmin: async () => true, readReceipt: async () => stored, readConfig: async () => structuredClone(different.state.config), readMissions: async () => { throw Error('no mission read'); }, updateConfig: () => { throw Error('no write'); }, upsertMission: () => { throw Error('no write'); }, createReceipt: () => { throw Error('no write'); } }) };
     const duplicate = await administerMissionForAdmin(uid, random(), duplicateStore, different.runtime);
     assert.equal(duplicate.duplicate, true);
     assert.deepEqual(duplicate.activeMissionA, differentResult.activeMissionA);

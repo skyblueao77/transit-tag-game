@@ -1,9 +1,11 @@
 import { activateInvincibility as resolveInvincibility } from '../../../src/game/powerups';
 import { getTeamRole } from '../../../src/game/roles';
 import type { GameStatus, Role } from '../../../src/game/types';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type InvincibilityFailureReason =
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -104,12 +106,14 @@ function createSystemLog(
 
 export async function activateInvincibilityForPlayer(
   uid: string,
+  expectedSessionId: unknown,
   store: InvincibilityStore,
   runtime: InvincibilityRuntime,
 ): Promise<InvincibilityResult> {
   if (typeof uid !== 'string' || uid.length === 0) {
     throw new InvincibilityServiceError('INVALID_ARGUMENT');
   }
+  if (!isValidGameSessionId(expectedSessionId)) throw new InvincibilityServiceError('SESSION_CHANGED');
 
   try {
     const now = runtime.now();
@@ -119,13 +123,12 @@ export async function activateInvincibilityForPlayer(
     }
 
     return await store.runTransaction(async transaction => {
-      const [player, config] = await Promise.all([
-        transaction.readPlayer(uid),
-        transaction.readGameConfig(),
-      ]);
-
-      if (!player) throw new InvincibilityServiceError('PLAYER_NOT_FOUND');
+      const config = await transaction.readGameConfig();
       if (!config) throw new InvincibilityServiceError('CONFIG_NOT_FOUND');
+      const session = validateExpectedSession(config, expectedSessionId);
+      if (!session.valid) throw new InvincibilityServiceError('SESSION_CHANGED');
+      const player = await transaction.readPlayer(uid);
+      if (!player) throw new InvincibilityServiceError('PLAYER_NOT_FOUND');
 
       if (player.id !== uid
         || (player.team !== 'A' && player.team !== 'B')

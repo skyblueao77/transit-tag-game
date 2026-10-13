@@ -1,4 +1,5 @@
 import { resolveEmergencyLocationProjection } from '../../../src/game/emergencyLocationProjection';
+import { validateGameSession } from '../../../src/game/gameSession';
 
 export type EmergencyProjectionStatus = 'CREATED' | 'REFRESHED' | 'UNAVAILABLE' | 'STALE' | 'NOT_REQUIRED';
 
@@ -9,6 +10,7 @@ export interface EmergencyProjectionDocument {
 
 export interface EmergencyProjectionWrite {
   playerId: string;
+  gameSessionId: string;
   latitude: number;
   longitude: number;
   projectedAt: number;
@@ -19,6 +21,7 @@ export interface EmergencyProjectionWrite {
 }
 
 export interface EmergencyProjectionTransaction {
+  readGameConfig(): Promise<Record<string, unknown> | null>;
   readPlayer(uid: string): Promise<EmergencyProjectionDocument | null>;
   readPrivateLocation(uid: string): Promise<EmergencyProjectionDocument | null>;
   readProjection(uid: string): Promise<EmergencyProjectionDocument | null>;
@@ -65,11 +68,18 @@ export async function projectEmergencyLocationForPlayer(
   if (!Number.isFinite(now) || now < 0) return { status: 'UNAVAILABLE' };
 
   return store.runTransaction(async transaction => {
+    const config = await transaction.readGameConfig();
+    const session = validateGameSession(config);
+    if (!session.valid) {
+      removeProjectionIfPresent(transaction, uid, await transaction.readProjection(uid));
+      return { status: 'UNAVAILABLE' };
+    }
     const [playerDocument, locationDocument, existingProjection] = await Promise.all([
       transaction.readPlayer(uid),
       transaction.readPrivateLocation(uid),
       transaction.readProjection(uid),
     ]);
+
 
     if (!playerDocument) {
       removeProjectionIfPresent(transaction, uid, existingProjection);
@@ -78,6 +88,7 @@ export async function projectEmergencyLocationForPlayer(
     const player = playerDocument.data;
     if (playerDocument.id !== uid
       || player.id !== uid
+      || player.gameSessionId !== session.session.gameSessionId
       || typeof player.name !== 'string'
       || player.name.trim().length === 0
       || (player.team !== 'A' && player.team !== 'B')
@@ -96,6 +107,10 @@ export async function projectEmergencyLocationForPlayer(
     }
 
     const location = locationDocument.data;
+    if (location.gameSessionId !== session.session.gameSessionId) {
+      removeProjectionIfPresent(transaction, uid, existingProjection);
+      return { status: 'UNAVAILABLE' };
+    }
     const sourceLocationUpdatedAt = timestampMillis(location.updatedAt);
     if (sourceLocationUpdatedAt === null) {
       removeProjectionIfPresent(transaction, uid, existingProjection);
@@ -116,6 +131,7 @@ export async function projectEmergencyLocationForPlayer(
 
     transaction.writeProjection(uid, {
       playerId: uid,
+      gameSessionId: session.session.gameSessionId,
       latitude: location.latitude as number,
       longitude: location.longitude as number,
       projectedAt: now,
@@ -124,6 +140,10 @@ export async function projectEmergencyLocationForPlayer(
       safetyStatus: 'EMERGENCY',
       projectionKind: 'EMERGENCY',
     });
-    return { status: existingProjection ? 'REFRESHED' : 'CREATED' };
+    return {
+      status: existingProjection?.data.gameSessionId === session.session.gameSessionId
+        ? 'REFRESHED'
+        : 'CREATED',
+    };
   });
 }

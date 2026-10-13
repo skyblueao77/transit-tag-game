@@ -8,11 +8,13 @@ import type { AdminRevealScope } from '../game/adminReveal.ts';
 
 export interface CompleteMissionInput {
   missionId: string;
+  expectedSessionId: string;
 }
 
 export type CompleteMissionFailureReason =
   | 'UNAUTHENTICATED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'PLAYER_NOT_ACTIVE'
   | 'INVALID_PLAYER_TEAM'
@@ -38,11 +40,13 @@ export interface MissionCompletionGateway {
 
 export interface CapturePlayerInput {
   targetId: string;
+  expectedSessionId: string;
 }
 
 export type CaptureFailureReason =
   | 'UNAUTHENTICATED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'TARGET_NOT_FOUND'
   | 'INVALID_CAPTOR_TEAM'
@@ -64,11 +68,12 @@ export interface CaptureGateway {
   capture(input: CapturePlayerInput): Promise<CapturePlayerResult>;
 }
 
-export type ActivateInvincibilityInput = Record<string, never>;
+export interface ActivateInvincibilityInput { expectedSessionId: string }
 
 export type ActivateInvincibilityFailureReason =
   | 'UNAUTHENTICATED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -96,11 +101,12 @@ export interface InvincibilityGateway {
   activate(input: ActivateInvincibilityInput): Promise<ActivateInvincibilityResult>;
 }
 
-export type StartWaitingInput = Record<string, never>;
-export type ResumeWaitingInput = Record<string, never>;
+export interface StartWaitingInput { expectedSessionId: string }
+export interface ResumeWaitingInput { expectedSessionId: string }
 
 export type WaitingFailureReason =
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -135,11 +141,13 @@ export interface WaitingGateway {
 export interface SafetyActionInput {
   action: SafetyAction;
   reasonCode: SafetyReasonCode;
+  expectedSessionId: string;
 }
 
 export type SafetyActionFailureReason =
   | 'UNAUTHENTICATED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -167,16 +175,19 @@ export interface SafetyActionGateway {
 
 export interface SwapTeamRolesInput {
   requestId: string;
+  expectedSessionId: string;
 }
 
 export interface ResumePlayerInput {
   targetId: string;
+  expectedSessionId: string;
 }
 
 export type AdminGameStateFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -211,12 +222,15 @@ export interface AdminRevealInput {
   scope: AdminRevealScope;
   durationMinutes: number;
   requestId: string;
+  expectedSessionId: string;
 }
 
 export type AdminRevealFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
+  | 'REQUEST_ID_REUSED'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_GAME_CONFIG'
   | 'INVALID_ROSTER'
@@ -240,18 +254,18 @@ export interface AdminRevealGateway {
 }
 
 export type TransitionGamePhaseAction = 'START_DAY1' | 'PAUSE' | 'RESUME' | 'END_DAY1' | 'START_DAY2' | 'START_FINAL' | 'END_GAME';
-export interface TransitionGamePhaseInput { action: TransitionGamePhaseAction; requestId: string }
-export type TransitionGamePhaseFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'TRANSITION_NOT_ALLOWED' | 'FINAL_MISSION_NOT_FOUND' | 'PERSISTENCE_ERROR';
+export interface TransitionGamePhaseInput { action: TransitionGamePhaseAction; requestId: string; expectedSessionId: string }
+export type TransitionGamePhaseFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'SESSION_CHANGED' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'TRANSITION_NOT_ALLOWED' | 'FINAL_MISSION_NOT_FOUND' | 'PERSISTENCE_ERROR';
 export type TransitionGamePhaseResult = { ok: true; action: TransitionGamePhaseAction; oldPhase: string; newPhase: string; selectedFinalMissionId?: string; duplicate: boolean } | { ok: false; reason: TransitionGamePhaseFailureReason };
 export interface AdminPhaseGateway { transitionGamePhase(input: TransitionGamePhaseInput): Promise<TransitionGamePhaseResult> }
 
 export type MissionMode = 'SAME' | 'DIFFERENT';
-export interface SetMissionModeInput { mode: MissionMode; requestId: string }
+export interface SetMissionModeInput { mode: MissionMode; requestId: string; expectedSessionId: string }
 export type AssignMissionsInput =
-  | { strategy: 'MANUAL'; target: 'TEAM_A' | 'TEAM_B'; missionId: string; requestId: string }
-  | { strategy: 'RANDOM'; target: 'BOTH'; requestId: string };
-export interface SyncMissionCatalogInput { requestId: string }
-export type AdminMissionFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'INVALID_PHASE' | 'ASSIGNMENT_NOT_ALLOWED' | 'INVALID_MISSION' | 'PERSISTENCE_ERROR';
+  | { strategy: 'MANUAL'; target: 'TEAM_A' | 'TEAM_B'; missionId: string; requestId: string; expectedSessionId: string }
+  | { strategy: 'RANDOM'; target: 'BOTH'; requestId: string; expectedSessionId: string };
+export interface SyncMissionCatalogInput { requestId: string; expectedSessionId: string }
+export type AdminMissionFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'SESSION_CHANGED' | 'REQUEST_ID_REUSED' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'INVALID_PHASE' | 'ASSIGNMENT_NOT_ALLOWED' | 'INVALID_MISSION' | 'PERSISTENCE_ERROR';
 export type SetMissionModeResult =
   | { ok: true; action: 'setMissionMode'; mode: MissionMode; changed: boolean; duplicate: boolean }
   | { ok: false; reason: AdminMissionFailureReason };
@@ -274,11 +288,13 @@ export interface AdjustTeamScoreInput {
   delta: number;
   reasonCode: ScoreAdjustmentReasonCode;
   requestId: string;
+  expectedSessionId: string;
 }
 export type AdminScoreAdjustmentFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_CONFIG'
   | 'SCORE_BELOW_ZERO'
@@ -299,6 +315,15 @@ export interface AdminScoreAdjustmentGateway {
   adjustTeamScore(input: AdjustTeamScoreInput): Promise<AdjustTeamScoreResult>;
 }
 
+export interface InitializeGameSessionInput { requestId: string }
+export type InitializeGameSessionFailureReason = 'UNAUTHENTICATED' | 'PERMISSION_DENIED' | 'INVALID_ARGUMENT' | 'CONFIG_NOT_FOUND' | 'INVALID_CONFIG' | 'SESSION_CHANGED' | 'ROSTER_TOO_LARGE' | 'PERSISTENCE_ERROR';
+export type InitializeGameSessionResult =
+  | { ok: true; gameSessionId: string; sessionStartedAt: number; sessionSchemaVersion: number; duplicate: boolean; alreadyInitialized: boolean }
+  | { ok: false; reason: InitializeGameSessionFailureReason };
+export interface InitializeGameSessionGateway {
+  initialize(input: InitializeGameSessionInput): Promise<InitializeGameSessionResult>;
+}
+
 export type GameResetFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
@@ -316,7 +341,7 @@ export type GameResetFailureReason =
   | 'PERSISTENCE_ERROR'
   | 'INTERNAL';
 
-export type PrepareGameResetInput = Record<string, never>;
+export interface PrepareGameResetInput { expectedSessionId: string }
 export interface PrepareGameResetPreview {
   confirmationToken: string;
   expiresAt: number;
@@ -334,7 +359,7 @@ export interface PrepareGameResetPreview {
 export type PrepareGameResetResult =
   | { ok: true; preview: PrepareGameResetPreview }
   | { ok: false; reason: GameResetFailureReason };
-export interface ExecuteGameResetInput { confirmationToken: string; requestId: string }
+export interface ExecuteGameResetInput { confirmationToken: string; requestId: string; expectedSessionId: string }
 export type ExecuteGameResetResult =
   | { ok: true; executed: true; newSessionId: string }
   | { ok: false; reason: GameResetFailureReason };

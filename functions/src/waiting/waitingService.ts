@@ -7,9 +7,11 @@ import {
 } from '../../../src/game/waitingLifecycle';
 import type { GameStatus, Role } from '../../../src/game/types';
 import type { WaitingRejectionReason } from '../../../src/game/waitingLifecycle';
+import { isValidGameSessionId, validateExpectedSession, validateGameSession } from '../../../src/game/gameSession';
 
 export type WaitingFailureReason =
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -164,20 +166,20 @@ function validateRuntime(runtime: WaitingRuntime, logRequired: boolean): { now: 
 
 export async function startWaitingForPlayer(
   uid: string,
+  expectedSessionId: unknown,
   store: WaitingStore,
   runtime: WaitingRuntime,
 ): Promise<StartWaitingResult> {
   if (typeof uid !== 'string' || uid.length === 0) throw new WaitingServiceError('INVALID_ARGUMENT');
+  if (!isValidGameSessionId(expectedSessionId)) throw new WaitingServiceError('SESSION_CHANGED');
   const { now, logId } = validateRuntime(runtime, true);
 
   try {
     return await store.runTransaction(async transaction => {
-      const [playerDocument, rawConfig] = await Promise.all([
-        transaction.readPlayer(uid),
-        transaction.readGameConfig(),
-      ]);
-      const player = readPlayer(playerDocument, uid);
-      const config = readConfig(rawConfig);
+      const config = readConfig(await transaction.readGameConfig());
+      const session = validateExpectedSession(config, expectedSessionId);
+      if (!session.valid) throw new WaitingServiceError('SESSION_CHANGED');
+      const player = readPlayer(await transaction.readPlayer(uid), uid);
       const team = player.team as 'A' | 'B';
       const role = getTeamRole(team, {
         teamARole: config.teamARole as Role,
@@ -214,14 +216,19 @@ export async function startWaitingForPlayer(
 
 export async function resumeWaitingForPlayer(
   uid: string,
+  expectedSessionId: unknown,
   store: WaitingStore,
   runtime: WaitingRuntime,
 ): Promise<ResumeWaitingResult> {
   if (typeof uid !== 'string' || uid.length === 0) throw new WaitingServiceError('INVALID_ARGUMENT');
+  if (!isValidGameSessionId(expectedSessionId)) throw new WaitingServiceError('SESSION_CHANGED');
   const { now } = validateRuntime(runtime, false);
 
   try {
     return await store.runTransaction(async transaction => {
+      const config = readConfig(await transaction.readGameConfig());
+      const session = validateExpectedSession(config, expectedSessionId);
+      if (!session.valid) throw new WaitingServiceError('SESSION_CHANGED');
       const player = readPlayer(await transaction.readPlayer(uid), uid);
       const result = resumeExpiredWaiting({
         status: player.status as string,
@@ -253,7 +260,14 @@ async function processWaitingLifecycleAt(
 ): Promise<ScheduledWaitingResult> {
   try {
     return await store.runTransaction(async transaction => {
+      const rawConfig = await transaction.readGameConfig();
+      const session = validateGameSession(rawConfig);
+      if (!session.valid) return { outcome: 'SKIPPED', reason: 'SESSION_CHANGED' };
       const player = readPlayer(await transaction.readPlayer(uid), uid);
+      if (player.gameSessionId !== session.session.gameSessionId) {
+        return { outcome: 'SKIPPED', reason: 'SESSION_CHANGED' };
+      }
+      const config = readConfig(rawConfig);
       if (player.status === 'WAITING') {
         const result = resumeExpiredWaiting({
           status: player.status,
@@ -278,7 +292,6 @@ async function processWaitingLifecycleAt(
         return { outcome: 'SKIPPED', reason: 'NO_SHINKANSEN_START' };
       }
 
-      const config = readConfig(await transaction.readGameConfig());
       const team = player.team as 'A' | 'B';
       const result = startShinkansenLimitWaiting({
         status: player.status,

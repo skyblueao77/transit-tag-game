@@ -4,6 +4,7 @@ const projectId=process.env.GCLOUD_PROJECT||process.env.GOOGLE_CLOUD_PROJECT||'d
 const db=`http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authUrl='http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
 const fn=`http://127.0.0.1:5001/${projectId}/asia-northeast1/transitionGamePhase`;
+const SESSION_ID='admin_phase_session_v1';
 let seq=0;
 async function user(){const r=await fetch(`${authUrl}:signUp?key=demo-key`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({returnSecureToken:true})});assert.equal(r.ok,true);return r.json();}
 function enc(v){if(v===null)return{nullValue:null};if(typeof v==='number')return Number.isInteger(v)?{integerValue:String(v)}:{doubleValue:v};if(typeof v==='boolean')return{booleanValue:v};if(typeof v==='string')return{stringValue:v};if(Array.isArray(v))return{arrayValue:{values:v.map(enc)}};return{mapValue:{fields:Object.fromEntries(Object.entries(v).map(([k,x])=>[k,enc(x)]))}};}
@@ -14,8 +15,8 @@ async function read(path){const r=await fetch(`${db}/${path}`,{headers:{Authoriz
 async function admin(){const a=await user();await seed(`admins/${a.localId}`,{active:true});return a;}
 async function call(data,token){const r=await fetch(fn,{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify({data})});return{status:r.status,body:await r.json()};}
 function id(){seq++;return`123e4567-e89b-42d3-a456-${String(seq).padStart(12,'0')}`;}
-function intent(action,requestId=id()){return{action,requestId};}
-async function config(gameStatus){await seed('game_config/current',{gameStatus,day:1,startTime:100,isGameOver:false,isFinalMissionActive:false,activeFinalMissionId:null,finalMissionEndTime:0,logs:[],unchanged:'value'});}
+function intent(action,requestId=id()){return{action,requestId,expectedSessionId:SESSION_ID};}
+async function config(gameStatus){await seed('game_config/current',{gameSessionId:SESSION_ID,sessionStartedAt:Date.now(),sessionSchemaVersion:2,gameStatus,day:1,startTime:100,isGameOver:false,isFinalMissionActive:false,activeFinalMissionId:null,finalMissionEndTime:0,logs:[],unchanged:'value'});}
 describe('Trusted Phase callable emulator integration',()=>{
  test('enforces the full semantic transition sequence and keeps atomic audit/receipt state',async()=>{const a=await admin();await clearFinalCatalog();await config('PRE_GAME');for(const n of ['01','02','03','04'])await seed(`missions/final_${n}`,{id:`final_${n}`,area:'最終',region:'ALL',title:'Mission',description:'Valid',points:100,type:'PHOTO'});
   const steps=[['START_DAY1','DAY1_ACTIVE'],['PAUSE','DAY1_PAUSED'],['RESUME','DAY1_ACTIVE'],['END_DAY1','DAY1_ENDED'],['START_DAY2','DAY2_ACTIVE'],['PAUSE','DAY2_PAUSED'],['RESUME','DAY2_ACTIVE'],['START_FINAL','FINAL_MISSION'],['END_GAME','GAME_OVER']];
@@ -27,5 +28,6 @@ describe('Trusted Phase callable emulator integration',()=>{
  });
  test('requires authentication and replays same request exactly once',async()=>{const a=await admin();await config('DAY1_ACTIVE');const requestId=id();const unauth=await call(intent('PAUSE'));assert.equal(unauth.body.error.status,'UNAUTHENTICATED');const [one,two]=await Promise.all([call(intent('PAUSE',requestId),a.idToken),call(intent('PAUSE',requestId),a.idToken)]);assert.equal(one.body.result.ok,true);assert.equal(two.body.result.ok,true);assert.equal([one.body.result.duplicate,two.body.result.duplicate].filter(Boolean).length,1);assert.equal((await read('game_config/current')).logs.length,1);
  });
+ test('stale session rejects before Config or receipt writes',async()=>{const a=await admin();await config('DAY1_ACTIVE');const before=await read('game_config/current');const requestId=id();const result=await call({...intent('PAUSE',requestId),expectedSessionId:'stale_admin_phase_session'},a.idToken);assert.equal(result.body.error.details.reason,'SESSION_CHANGED');assert.deepEqual(await read('game_config/current'),before);assert.equal(await read(`admins/${a.localId}/phaseTransitionRequests/${requestId}`),null);});
  test('different concurrent actions are re-evaluated against the committed phase',async()=>{const a=await admin();await config('DAY1_ACTIVE');const [pause,end]=await Promise.all([call(intent('PAUSE'),a.idToken),call(intent('END_DAY1'),a.idToken)]);assert.equal([pause,end].filter(x=>x.body.result?.ok===true).length,1);const rejected=[pause,end].find(x=>x.body.result?.ok!==true);assert.ok(rejected.body.error);const current=await read('game_config/current');assert.ok(['DAY1_PAUSED','DAY1_ENDED'].includes(current.gameStatus));assert.equal(current.logs.length,1);});
 });

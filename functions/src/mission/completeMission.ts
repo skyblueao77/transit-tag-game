@@ -81,6 +81,8 @@ function callableCode(reason: string): HttpsError['code'] {
       return 'not-found';
     case 'ALREADY_COMPLETED':
       return 'already-exists';
+    case 'SESSION_CHANGED':
+      return 'failed-precondition';
     case 'PLAYER_NOT_ACTIVE':
     case 'INVALID_PLAYER_TEAM':
     case 'MISSION_NOT_ACTIVE':
@@ -101,23 +103,10 @@ export const completeMission = onCall(
     }
 
     const data: unknown = request.data;
-    if (
-      data === null
-      || typeof data !== 'object'
-      || Array.isArray(data)
-      || Object.keys(data).length !== 1
-      || !Object.prototype.hasOwnProperty.call(data, 'missionId')
-    ) {
-      throw new HttpsError('invalid-argument', 'Expected only a missionId.', {
-        reason: 'INVALID_ARGUMENT',
-      });
-    }
-
-    const missionId = (data as { missionId: unknown }).missionId;
     try {
       return await completeMissionForPlayer(
         request.auth.uid,
-        missionId,
+        data,
         missionStore,
         { random: Math.random, now: Date.now },
       );
@@ -130,7 +119,9 @@ export const completeMission = onCall(
 
       logger.error('Mission completion failed unexpectedly.', {
         uid: request.auth.uid,
-        missionId: typeof missionId === 'string' ? missionId : undefined,
+        missionId: data && typeof data === 'object'
+          && typeof (data as Record<string, unknown>).missionId === 'string'
+          ? (data as Record<string, unknown>).missionId : undefined,
         error,
       });
       throw new HttpsError('internal', 'Mission completion failed.', {

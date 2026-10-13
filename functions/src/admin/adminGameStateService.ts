@@ -8,11 +8,13 @@ import type {
   AdminPlayerStatus,
 } from '../../../src/game/adminGameState';
 import type { Role } from '../../../src/game/types';
+import { isValidGameSessionId, validateExpectedSession } from '../../../src/game/gameSession';
 
 export type AdminGameStateFailureReason =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'INVALID_ARGUMENT'
+  | 'SESSION_CHANGED'
   | 'PLAYER_NOT_FOUND'
   | 'CONFIG_NOT_FOUND'
   | 'INVALID_PLAYER_STATE'
@@ -51,6 +53,7 @@ export interface AdminConfigUpdates {
 export interface AdminRoleSwapReceipt {
   action: 'swapTeamRoles';
   requestId: string;
+  gameSessionId: string;
   teamARole: Role;
   teamBRole: Role;
   nextRevealTime: number;
@@ -113,15 +116,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseRoleSwapRequest(request: unknown): { requestId: string } {
+function parseRoleSwapRequest(request: unknown): { requestId: string; expectedSessionId: string } {
   if (!isRecord(request)
-    || Object.keys(request).length !== 1
+    || Object.keys(request).length !== 2
     || !Object.prototype.hasOwnProperty.call(request, 'requestId')
     || typeof request.requestId !== 'string'
-    || !UUID_PATTERN.test(request.requestId)) {
+    || !UUID_PATTERN.test(request.requestId)
+    || !isValidGameSessionId(request.expectedSessionId)) {
     return invalidArgument();
   }
-  return { requestId: request.requestId };
+  return { requestId: request.requestId, expectedSessionId: request.expectedSessionId };
 }
 
 function isValidDocumentId(value: unknown): value is string {
@@ -134,14 +138,15 @@ function isValidDocumentId(value: unknown): value is string {
     && value !== '..';
 }
 
-function parseResumeRequest(request: unknown): { targetId: string } {
+function parseResumeRequest(request: unknown): { targetId: string; expectedSessionId: string } {
   if (!isRecord(request)
-    || Object.keys(request).length !== 1
+    || Object.keys(request).length !== 2
     || !Object.prototype.hasOwnProperty.call(request, 'targetId')
-    || !isValidDocumentId(request.targetId)) {
+    || !isValidDocumentId(request.targetId)
+    || !isValidGameSessionId(request.expectedSessionId)) {
     return invalidArgument();
   }
-  return { targetId: request.targetId };
+  return { targetId: request.targetId, expectedSessionId: request.expectedSessionId };
 }
 
 function isOptionalTimestamp(value: unknown): boolean {
@@ -210,7 +215,7 @@ function validateResumePlayer(document: AdminPlayerDocument | null, targetId: st
   return player;
 }
 
-function readReceipt(data: Record<string, unknown>, requestId: string): AdminRoleSwapSuccess {
+function readReceipt(data: Record<string, unknown>, requestId: string, expectedSessionId: string): AdminRoleSwapSuccess {
   if (data.action !== 'swapTeamRoles'
     || data.requestId !== requestId
     || !roles.includes(data.teamARole as Role)
@@ -221,6 +226,7 @@ function readReceipt(data: Record<string, unknown>, requestId: string): AdminRol
     || (data.newOniTeam !== 'A' && data.newOniTeam !== 'B')) {
     throw new AdminGameStateServiceError('PERSISTENCE_ERROR');
   }
+  if (data.gameSessionId !== expectedSessionId) throw new AdminGameStateServiceError('SESSION_CHANGED');
   return {
     ok: true,
     replayed: true,
@@ -261,7 +267,7 @@ export async function swapTeamRolesForAdmin(
   if (typeof authUid !== 'string' || authUid.length === 0) {
     throw new AdminGameStateServiceError('UNAUTHENTICATED');
   }
-  const { requestId } = parseRoleSwapRequest(request);
+  const { requestId, expectedSessionId } = parseRoleSwapRequest(request);
   const { now, logId } = validateRuntime(runtime);
 
   try {
@@ -269,14 +275,13 @@ export async function swapTeamRolesForAdmin(
       const authorized = await transaction.readAdmin(authUid);
       if (!authorized) throw new AdminGameStateServiceError('PERMISSION_DENIED');
 
+      const config = validateConfig(await transaction.readGameConfig());
+      if (!validateExpectedSession(config, expectedSessionId).valid) {
+        throw new AdminGameStateServiceError('SESSION_CHANGED');
+      }
       const priorReceipt = await transaction.readRoleSwapReceipt(authUid, requestId);
-      if (priorReceipt) return readReceipt(priorReceipt, requestId);
-
-      const [rawConfig, documents] = await Promise.all([
-        transaction.readGameConfig(),
-        transaction.readParticipantRoster(),
-      ]);
-      const config = validateConfig(rawConfig);
+      if (priorReceipt) return readReceipt(priorReceipt, requestId, expectedSessionId);
+      const documents = await transaction.readParticipantRoster();
       const roster = documents.map(validatePlayerDocument);
       const result = resolveAdminRoleSwap({
         teamRoles: {
@@ -300,6 +305,7 @@ export async function swapTeamRolesForAdmin(
       const receipt: AdminRoleSwapReceipt = {
         action: 'swapTeamRoles',
         requestId,
+        gameSessionId: expectedSessionId,
         teamARole: result.teamRoles.teamARole,
         teamBRole: result.teamRoles.teamBRole,
         nextRevealTime: result.nextRevealTime,
@@ -352,19 +358,17 @@ export async function resumePlayerForAdmin(
   if (typeof authUid !== 'string' || authUid.length === 0) {
     throw new AdminGameStateServiceError('UNAUTHENTICATED');
   }
-  const { targetId } = parseResumeRequest(request);
+  const { targetId, expectedSessionId } = parseResumeRequest(request);
   const { now, logId } = validateRuntime(runtime);
 
   try {
     return await store.runTransaction(async transaction => {
-      const [authorized, document, rawConfig] = await Promise.all([
-        transaction.readAdmin(authUid),
-        transaction.readPlayer(targetId),
-        transaction.readGameConfig(),
-      ]);
-      if (!authorized) throw new AdminGameStateServiceError('PERMISSION_DENIED');
-      const player = validateResumePlayer(document, targetId);
-      const config = validateConfig(rawConfig);
+      if (!await transaction.readAdmin(authUid)) throw new AdminGameStateServiceError('PERMISSION_DENIED');
+      const config = validateConfig(await transaction.readGameConfig());
+      if (!validateExpectedSession(config, expectedSessionId).valid) {
+        throw new AdminGameStateServiceError('SESSION_CHANGED');
+      }
+      const player = validateResumePlayer(await transaction.readPlayer(targetId), targetId);
       const result = resolveAdminPlayerResume({ status: player.status as string });
       if (!result.allowed) throwCoreRejection(result.reason);
       if (!result.changed) return { ok: true, resumed: false, status: 'ACTIVE' };

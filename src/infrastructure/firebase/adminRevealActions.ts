@@ -16,6 +16,8 @@ const knownReasons = new Set<AdminRevealFailureReason>([
   'UNAUTHENTICATED',
   'PERMISSION_DENIED',
   'INVALID_ARGUMENT',
+  'SESSION_CHANGED',
+  'REQUEST_ID_REUSED',
   'CONFIG_NOT_FOUND',
   'INVALID_GAME_CONFIG',
   'INVALID_ROSTER',
@@ -44,6 +46,7 @@ export const firebaseAdminRevealGateway: AdminRevealGateway = {
         scope: input.scope,
         durationMinutes: input.durationMinutes,
         requestId: input.requestId,
+        expectedSessionId: input.expectedSessionId,
       })).data;
     } catch (error) {
       return { ok: false, reason: failureReason(error) };

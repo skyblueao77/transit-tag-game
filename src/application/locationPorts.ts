@@ -6,12 +6,13 @@ export interface Coordinates {
 }
 
 export interface ExposedLocationSnapshot extends Coordinates {
+  gameSessionId: string;
   capturedAt: number;
   expiresAt: number;
 }
 
 export interface PrivateLocationStore {
-  save(playerId: string, location: Coordinates): Promise<void>;
+  save(playerId: string, location: Coordinates, expectedSessionId: string): Promise<void>;
 }
 
 export interface ExposedLocationStore {
@@ -20,11 +21,13 @@ export interface ExposedLocationStore {
 
 export interface UpdatePrivateLocationInput extends Coordinates {
   playerId: string;
+  expectedSessionId: string;
 }
 
 export interface ExposeLocationInput {
   playerId: string;
-  privateLocation: Coordinates | null | undefined;
+  privateLocation: (Coordinates & { gameSessionId?: string }) | null | undefined;
+  expectedSessionId: string;
   phase: GameStatus;
   now: number;
   duration: number;
