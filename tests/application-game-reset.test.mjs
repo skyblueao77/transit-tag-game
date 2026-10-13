@@ -18,11 +18,11 @@ describe('game reset application use cases', () => {
     assert.deepEqual(received, [input]);
   });
 
-  test('forwards confirmation token, request ID, and Session; execution remains disabled', async () => {
+  test('forwards confirmation token, request ID, and Session and returns the reset result', async () => {
     const received = [];
     const input = { confirmationToken: 'token', requestId: 'request', expectedSessionId: 'current-session' };
-    const rejected = { ok: false, reason: 'RESET_NOT_READY' };
-    assert.deepEqual(await executeGameReset(input, { executeGameReset: async value => { received.push(value); return rejected; } }), rejected);
+    const result = { ok: true, executed: true, newSessionId: 'new-session' };
+    assert.deepEqual(await executeGameReset(input, { executeGameReset: async value => { received.push(value); return result; } }), result);
     assert.deepEqual(received, [input]);
     assert.deepEqual(Object.keys(received[0]).sort(), ['confirmationToken', 'expectedSessionId', 'requestId']);
     assert.deepEqual(await executeGameReset(input, { executeGameReset: async () => ({ ok: false, reason: 'CONFIRMATION_STALE' }) }), { ok: false, reason: 'CONFIRMATION_STALE' });

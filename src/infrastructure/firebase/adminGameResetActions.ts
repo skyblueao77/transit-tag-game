@@ -43,7 +43,7 @@ function mapPrepareResult(value: unknown): PrepareGameResetResult {
     || !Number.isSafeInteger(value.exposedLocationCount) || (value.exposedLocationCount as number) < 0
     || !Number.isSafeInteger(value.emergencyProjectionCount) || (value.emergencyProjectionCount as number) < 0
     || !Number.isSafeInteger(value.estimatedWriteCount) || (value.estimatedWriteCount as number) < 0
-    || value.resetReady !== false
+    || typeof value.resetReady !== 'boolean'
     || !Array.isArray(value.warningCodes) || value.warningCodes.some(code => typeof code !== 'string' || !warningCodes.has(code))) {
     return { ok: false, reason: 'INTERNAL' };
   }
@@ -58,7 +58,7 @@ function mapPrepareResult(value: unknown): PrepareGameResetResult {
     exposedLocationCount: value.exposedLocationCount as number,
     emergencyProjectionCount: value.emergencyProjectionCount as number,
     estimatedWriteCount: value.estimatedWriteCount as number,
-    resetReady: false,
+    resetReady: value.resetReady,
     warningCodes: value.warningCodes as PrepareGameResetPreview['warningCodes'],
   };
   return { ok: true, preview };

@@ -20,29 +20,38 @@ const sessionIds = [
   '223e4567-e89b-42d3-a456-426614174002',
   '223e4567-e89b-42d3-a456-426614174003',
 ];
+const proposedSessionIds = [
+  '523e4567-e89b-42d3-a456-426614174000',
+  '523e4567-e89b-42d3-a456-426614174001',
+  '523e4567-e89b-42d3-a456-426614174002',
+  '523e4567-e89b-42d3-a456-426614174003',
+];
 const config = { gameStatus: 'DAY1_ACTIVE', gameSessionId: sessionIds[0], sessionStartedAt: now, sessionSchemaVersion: 2, teamAScore: 5, teamBScore: 9, logs: [{ id: 'prior' }] };
 const requestId = '323e4567-e89b-42d3-a456-426614174000';
 
-function makeFixture({ admin = true, gameConfig = config, participants, collections, failWrite = false } = {}) {
+function makeFixture({ admin = true, gameConfig = config, participants, collections, failWrite = false, retryTransactionOnce = false } = {}) {
   const state = {
     admin,
     config: gameConfig === null ? null : structuredClone(gameConfig),
     configRevision: 'config-revision-1',
     participants: structuredClone(participants ?? [
-      { id: 'player-a', team: 'A', revision: 'a1', name: 'private player name' },
-      { id: 'player-b', team: 'B', revision: 'b1' },
-      { id: 'admin-player', team: 'ADMIN', revision: 'x1' },
-      { id: 'unknown', team: 'OTHER', revision: 'y1' },
+      { id: 'player-a', team: 'A', revision: 'a1', name: 'private player name', status: 'EMERGENCY', score: 10 },
+      { id: 'player-b', team: 'B', revision: 'b1', status: 'CAPTURED', score: 20 },
+      { id: 'admin-player', team: 'ADMIN', revision: 'x1', status: 'ACTIVE', score: 99 },
+      { id: 'unknown', team: 'OTHER', revision: 'y1', status: 'ACTIVE', score: 88 },
     ]),
     collections: structuredClone(collections ?? {
-      privateLocations: [{ id: 'player-a', revision: 'p1', data: { latitude: 35, longitude: 139 } }],
+      privateLocations: [{ id: 'player-a', revision: 'p1', data: { latitude: 35, longitude: 139 } }, { id: 'admin-player', revision: 'p2', data: {} }],
       exposedLocations: [{ id: 'player-b', revision: 'e1', data: { latitude: 36, longitude: 140 } }],
       emergencyLocationProjections: [{ id: 'player-b', revision: 'm1', data: { latitude: 37, longitude: 141 } }],
     }),
     confirmations: new Map(),
+    receipts: new Map(),
+    missionCompletions: [{ id: 'historical-completion', gameSessionId: sessionIds[0] }],
     writes: [],
     reads: [],
     failWrite,
+    retryTransactionOnce,
     queue: Promise.resolve(),
   };
   const store = {
@@ -52,22 +61,54 @@ function makeFixture({ admin = true, gameConfig = config, participants, collecti
       state.queue = new Promise(resolve => { release = resolve; });
       await previous;
       try {
-        const pending = [];
-        const tx = {
-          readAdmin: async actor => { state.reads.push('admin'); return actor === uid && state.admin; },
-          readConfig: async () => { state.reads.push('config'); return state.config === null ? null : { data: structuredClone(state.config), revision: state.configRevision }; },
-          readParticipants: async () => { state.reads.push('participants'); return structuredClone(state.participants); },
-          readCollection: async name => { state.reads.push(`collection:${name}`); return structuredClone(state.collections[name]); },
-          readConfirmation: async (actor, token) => { state.reads.push('confirmation'); return structuredClone(state.confirmations.get(`${actor}:${token}`) ?? null); },
-          createConfirmation: (actor, token, confirmation) => {
-            state.writes.push(`confirmation:${actor}:${token}`);
-            pending.push(() => state.confirmations.set(`${actor}:${token}`, structuredClone(confirmation)));
-          },
+        const runAttempt = async () => {
+          const pending = [];
+          const writeLabels = [];
+          const tx = {
+            readAdmin: async actor => { state.reads.push('admin'); return actor === uid && state.admin; },
+            readConfig: async () => { state.reads.push('config'); return state.config === null ? null : { data: structuredClone(state.config), revision: state.configRevision }; },
+            readParticipants: async () => { state.reads.push('participants'); return structuredClone(state.participants); },
+            readCollection: async name => { state.reads.push(`collection:${name}`); return structuredClone(state.collections[name]); },
+            readConfirmation: async (actor, token) => { state.reads.push('confirmation'); return structuredClone(state.confirmations.get(`${actor}:${token}`) ?? null); },
+            readResetReceipt: async (actor, id) => { state.reads.push('receipt'); return structuredClone(state.receipts.get(`${actor}:${id}`) ?? null); },
+            createConfirmation: (actor, token, confirmation) => {
+              writeLabels.push(`confirmation:${actor}:${token}`);
+              pending.push(() => state.confirmations.set(`${actor}:${token}`, structuredClone(confirmation)));
+            },
+            writeReset: commit => {
+              writeLabels.push('config', ...commit.participantIds.map(id => `player:${id}`));
+              for (const [name, ids] of Object.entries(commit.locationIds)) {
+                writeLabels.push(...ids.map(id => `delete:${name}:${id}`));
+              }
+              writeLabels.push(`confirmation-used:${commit.confirmationToken}`, `receipt:${commit.requestId}`);
+              pending.push(() => {
+                state.config = { ...state.config, ...structuredClone(commit.configPatch) };
+                state.configRevision = 'config-revision-reset';
+                state.participants = state.participants.map(player => commit.participantIds.includes(player.id)
+                  ? { ...player, ...structuredClone(commit.playerPatch) }
+                  : player);
+                for (const [name, ids] of Object.entries(commit.locationIds)) {
+                  state.collections[name] = state.collections[name].filter(document => !ids.includes(document.id));
+                }
+                const key = `${commit.adminUid}:${commit.confirmationToken}`;
+                state.confirmations.set(key, { ...state.confirmations.get(key), used: true, usedAt: commit.completedAt });
+                state.receipts.set(`${commit.adminUid}:${commit.requestId}`, structuredClone(commit.receipt));
+              });
+            },
+          };
+          const result = await work(tx);
+          return { result, pending, writeLabels };
         };
-        const result = await work(tx);
-        if (state.failWrite && pending.length > 0) throw new Error('storage failure');
-        pending.forEach(apply => apply());
-        return result;
+        let attempt = await runAttempt();
+        if (state.retryTransactionOnce) {
+          state.retryTransactionOnce = false;
+          state.reads.push('transaction-retry');
+          attempt = await runAttempt();
+        }
+        if (state.failWrite && attempt.writeLabels.length > 0) throw new Error('storage failure');
+        attempt.pending.forEach(apply => apply());
+        state.writes.push(...attempt.writeLabels);
+        return attempt.result;
       } finally {
         release();
       }
@@ -76,10 +117,11 @@ function makeFixture({ admin = true, gameConfig = config, participants, collecti
   let tokenIndex = 0;
   let sessionIndex = 0;
   const runtime = {
-    calls: { now: 0, token: 0, session: 0 },
+    calls: { now: 0, token: 0, session: 0, log: 0 },
     now() { this.calls.now += 1; return now; },
     createTokenId() { this.calls.token += 1; return tokenIds[tokenIndex++]; },
-    createProposedSessionId() { this.calls.session += 1; return sessionIds[sessionIndex++]; },
+    createProposedSessionId() { this.calls.session += 1; return proposedSessionIds[sessionIndex++]; },
+    createLogId() { this.calls.log += 1; return '423e4567-e89b-42d3-a456-426614174099'; },
   };
   return { state, store, runtime };
 }
@@ -149,7 +191,7 @@ describe('trusted game reset foundation service', () => {
       const fixture = makeFixture();
       await rejects(reason, () => executeGameResetForAdmin(uid, input, fixture.store, fixture.runtime));
       assert.deepEqual(fixture.state.writes, []);
-      assert.deepEqual(fixture.state.reads, reason === 'INVALID_ARGUMENT' ? [] : ['admin', 'config']);
+      assert.deepEqual(fixture.state.reads, reason === 'INVALID_ARGUMENT' ? [] : ['admin', 'receipt', 'config']);
     }
 
     for (const [gameConfig, reason] of [
@@ -162,7 +204,7 @@ describe('trusted game reset foundation service', () => {
       await rejects(reason, () => executeGameResetForAdmin(uid, {
         confirmationToken: tokenIds[0], requestId, expectedSessionId: sessionIds[0],
       }, fixture.store, fixture.runtime));
-      assert.deepEqual(fixture.state.reads, ['admin', 'config']);
+      assert.deepEqual(fixture.state.reads, ['admin', 'receipt', 'config']);
       assert.deepEqual(fixture.state.writes, []);
     }
   });
@@ -175,14 +217,14 @@ describe('trusted game reset foundation service', () => {
       confirmationToken: tokenIds[0],
       expiresAt: now + 5 * 60 * 1000,
       currentSessionId: sessionIds[0],
-      proposedSessionId: sessionIds[0],
+      proposedSessionId: proposedSessionIds[0],
       sessionSchemaVersion: 2,
       participantCount: 2,
       privateLocationCount: 1,
       exposedLocationCount: 1,
       emergencyProjectionCount: 1,
       estimatedWriteCount: 8,
-      resetReady: false,
+      resetReady: true,
       warningCodes: [],
     });
     assert.equal(JSON.stringify(result).includes('private player name'), false);
@@ -190,10 +232,10 @@ describe('trusted game reset foundation service', () => {
     const receipt = fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`);
     assert.equal(receipt.actorUid, uid);
     assert.equal(receipt.currentSessionId, sessionIds[0]);
-    assert.equal(receipt.proposedSessionId, sessionIds[0]);
+    assert.equal(receipt.proposedSessionId, proposedSessionIds[0]);
     assert.equal(receipt.used, false);
     assert.equal(receipt.previewFingerprint.length, 64);
-    assert.deepEqual(fixture.runtime.calls, { now: 1, token: 1, session: 1 });
+    assert.deepEqual(fixture.runtime.calls, { now: 1, token: 1, session: 1, log: 0 });
     const second = await prepare(fixture);
     assert.equal(second.confirmationToken, tokenIds[1]);
     assert.notEqual(second.proposedSessionId, result.proposedSessionId);
@@ -269,27 +311,148 @@ describe('trusted game reset foundation service', () => {
       fixture.state.reads.length = 0;
       fixture.state.writes.length = 0;
       await rejects(session === undefined ? 'PERSISTENCE_ERROR' : 'SESSION_CHANGED', () => execute(fixture, tokenIds[0]));
-      assert.deepEqual(fixture.state.reads, ['admin', 'config', 'confirmation']);
+      assert.deepEqual(fixture.state.reads, ['admin', 'receipt', 'config', 'confirmation']);
       assert.deepEqual(fixture.state.writes, []);
     }
   });
 
-  test('execute remains RESET_NOT_READY for a matching current Session and writes no state', async () => {
-    for (const session of [{}]) {
-      const fixture = makeFixture({ gameConfig: { ...config, ...session } });
-      await prepare(fixture);
-      const configBefore = structuredClone(fixture.state.config);
-      const participantsBefore = structuredClone(fixture.state.participants);
-      const collectionsBefore = structuredClone(fixture.state.collections);
-      const tokenBefore = structuredClone(fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`));
-      fixture.state.writes.length = 0;
-      await rejects('RESET_NOT_READY', () => execute(fixture, tokenIds[0]));
-      assert.deepEqual(fixture.state.config, configBefore);
-      assert.deepEqual(fixture.state.participants, participantsBefore);
-      assert.deepEqual(fixture.state.collections, collectionsBefore);
-      assert.deepEqual(fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`), tokenBefore);
-      assert.deepEqual(fixture.state.writes, []);
-      assert.equal(fixture.state.confirmations.size, 1);
+  test('executes reset atomically, binds A/B Players to a new Session, cleans locations, and preserves history', async () => {
+    const fixture = makeFixture();
+    await prepare(fixture);
+    const previousCompletions = structuredClone(fixture.state.missionCompletions);
+    fixture.state.writes.length = 0;
+    const result = await execute(fixture, tokenIds[0]);
+
+    assert.deepEqual(result, { ok: true, executed: true, newSessionId: proposedSessionIds[0] });
+    assert.equal(fixture.state.config.gameSessionId, proposedSessionIds[0]);
+    assert.equal(fixture.state.config.sessionSchemaVersion, 2);
+    assert.equal(fixture.state.config.sessionStartedAt, now);
+    assert.equal(fixture.state.config.gameStatus, 'PRE_GAME');
+    assert.equal(fixture.state.config.teamAScore, 0);
+    assert.equal(fixture.state.config.teamBScore, 0);
+    assert.equal(fixture.state.config.activeMissionA, null);
+    assert.equal(fixture.state.config.activeMissionB, null);
+    assert.equal(fixture.state.config.locationRevealUntil, null);
+    assert.equal(fixture.state.config.logs[0].actorUid, uid);
+    assert.equal(fixture.state.config.logs[0].gameSessionId, proposedSessionIds[0]);
+
+    for (const id of ['player-a', 'player-b']) {
+      const player = fixture.state.participants.find(value => value.id === id);
+      assert.equal(player.gameSessionId, proposedSessionIds[0]);
+      assert.equal(player.status, 'ACTIVE');
+      assert.equal(player.score, 0);
+      assert.equal(player.invincibleCards, 0);
+      assert.equal(player.invincibleUntil, 0);
+      assert.equal(player.waitingUntil, 0);
+      assert.equal(player.shinkansenStartTime, null);
     }
+    assert.equal(fixture.state.participants.find(value => value.id === 'admin-player').score, 99);
+    assert.equal(fixture.state.participants.find(value => value.id === 'unknown').score, 88);
+    assert.deepEqual(fixture.state.collections.privateLocations.map(value => value.id), ['admin-player']);
+    assert.deepEqual(fixture.state.collections.exposedLocations, []);
+    assert.deepEqual(fixture.state.collections.emergencyLocationProjections, []);
+    assert.deepEqual(fixture.state.missionCompletions, previousCompletions);
+    assert.equal(fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`).used, true);
+
+    const receipt = fixture.state.receipts.get(`${uid}:${requestId}`);
+    assert.equal(receipt.gameSessionId, config.gameSessionId);
+    assert.equal(receipt.confirmationToken, tokenIds[0]);
+    assert.deepEqual(receipt.result, result);
+    assert.equal(fixture.state.writes.length, 8);
+  });
+
+  test('replays the same request stably after Session change and rejects old-session new requests', async () => {
+    const fixture = makeFixture();
+    await prepare(fixture);
+    const first = await execute(fixture, tokenIds[0]);
+    const stateAfterReset = {
+      config: structuredClone(fixture.state.config),
+      participants: structuredClone(fixture.state.participants),
+      collections: structuredClone(fixture.state.collections),
+      confirmation: structuredClone(fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`)),
+      receipt: structuredClone(fixture.state.receipts.get(`${uid}:${requestId}`)),
+    };
+    fixture.state.reads.length = 0;
+    fixture.state.writes.length = 0;
+
+    const replay = await execute(fixture, tokenIds[0], {
+      confirmationToken: tokenIds[0], requestId, expectedSessionId: config.gameSessionId,
+    });
+    assert.deepEqual(replay, first);
+    assert.deepEqual(fixture.state.reads, ['admin', 'receipt']);
+    assert.deepEqual(fixture.state.writes, []);
+    assert.deepEqual(fixture.state.config, stateAfterReset.config);
+    assert.deepEqual(fixture.state.participants, stateAfterReset.participants);
+    assert.deepEqual(fixture.state.collections, stateAfterReset.collections);
+    assert.deepEqual(fixture.state.confirmations.get(`${uid}:${tokenIds[0]}`), stateAfterReset.confirmation);
+
+    const staleRequest = {
+      confirmationToken: tokenIds[0],
+      requestId: tokenIds[1],
+      expectedSessionId: config.gameSessionId,
+    };
+    await rejects('SESSION_CHANGED', () => execute(fixture, tokenIds[0], staleRequest));
+    assert.deepEqual(fixture.state.writes, []);
+    assert.deepEqual(fixture.state.receipts.get(`${uid}:${requestId}`), stateAfterReset.receipt);
+  });
+
+  test('rejects legacy or cross-Session request receipts and reused tokens without writes', async () => {
+    const fixture = makeFixture();
+    fixture.state.receipts.set(`${uid}:${requestId}`, {
+      operation: 'executeGameReset', requestId, confirmationToken: tokenIds[0],
+      result: { ok: true, executed: true, newSessionId: sessionIds[1] },
+    });
+    await rejects('REQUEST_ID_REUSED', () => execute(fixture, tokenIds[0]));
+    assert.deepEqual(fixture.state.writes, []);
+
+    fixture.state.receipts.clear();
+    fixture.state.receipts.set(`${uid}:${requestId}`, {
+      operation: 'executeGameReset', requestId, gameSessionId: sessionIds[1],
+      confirmationToken: tokenIds[0], createdAt: now,
+      result: { ok: true, executed: true, newSessionId: sessionIds[1] },
+    });
+    await rejects('SESSION_CHANGED', () => execute(fixture, tokenIds[0]));
+    assert.deepEqual(fixture.state.writes, []);
+  });
+
+  test('rejects oversized execution before any write and rolls back persistence failures', async () => {
+    const largeParticipants = Array.from({ length: 448 }, (_, i) => ({ id: `p${i}`, team: 'A', revision: `r${i}` }));
+    const large = makeFixture({ participants: largeParticipants, collections: { privateLocations: [], exposedLocations: [], emergencyLocationProjections: [] } });
+    await prepare(large);
+    large.state.writes.length = 0;
+    await rejects('RESET_TOO_LARGE', () => execute(large, tokenIds[0]));
+    assert.deepEqual(large.state.writes, []);
+    assert.equal(large.state.config.gameSessionId, sessionIds[0]);
+
+    const failing = makeFixture();
+    await prepare(failing);
+    const before = {
+      config: structuredClone(failing.state.config),
+      participants: structuredClone(failing.state.participants),
+      collections: structuredClone(failing.state.collections),
+      confirmation: structuredClone(failing.state.confirmations.get(`${uid}:${tokenIds[0]}`)),
+    };
+    failing.state.failWrite = true;
+    await rejects('PERSISTENCE_ERROR', () => execute(failing, tokenIds[0]));
+    assert.deepEqual(failing.state.config, before.config);
+    assert.deepEqual(failing.state.participants, before.participants);
+    assert.deepEqual(failing.state.collections, before.collections);
+    assert.deepEqual(failing.state.confirmations.get(`${uid}:${tokenIds[0]}`), before.confirmation);
+    assert.equal(failing.state.receipts.size, 0);
+  });
+
+  test('holds generated time and audit ID constant across transaction retries', async () => {
+    const fixture = makeFixture({ retryTransactionOnce: true });
+    await prepare(fixture);
+    fixture.state.retryTransactionOnce = true;
+    fixture.state.reads.length = 0;
+    fixture.state.writes.length = 0;
+    const result = await execute(fixture, tokenIds[0]);
+    assert.equal(result.newSessionId, proposedSessionIds[0]);
+    assert.equal(fixture.runtime.calls.log, 1);
+    assert.equal(fixture.runtime.calls.now, 2);
+    assert.equal(fixture.state.config.logs[0].id, '423e4567-e89b-42d3-a456-426614174099');
+    assert.equal(fixture.state.receipts.get(`${uid}:${requestId}`).createdAt, now);
+    assert.equal(fixture.state.writes.length, 8);
   });
 });

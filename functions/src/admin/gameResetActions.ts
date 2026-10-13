@@ -32,8 +32,9 @@ const store: GameResetStore = {
       readAdmin: async uid => (await transaction.get(admins.doc(uid))).exists,
       readConfig: async () => {
         const snapshot = await transaction.get(configRef);
+        const updateTime = snapshot.updateTime;
         return snapshot.exists
-          ? { data: snapshot.data() ?? {}, revision: String(snapshot.updateTime?.toMillis() ?? '') }
+          ? { data: snapshot.data() ?? {}, revision: updateTime ? `${updateTime.seconds}:${updateTime.nanoseconds}` : '' }
           : null;
       },
       readParticipants: async () => {
@@ -56,8 +57,28 @@ const store: GameResetStore = {
         const snapshot = await transaction.get(admins.doc(uid).collection('resetConfirmations').doc(tokenId));
         return snapshot.exists ? snapshot.data() ?? null : null;
       },
+      readResetReceipt: async (uid, requestId) => {
+        const snapshot = await transaction.get(admins.doc(uid).collection('gameResetRequests').doc(requestId));
+        return snapshot.exists ? snapshot.data() ?? null : null;
+      },
       createConfirmation: (uid, tokenId, confirmation) => {
         transaction.create(admins.doc(uid).collection('resetConfirmations').doc(tokenId), confirmation);
+      },
+      writeReset: commit => {
+        transaction.update(configRef, commit.configPatch as never);
+        for (const participantId of commit.participantIds) {
+          transaction.update(users.doc(participantId), commit.playerPatch as never);
+        }
+        for (const name of ['privateLocations', 'exposedLocations', 'emergencyLocationProjections'] as const) {
+          for (const documentId of commit.locationIds[name]) {
+            transaction.delete(collections[name].doc(documentId));
+          }
+        }
+        transaction.update(admins.doc(commit.adminUid).collection('resetConfirmations').doc(commit.confirmationToken), {
+          used: true,
+          usedAt: commit.completedAt,
+        });
+        transaction.create(admins.doc(commit.adminUid).collection('gameResetRequests').doc(commit.requestId), commit.receipt);
       },
     };
     return work(resetTransaction);
@@ -111,7 +132,10 @@ export const executeGameReset = onCall({ region: 'asia-northeast1' }, async requ
     throw new HttpsError('unauthenticated', 'Authentication is required.', { reason: 'UNAUTHENTICATED' });
   }
   try {
-    return await executeGameResetForAdmin(request.auth.uid, request.data, store, { now: Date.now });
+    return await executeGameResetForAdmin(request.auth.uid, request.data, store, {
+      now: Date.now,
+      createLogId: randomUUID,
+    });
   } catch (error) {
     throw toHttpsError(error, request.auth.uid, 'execute');
   }
