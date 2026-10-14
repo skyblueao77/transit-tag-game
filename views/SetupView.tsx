@@ -56,7 +56,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
 
     const newUser: User = {
       id,
-      name,
+      name: name.trim(),
       role: 'RUNNER',
       team,
       color,
