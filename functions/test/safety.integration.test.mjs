@@ -6,6 +6,8 @@ const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/
 const authBase = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
 const SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
 const STALE_SESSION_ID = '123e4567-e89b-42d3-a456-426614174001';
+const projectionHarnessTimeoutMs = 30_000;
+const projectionPollIntervalMs = 100;
 let sequence = 0;
 
 async function createAuthUser() {
@@ -59,6 +61,14 @@ async function readDocument(path, token) {
   return Object.fromEntries(Object.entries(document.fields ?? {}).map(([key, value]) => [key, decodeValue(value)]));
 }
 
+async function readDiagnosticDocument(path) {
+  const response = await fetch(`${firestoreBase}/${path}`, { headers: { Authorization: 'Bearer owner' } });
+  if (response.status === 404) return null;
+  if (!response.ok) return { readStatus: response.status, readError: await response.text() };
+  const document = await response.json();
+  return Object.fromEntries(Object.entries(document.fields ?? {}).map(([key, value]) => [key, decodeValue(value)]));
+}
+
 async function seedPrivateLocation(auth, { latitude = 35.1, longitude = 139.1, updatedAt = Date.now() } = {}) {
   const response = await fetch(`${firestoreBase}/privateLocations/${auth.localId}`, {
     method: 'PATCH',
@@ -71,21 +81,55 @@ async function seedPrivateLocation(auth, { latitude = 35.1, longitude = 139.1, u
     } }),
   });
   assert.equal(response.ok, true, `Private location write failed: ${response.status}`);
+  const result = await response.json();
+  assert.equal(typeof result.updateTime, 'string', `Private location write did not return a commit time: ${auth.localId}`);
+  return { updatedAt, updateTime: result.updateTime };
 }
 
-async function waitForProjection(uid, predicate) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+async function waitForProjection(uid, predicate, expected = null) {
+  const pollingStartedAt = Date.now();
+  const pollingDeadline = pollingStartedAt + projectionHarnessTimeoutMs;
+  let lastProjection = null;
+  while (Date.now() < pollingDeadline) {
     const response = await fetch(`${firestoreBase}/emergencyLocationProjections/${uid}`, {
       headers: { Authorization: 'Bearer owner' },
     });
     if (response.ok) {
       const document = await response.json();
       const data = Object.fromEntries(Object.entries(document.fields ?? {}).map(([key, value]) => [key, decodeValue(value)]));
-      if (predicate(data)) return data;
+      lastProjection = data;
+      if (Date.now() <= pollingDeadline && predicate(data)) return data;
     }
-    await new Promise(resolve => setTimeout(resolve, 100));
+    const remainingMs = pollingDeadline - Date.now();
+    if (remainingMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(projectionPollIntervalMs, remainingMs)));
   }
-  assert.fail(`Projection condition not met for ${uid}`);
+  const pollingEndedAt = Date.now();
+  const [config, player, location] = await Promise.all([
+    readDiagnosticDocument('game_config/current'),
+    readDiagnosticDocument(`users/${uid}`),
+    readDiagnosticDocument(`privateLocations/${uid}`),
+  ]);
+  assert.fail(`Projection condition not met for ${uid}: ${JSON.stringify({
+    lastProjection: lastProjection && {
+      gameSessionId: lastProjection.gameSessionId,
+      safetyStatus: lastProjection.safetyStatus,
+      sourceLocationUpdatedAt: lastProjection.sourceLocationUpdatedAt,
+      projectedAt: lastProjection.projectedAt,
+      expiresAt: lastProjection.expiresAt,
+    },
+    configSessionId: config?.gameSessionId,
+    configSessionSchemaVersion: config?.sessionSchemaVersion,
+    playerSessionId: player?.gameSessionId,
+    playerStatus: player?.status,
+    locationSessionId: location?.gameSessionId,
+    locationUpdatedAt: location?.updatedAt,
+    expected,
+    pollingStartedAt,
+    pollingEndedAt,
+    pollingElapsedMs: pollingEndedAt - pollingStartedAt,
+    harnessTimeoutMs: projectionHarnessTimeoutMs,
+    timeoutMeaning: 'Emulator integration hang guard; not a production latency SLO',
+  })}`);
 }
 
 async function call(data, token) {
@@ -195,7 +239,7 @@ describe('Safety Action callable emulator integration', () => {
     assert.equal(retiredProjection.status, 404);
   });
 
-  test('Emergency without fresh location still succeeds; private location create/update triggers projection refresh', async () => {
+  test('Emergency without fresh location still succeeds; committed private location changes are eventually projected', async () => {
     const auth = await createPlayer();
     const first = await call({ action: 'EMERGENCY', reasonCode: 'OTHER' }, auth.idToken);
     assert.equal(first.body.result.ok, true);
@@ -203,25 +247,47 @@ describe('Safety Action callable emulator integration', () => {
     assert.equal((await assertSafetyState(auth, 'EMERGENCY')).status, 'EMERGENCY');
     assert.equal(safetyLog(await readDocument('game_config/current', auth.idToken)).length, 1);
 
-    await seedPrivateLocation(auth, { latitude: 36.1, longitude: 140.1 });
-    await waitForProjection(auth.localId, data => data.latitude === 36.1);
-    await seedPrivateLocation(auth, { latitude: 37.1, longitude: 141.1 });
-    const refreshed = await waitForProjection(auth.localId, data => data.latitude === 37.1);
+    const firstUpdatedAt = Date.now() - 1_000;
+    const firstWrite = await seedPrivateLocation(auth, { latitude: 36.1, longitude: 140.1, updatedAt: firstUpdatedAt });
+    await waitForProjection(auth.localId, data => data.latitude === 36.1
+      && data.sourceLocationUpdatedAt === firstUpdatedAt, {
+      sourceLocationUpdatedAt: firstUpdatedAt,
+      firestoreUpdateTime: firstWrite.updateTime,
+    });
+    const secondUpdatedAt = Date.now();
+    assert.ok(secondUpdatedAt > firstUpdatedAt);
+    const secondWrite = await seedPrivateLocation(auth, { latitude: 37.1, longitude: 141.1, updatedAt: secondUpdatedAt });
+    const committedLocation = await readDocument(`privateLocations/${auth.localId}`, auth.idToken);
+    assert.equal(committedLocation.gameSessionId, SESSION_ID);
+    assert.equal(committedLocation.updatedAt, secondUpdatedAt);
+    const refreshed = await waitForProjection(auth.localId, data => data.sourceLocationUpdatedAt === secondUpdatedAt, {
+      sourceLocationUpdatedAt: secondUpdatedAt,
+      firestoreUpdateTime: secondWrite.updateTime,
+    });
+    assert.equal(refreshed.latitude, 37.1);
     assert.equal(refreshed.longitude, 141.1);
   });
 
   test('same-coordinate private location heartbeat renews the Emergency projection', async () => {
     const auth = await createPlayer();
-    await seedPrivateLocation(auth, { latitude: 35.1, longitude: 139.1 });
+    const initialUpdatedAt = Date.now() - 1_000;
+    const initialWrite = await seedPrivateLocation(auth, { latitude: 35.1, longitude: 139.1, updatedAt: initialUpdatedAt });
+    assert.equal(typeof initialWrite.updateTime, 'string');
     const result = await call({ action: 'EMERGENCY', reasonCode: 'OTHER' }, auth.idToken);
     assert.equal(result.body.result.ok, true);
     const before = await waitForProjection(auth.localId, data => data.latitude === 35.1);
 
-    await new Promise(resolve => setTimeout(resolve, 25));
-    await seedPrivateLocation(auth, { latitude: 35.1, longitude: 139.1 });
+    const heartbeatUpdatedAt = Date.now();
+    assert.ok(heartbeatUpdatedAt > before.sourceLocationUpdatedAt);
+    const heartbeatWrite = await seedPrivateLocation(auth, {
+      latitude: 35.1, longitude: 139.1, updatedAt: heartbeatUpdatedAt,
+    });
+    assert.equal(typeof heartbeatWrite.updateTime, 'string');
+    const committedLocation = await readDocument(`privateLocations/${auth.localId}`, auth.idToken);
+    assert.equal(committedLocation.updatedAt, heartbeatUpdatedAt);
     const renewed = await waitForProjection(
       auth.localId,
-      data => data.sourceLocationUpdatedAt > before.sourceLocationUpdatedAt,
+      data => data.sourceLocationUpdatedAt === heartbeatUpdatedAt,
     );
 
     assert.equal(renewed.latitude, before.latitude);
