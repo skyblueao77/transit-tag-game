@@ -72,6 +72,17 @@ describe('Emergency location projection service', () => {
     assert.equal('reason' in state.projection, false);
   });
 
+  test('does not create a projection across Player or Location Session boundaries', async () => {
+    for (const options of [
+      { player: { id: 'uid-a', gameSessionId: 'old-session', name: 'Trusted Player', team: 'A', status: 'EMERGENCY' } },
+      { location: { gameSessionId: 'old-session', latitude: 35.1, longitude: 139.1, updatedAt: now - 30_000 } },
+    ]) {
+      const { state, store } = fixture(options);
+      assert.deepEqual(await projectEmergencyLocationForPlayer('uid-a', store, runtime()), { status: 'UNAVAILABLE' });
+      assert.deepEqual(state.writes, []);
+    }
+  });
+
   test('does not use a missing or invalid Config Session for player/location reads or writes', async () => {
     for (const config of [
       null,
