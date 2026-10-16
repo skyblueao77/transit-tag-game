@@ -1,0 +1,5 @@
+# Local Supabase CLI project identity only; this is not a Hosted project reference.
+project_id = "transit-tag-game-poc"
+
+[db.seed]
+enabled = false
