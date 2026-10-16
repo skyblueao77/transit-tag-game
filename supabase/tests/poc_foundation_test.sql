@@ -96,7 +96,8 @@ BEGIN
     INTO v_helper_is_definer, v_helper_has_safe_search_path
   FROM pg_catalog.pg_proc AS procedure
   WHERE procedure.oid = 'poc_private.is_session_member(uuid)'::pg_catalog.regprocedure;
-  IF NOT v_helper_is_definer OR NOT v_helper_has_safe_search_path THEN
+  IF v_helper_is_definer IS DISTINCT FROM true
+    OR v_helper_has_safe_search_path IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'Membership helper is not SECURITY DEFINER with a fixed search_path.';
   END IF;
 
