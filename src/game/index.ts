@@ -175,3 +175,13 @@ export type {
   CaptureResult,
   CaptureSuccess,
 } from './capture';
+export {
+  calculateHaversineDistanceMeters,
+  shouldThrottleLocationUpdate,
+} from './locationThrottling';
+export type {
+  LocationThrottleOptions,
+  ShouldUploadInput,
+  ShouldUploadResult,
+  ThrottleDecisionReason,
+} from './locationThrottling';
