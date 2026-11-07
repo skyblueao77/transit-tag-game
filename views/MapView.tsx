@@ -13,6 +13,7 @@ import {
   ONI_INITIAL_LOCK_DURATION_MS,
   remainingSeconds,
   SHINKANSEN_LIMIT_DURATION_MS,
+  shouldThrottleLocationUpdate,
 } from '../src/game';
 import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
 import L from '../src/lib/leafletSetup';
@@ -50,6 +51,7 @@ const MapView: React.FC<Props> = ({
   const isOffline = !isOnline;
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
+  const lastUploadedCoords = useRef<Coordinates | null>(null);
   const resumeRequestedUntil = useRef<number | null>(null);
 
   // Keep screen awake while MapView is active
@@ -71,27 +73,40 @@ const MapView: React.FC<Props> = ({
     }
   }, [captureCandidates, selectedTargetId]);
 
-  // 位置情報更新
+  // 位置情報更新 (30m 移動 または 5分間隔フォールバックによるBaaS書き込みクォータ保護)
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
     if (!currentUser || !gameConfig.gameSessionId || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
     if (!navigator.onLine) return;
 
     const now = Date.now();
-    if (now - lastUploadTime.current < 60000) return;
-    if (position.coords.accuracy > 400) return;
+    const currentCoords: Coordinates = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+    };
+
+    const decision = shouldThrottleLocationUpdate({
+      currentCoords,
+      currentAccuracy: position.coords.accuracy,
+      currentTimeMs: now,
+      lastUploadedCoords: lastUploadedCoords.current,
+      lastUploadedTimeMs: lastUploadTime.current,
+    });
+
+    if (!decision.shouldUpload) return;
 
     try {
       const result = await onUpdatePrivateLocation({
         playerId: currentUser.id,
         expectedSessionId: gameConfig.gameSessionId,
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
+        latitude: currentCoords.latitude,
+        longitude: currentCoords.longitude,
       });
       if (!result.ok) {
         console.error('Failed to update private location:', result.reason);
         return;
       }
       lastUploadTime.current = now;
+      lastUploadedCoords.current = currentCoords;
     } catch (error) {
       console.error('Failed to update location:', error);
     }
@@ -105,9 +120,7 @@ const MapView: React.FC<Props> = ({
       if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
       watchId.current = navigator.geolocation.watchPosition(
         position => {
-          const latDiff = Math.abs(position.coords.latitude - (privateLocation?.latitude ?? 0));
-          const lngDiff = Math.abs(position.coords.longitude - (privateLocation?.longitude ?? 0));
-          if (latDiff > 0.0001 || lngDiff > 0.0001) updateLocation(position);
+          updateLocation(position);
         },
         error => console.error('Geolocation watch error:', error),
         { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
@@ -138,7 +151,7 @@ const MapView: React.FC<Props> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopWatching();
     };
-  }, [currentUser, updateLocation, privateLocation?.latitude, privateLocation?.longitude]);
+  }, [currentUser, updateLocation]);
 
   // タイマー
   useEffect(() => {
