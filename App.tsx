@@ -444,16 +444,27 @@ const App: React.FC = () => {
   // 待機モードの自動復帰（Cloud Functions Cron不要化: Sparkプラン対応）
   useEffect(() => {
     if (!currentUser || currentUser.status !== 'WAITING' || !currentUser.waitingUntil) return;
-    const remainingMs = currentUser.waitingUntil - Date.now();
-    if (remainingMs <= 0) {
-      void handleResumeWaiting();
-      return;
-    }
-    const timer = setTimeout(() => {
-      void handleResumeWaiting();
-    }, remainingMs);
-    return () => clearTimeout(timer);
-  }, [currentUser?.status, currentUser?.waitingUntil, handleResumeWaiting]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const attempt = (delay: number) => {
+      timer = setTimeout(async () => {
+        if (cancelled) return;
+        if (!gameConfig.gameSessionId) return;
+        const result = await resumeWaiting({ expectedSessionId: gameConfig.gameSessionId }, firebaseWaitingGateway);
+        if (!cancelled && result.ok === false) {
+          console.warn('Waiting resume retry scheduled:', result.reason);
+          attempt(5000);
+        }
+      }, Math.max(0, delay));
+    };
+
+    attempt(currentUser.waitingUntil - Date.now());
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [currentUser?.status, currentUser?.waitingUntil, gameConfig.gameSessionId]);
 
   // ---- 画面分岐 ----
 

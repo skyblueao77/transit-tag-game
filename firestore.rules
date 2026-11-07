@@ -197,8 +197,8 @@ service cloud.firestore {
         && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         && request.resource.data.safetyStatus == 'EMERGENCY'
         && request.resource.data.projectionKind == 'EMERGENCY'
-        && exists(/databases/$(database)/documents/users/$(uid))
-        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY'
+        && existsAfter(/databases/$(database)/documents/users/$(uid))
+        && getAfter(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY'
         && request.resource.data.latitude is number
         && request.resource.data.latitude >= -90
         && request.resource.data.latitude <= 90
@@ -219,31 +219,70 @@ service cloud.firestore {
     }
 
     function validSelfUserUpdate(uid) {
+      let b = resource.data;
+      let a = request.resource.data;
+      let diff = a.diff(b).affectedKeys();
+      let nowMs = request.time.toMillis();
       return signedIn()
         && request.auth.uid == uid
-        && request.resource.data.id == resource.data.id
-        && request.resource.data.team == resource.data.team
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.gameSessionId == resource.data.gameSessionId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'status', 'waitingUntil', 'shinkansenStartTime',
-          'invincibleCards', 'invincibleUntil', 'score'
-        ]);
+        && a.id == b.id
+        && a.team == b.team
+        && a.role == b.role
+        && a.gameSessionId == b.gameSessionId
+        && (
+          // 1. Profile name update
+          (diff.hasOnly(['name']) && a.name is string && a.name.size() > 0 && a.name.size() <= 80)
+          // 2. Waiting resume upon expiry
+          || (b.status == 'WAITING' && a.status == 'ACTIVE'
+              && b.waitingUntil is int && b.waitingUntil <= nowMs
+              && a.waitingUntil == 0
+              && diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime']))
+          // 3. Manual waiting start (60 min max duration + 60s tolerance)
+          || (b.status == 'ACTIVE' && a.status == 'WAITING'
+              && a.waitingUntil is int && a.waitingUntil > nowMs
+              && a.waitingUntil <= nowMs + 3660000
+              && diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime']))
+          // 4. Powerup invincibility card use (10 min max duration + 60s tolerance)
+          || (b.invincibleCards is int && b.invincibleCards >= 1
+              && a.invincibleCards == b.invincibleCards - 1
+              && a.invincibleUntil is int && a.invincibleUntil > nowMs
+              && a.invincibleUntil <= nowMs + 660000
+              && diff.hasOnly(['invincibleCards', 'invincibleUntil']))
+          // 5. Safety action: Emergency or Retire
+          || (a.status in ['EMERGENCY', 'RETIRED']
+              && a.waitingUntil == 0
+              && a.invincibleUntil == 0
+              && diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'invincibleUntil']))
+          // 6. Mission completion reward (bounded score & card increment)
+          || (a.score is int && a.score >= b.score && a.score <= b.score + 100
+              && a.invincibleCards is int && a.invincibleCards >= b.invincibleCards && a.invincibleCards <= b.invincibleCards + 1
+              && diff.hasOnly(['score', 'invincibleCards']))
+        );
     }
 
     function validParticipantCaptureUpdate(uid) {
+      let b = resource.data;
+      let a = request.resource.data;
+      let diff = a.diff(b).affectedKeys();
+      let configPath = /databases/$(database)/documents/game_config/current;
+      let curConfig = get(configPath).data;
+      let afterConfig = getAfter(configPath).data;
+      let me = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      let myRole = me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
       return signedIn()
         && isCurrentParticipant(request.auth.uid)
-        && request.resource.data.id == resource.data.id
-        && request.resource.data.name == resource.data.name
-        && request.resource.data.team == resource.data.team
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.score == resource.data.score
-        && request.resource.data.gameSessionId == resource.data.gameSessionId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status', 'waitingUntil', 'invincibleUntil', 'invincibleCards'
-        ])
-        && request.resource.data.status in ['WAITING', 'CAPTURED', 'ACTIVE'];
+        && a.id == b.id
+        && a.name == b.name
+        && a.team == b.team
+        && a.role == b.role
+        && a.score == b.score
+        && a.gameSessionId == b.gameSessionId
+        && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && myRole == 'ONI'
+        && afterConfig.teamARole != curConfig.teamARole
+        && !(b.invincibleUntil is int && b.invincibleUntil > request.time.toMillis())
+        && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil', 'invincibleCards'])
+        && a.status in ['WAITING', 'ACTIVE'];
     }
 
     match /users/{uid} {
@@ -260,6 +299,9 @@ service cloud.firestore {
 
     function validMissionCompletionCreate() {
       let data = request.resource.data;
+      let configPath = /databases/$(database)/documents/game_config/current;
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let missionPath = /databases/$(database)/documents/missions/$(data.missionId);
       return signedIn()
         && isCurrentParticipant(request.auth.uid)
         && hasCurrentGameSession()
@@ -272,14 +314,23 @@ service cloud.firestore {
           'points', 'isFinalMission', 'completedAt'
         ])
         && data.completedBy == request.auth.uid
-        && data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-        && data.team == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.team
+        && data.gameSessionId == get(configPath).data.gameSessionId
+        && data.team == get(userPath).data.team
+        && get(userPath).data.status == 'ACTIVE'
+        && exists(missionPath)
+        && data.points is int
+        && data.points == get(missionPath).data.points
+        && data.isFinalMission is bool
+        && (data.isFinalMission == false
+            || (get(configPath).data.keys().hasAny(['activeFinalMissionId'])
+                && get(configPath).data.activeFinalMissionId == data.missionId))
         && data.completedAt is timestamp;
     }
 
     match /missionCompletions/{completionId} {
       allow read: if signedIn();
-      allow create: if isAdmin() || validMissionCompletionCreate();
+      allow create: if isAdmin() || (validMissionCompletionCreate()
+        && completionId.matches('^' + request.resource.data.team + '_[A-Za-z0-9_-]+$'));
       allow update, delete: if isAdmin();
     }
 
@@ -299,7 +350,14 @@ service cloud.firestore {
         && newData.isGameOver == currentData.isGameOver
         && newData.diff(currentData).affectedKeys().hasOnly([
           'teamARole', 'teamBRole', 'nextRevealTime', 'teamAScore', 'teamBScore', 'logs'
-        ]);
+        ])
+        && (newData.logs is list && newData.logs.size() <= 200)
+        && (newData.teamAScore is int && newData.teamAScore >= currentData.teamAScore && newData.teamAScore <= currentData.teamAScore + 100)
+        && (newData.teamBScore is int && newData.teamBScore >= currentData.teamBScore && newData.teamBScore <= currentData.teamBScore + 100)
+        && (
+          (newData.teamARole == currentData.teamARole && newData.teamBRole == currentData.teamBRole)
+          || (newData.teamARole in ['ONI', 'RUNNER'] && newData.teamBRole in ['ONI', 'RUNNER'] && newData.teamARole != newData.teamBRole)
+        );
     }
 
     match /game_config/{configId} {

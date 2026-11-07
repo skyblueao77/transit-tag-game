@@ -19,12 +19,16 @@ import type {
   ActivateInvincibilityResult,
   AdminGameResetGateway,
   AdminGameStateGateway,
+  AdminGameStateFailureReason,
   AdminMissionGateway,
+  AdminMissionFailureReason,
   AdminPhaseGateway,
   AdminRevealGateway,
   AdminRevealInput,
   AdminRevealResult,
+  AdminRevealFailureReason,
   AdminScoreAdjustmentGateway,
+  AdminScoreAdjustmentFailureReason,
   AdjustTeamScoreInput,
   AdjustTeamScoreResult,
   AssignMissionsInput,
@@ -86,6 +90,9 @@ import {
   type SafetyReasonCode,
 } from '../../game/playerSafety';
 import {
+  resolveEmergencyLocationProjection,
+} from '../../game/emergencyLocationProjection';
+import {
   canUsePowerup,
 } from '../../game/phases';
 import { getPlayerRole } from '../../game/roles';
@@ -120,13 +127,25 @@ import {
   planGameResetPreview,
   isResetConfirmationExpired,
   type ResetDocumentIdentity,
+  type ResetParticipantDocument,
+  RESET_MAX_ESTIMATED_WRITES,
 } from '../../game/gameReset';
 import { MISSIONS } from '../../../constants';
+import type { Mission } from '../../../types';
 import type { GameStatus, Role, TeamRoles } from '../../game/types';
 
 // ============================================================
 // ユーティリティ
 // ============================================================
+
+const MAX_LOGS = 200;
+
+interface LogEntryInput {
+  id: string;
+  now: number;
+  message: string;
+  type: string;
+}
 
 function formatLogTime(now: number): string {
   return new Date(now).toLocaleTimeString('ja-JP', {
@@ -134,6 +153,18 @@ function formatLogTime(now: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function appendToConfigLogs(configLogs: unknown, entry: LogEntryInput): unknown[] {
+  const timeStr = formatLogTime(entry.now);
+  const log = {
+    id: entry.id,
+    timestamp: entry.now,
+    message: `${timeStr} ${entry.message}`,
+    type: entry.type,
+  };
+  const prevLogs = Array.isArray(configLogs) ? configLogs : [];
+  return [log, ...prevLogs].slice(0, MAX_LOGS);
 }
 
 function generateSecureId(prefix = ''): string {
@@ -183,10 +214,15 @@ export const clientCaptureGateway: CaptureGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      // 参加者一覧を事前に取得
-      const participantQuery = query(collection(db, 'users'), where('team', 'in', ['A', 'B']));
+      // 参加者一覧を事前に取得 (現在のセッションに限定)
+      const participantQuery = query(
+        collection(db, 'users'),
+        where('gameSessionId', '==', input.expectedSessionId),
+      );
       const participantsSnap = await getDocs(participantQuery);
-      const participantIds = participantsSnap.docs.map(d => d.id);
+      const participantIds = participantsSnap.docs
+        .filter(d => d.data().team === 'A' || d.data().team === 'B')
+        .map(d => d.id);
       if (!participantIds.includes(captorId)) {
         return { ok: false, reason: 'PLAYER_NOT_FOUND' };
       }
@@ -250,15 +286,12 @@ export const clientCaptureGateway: CaptureGateway = {
           return { ok: false, reason: 'CAPTURE_REJECTED', domainReason: capture.reason };
         }
 
-        const timeStr = formatLogTime(now);
-        const captureLog = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} Team ${capture.reward.team} が捕獲成功！攻守交代 (+${capture.reward.scoreDelta}pt)`,
+          now,
+          message: `Team ${capture.reward.team} が捕獲成功！攻守交代 (+${capture.reward.scoreDelta}pt)`,
           type: 'CAPTURE',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [captureLog, ...prevLogs].slice(0, 200);
+        });
         const teamScoreField = capture.reward.team === 'A' ? 'teamAScore' : 'teamBScore';
 
         transaction.update(configRef, {
@@ -329,7 +362,10 @@ export const clientInvincibilityGateway: InvincibilityGateway = {
           return { ok: false, reason: 'POWERUP_NOT_ALLOWED', domainReason: 'PHASE' };
         }
 
-        const role = getPlayerRole(userData as never, configData as never);
+        const role = getPlayerRole(
+          { team: userData.team },
+          { teamARole: configData.teamARole, teamBRole: configData.teamBRole },
+        );
         if (role !== 'RUNNER') return { ok: false, reason: 'WRONG_ROLE' };
 
         const cards = typeof userData.invincibleCards === 'number' ? userData.invincibleCards : 0;
@@ -347,19 +383,19 @@ export const clientInvincibilityGateway: InvincibilityGateway = {
         });
 
         if (result.allowed === false) {
-          return { ok: false, reason: result.reason as never };
+          if (result.reason === 'ROLE') return { ok: false, reason: 'WRONG_ROLE' };
+          if (result.reason === 'NO_CARDS') return { ok: false, reason: 'NO_CARDS' };
+          if (result.reason === 'PHASE') return { ok: false, reason: 'POWERUP_NOT_ALLOWED', domainReason: 'PHASE' };
+          return { ok: false, reason: 'ALREADY_ACTIVE' };
         }
 
         const remainingCards = cards + result.cardDelta;
-        const timeStr = formatLogTime(now);
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} ${userData.name ?? 'Player'} が無敵カードを発動しました（10分間無敵）`,
+          now,
+          message: `${userData.name ?? 'Player'} が無敵カードを発動しました（10分間無敵）`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(userRef, {
           invincibleCards: remainingCards,
@@ -445,15 +481,12 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         const score = calculateMissionScore(reward, Math.random());
 
         const teamScoreField = userData.team === 'A' ? 'teamAScore' : 'teamBScore';
-        const timeStr = formatLogTime(now);
-        const missionLog = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} Team ${userData.team} (${userData.name ?? 'Player'}) が「${missionData.title ?? input.missionId}」を達成！(+${score.teamScoreDelta}pt)`,
+          now,
+          message: `Team ${userData.team} (${userData.name ?? 'Player'}) が「${missionData.title ?? input.missionId}」を達成！(+${score.teamScoreDelta}pt)`,
           type: 'MISSION',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [missionLog, ...prevLogs].slice(0, 200);
+        });
 
         transaction.set(completionRef, {
           gameSessionId: sessionValidation.gameSessionId,
@@ -521,7 +554,10 @@ export const clientWaitingGateway: WaitingGateway = {
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
-        const role = getPlayerRole(userData as never, configData as never);
+        const role = getPlayerRole(
+          { team: userData.team },
+          { teamARole: configData.teamARole, teamBRole: configData.teamBRole },
+        );
         if (role !== 'RUNNER') return { ok: false, reason: 'WRONG_ROLE' };
         if (userData.status !== 'ACTIVE') return { ok: false, reason: 'INVALID_STATUS' };
 
@@ -534,18 +570,15 @@ export const clientWaitingGateway: WaitingGateway = {
         });
 
         if (result.allowed === false) {
-          return { ok: false, reason: result.reason as never };
+          return { ok: false, reason: result.reason };
         }
 
-        const timeStr = formatLogTime(now);
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} ${userData.name ?? 'Player'} が待機モードに入りました`,
+          now,
+          message: `${userData.name ?? 'Player'} が待機モードに入りました`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(userRef, {
           status: 'WAITING',
@@ -602,38 +635,19 @@ export const clientWaitingGateway: WaitingGateway = {
         });
 
         if (result.allowed === false) {
-          // 手動復帰のケース: 待機中であれば復帰可能
-          if (userData.status === 'WAITING') {
-            const timeStr = formatLogTime(now);
-            const log = {
-              id: logId,
-              timestamp: now,
-              message: `${timeStr} ${userData.name ?? 'Player'} がゲームに復帰しました`,
-              type: 'SYSTEM',
-            };
-            const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-            const logs = [log, ...prevLogs].slice(0, 200);
-
-            transaction.update(userRef, {
-              status: 'ACTIVE',
-              waitingUntil: 0,
-              shinkansenStartTime: null,
-            });
-            transaction.update(configRef, { logs });
-            return { ok: true, resumed: true };
-          }
-          return { ok: false, reason: result.reason as never };
+          return { ok: false, reason: result.reason };
         }
 
-        const timeStr = formatLogTime(now);
-        const log = {
+        if (!result.changed) {
+          return { ok: true, resumed: false };
+        }
+
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} ${userData.name ?? 'Player'} がゲームに復帰しました`,
+          now,
+          message: `${userData.name ?? 'Player'} がゲームに復帰しました`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(userRef, {
           status: 'ACTIVE',
@@ -673,9 +687,15 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
       return await runTransaction(db, async transaction => {
         const userRef = doc(db, 'users', uid);
         const configRef = doc(db, 'game_config', 'current');
-        const [userSnap, configSnap] = await Promise.all([
+        const locRef = doc(db, 'privateLocations', uid);
+        const projRef = doc(db, 'emergencyLocationProjections', uid);
+
+        // すべての読み取りをトランザクションの最初で実行 (Firestore read-before-write 規則)
+        const [userSnap, configSnap, locSnap, projSnap] = await Promise.all([
           transaction.get(userRef),
           transaction.get(configRef),
+          transaction.get(locRef),
+          transaction.get(projRef),
         ]);
 
         if (!userSnap.exists()) return { ok: false, reason: 'PLAYER_NOT_FOUND' };
@@ -693,22 +713,19 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
         });
 
         if (decision.allowed === false) {
-          return { ok: false, reason: decision.reason as never };
+          return { ok: false, reason: decision.reason };
         }
 
         let projectionStatus: 'CREATED' | 'REFRESHED' | 'UNAVAILABLE' | 'STALE' | 'NOT_REQUIRED' = 'NOT_REQUIRED';
 
         if (decision.changed) {
           const actionLabel = input.action === 'EMERGENCY' ? 'SOS発信' : 'リタイア';
-          const timeStr = formatLogTime(now);
-          const log = {
+          const logs = appendToConfigLogs(configData.logs, {
             id: logId,
-            timestamp: now,
-            message: `${timeStr} ⚠️ ${userData.name ?? 'Player'} が${actionLabel}しました`,
+            now,
+            message: `⚠️ ${userData.name ?? 'Player'} が${actionLabel}しました`,
             type: 'EMERGENCY',
-          };
-          const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-          const logs = [log, ...prevLogs].slice(0, 200);
+          });
 
           transaction.update(userRef, {
             status: decision.status,
@@ -721,25 +738,48 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
 
         // 緊急位置プロジェクションの直接更新 (Sparkプラン対応: Cloud Functions Trigger不要化)
         if (decision.status === 'EMERGENCY') {
-          const locRef = doc(db, 'privateLocations', uid);
-          const locSnap = await transaction.get(locRef);
           if (locSnap.exists()) {
             const locData = locSnap.data();
-            const projRef = doc(db, 'emergencyLocationProjections', uid);
-            transaction.set(projRef, {
-              playerId: uid,
-              gameSessionId: sessionValidation.gameSessionId,
-              latitude: locData.latitude,
-              longitude: locData.longitude,
-              projectedAt: serverTimestamp(),
-              sourceLocationUpdatedAt: locData.updatedAt ?? serverTimestamp(),
-              expiresAt: Timestamp.fromMillis(now + 30 * 60 * 1000),
-              safetyStatus: 'EMERGENCY',
-              projectionKind: 'EMERGENCY',
-            });
-            projectionStatus = 'CREATED';
+            if (locData.gameSessionId === sessionValidation.gameSessionId) {
+              const sourceLocationUpdatedAt = locData.updatedAt?.toMillis
+                ? locData.updatedAt.toMillis()
+                : typeof locData.updatedAt === 'number'
+                  ? locData.updatedAt
+                  : now;
+              const projDecision = resolveEmergencyLocationProjection({
+                status: decision.status,
+                latitude: locData.latitude,
+                longitude: locData.longitude,
+                sourceLocationUpdatedAt,
+                now,
+              });
+              if (projDecision.kind === 'PROJECT') {
+                const isRefreshed = projSnap.exists() && projSnap.data().gameSessionId === sessionValidation.gameSessionId;
+                transaction.set(projRef, {
+                  playerId: uid,
+                  gameSessionId: sessionValidation.gameSessionId,
+                  latitude: locData.latitude,
+                  longitude: locData.longitude,
+                  projectedAt: serverTimestamp(),
+                  sourceLocationUpdatedAt: locData.updatedAt ?? serverTimestamp(),
+                  expiresAt: Timestamp.fromMillis(projDecision.expiresAt),
+                  safetyStatus: 'EMERGENCY',
+                  projectionKind: 'EMERGENCY',
+                });
+                projectionStatus = isRefreshed ? 'REFRESHED' : 'CREATED';
+              } else {
+                projectionStatus = projDecision.kind === 'STALE_LOCATION' ? 'STALE' : 'UNAVAILABLE';
+              }
+            } else {
+              projectionStatus = 'STALE';
+            }
           } else {
             projectionStatus = 'UNAVAILABLE';
+          }
+        } else {
+          // RETIRED 等で EMERGENCY でない場合は既存プロジェクションを削除
+          if (projSnap.exists()) {
+            transaction.delete(projRef);
           }
         }
 
@@ -909,18 +949,18 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
         });
 
         if (transition.allowed === false) {
-          return { ok: false, reason: transition.reason as never };
+          if (transition.reason === 'INVALID_FINAL_MISSION') {
+            return { ok: false, reason: 'FINAL_MISSION_NOT_FOUND' };
+          }
+          return { ok: false, reason: 'TRANSITION_NOT_ALLOWED' };
         }
 
-        const timeStr = formatLogTime(now);
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} 管理者がフェーズ「${input.action}」を実行しました (${transition.oldPhase} → ${transition.newPhase})`,
+          now,
+          message: `管理者がフェーズ「${input.action}」を実行しました (${transition.oldPhase} → ${transition.newPhase})`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(configRef, {
           ...transition.updates,
@@ -977,9 +1017,14 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
         };
       }
 
-      const participantQuery = query(collection(db, 'users'), where('team', 'in', ['A', 'B']));
+      const participantQuery = query(
+        collection(db, 'users'),
+        where('gameSessionId', '==', input.expectedSessionId),
+      );
       const participantsSnap = await getDocs(participantQuery);
-      const participantIds = participantsSnap.docs.map(d => d.id);
+      const participantIds = participantsSnap.docs
+        .filter(d => d.data().team === 'A' || d.data().team === 'B')
+        .map(d => d.id);
 
       const now = Date.now();
       const logId = createLogId();
@@ -1015,18 +1060,19 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
         });
 
         if (roleSwap.allowed === false) {
-          return { ok: false, reason: roleSwap.reason as never };
+          const reason: AdminGameStateFailureReason =
+            roleSwap.reason === 'INVALID_ROLES' || roleSwap.reason === 'INVALID_TIME'
+              ? 'INVALID_GAME_CONFIG'
+              : 'INVALID_ROSTER';
+          return { ok: false, reason };
         }
 
-        const timeStr = formatLogTime(now);
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} 管理者が攻守を強制交代しました (Team ${roleSwap.newOniTeam} が新ONI)`,
+          now,
+          message: `管理者が攻守を強制交代しました (Team ${roleSwap.newOniTeam} が新ONI)`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(configRef, {
           teamARole: roleSwap.teamRoles.teamARole,
@@ -1093,15 +1139,12 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
-        const timeStr = formatLogTime(now);
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} 管理者が ${userData.name ?? input.targetId} をゲームに強制復帰させました`,
+          now,
+          message: `管理者が ${userData.name ?? input.targetId} をゲームに強制復帰させました`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(userRef, {
           status: 'ACTIVE',
@@ -1149,9 +1192,14 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
         };
       }
 
-      const participantQuery = query(collection(db, 'users'), where('team', 'in', ['A', 'B']));
+      const participantQuery = query(
+        collection(db, 'users'),
+        where('gameSessionId', '==', input.expectedSessionId),
+      );
       const participantsSnap = await getDocs(participantQuery);
-      const participantIds = participantsSnap.docs.map(d => d.id);
+      const participantIds = participantsSnap.docs
+        .filter(d => d.data().team === 'A' || d.data().team === 'B')
+        .map(d => d.id);
 
       const now = Date.now();
       const logId = createLogId();
@@ -1202,23 +1250,28 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
         });
 
         if (revealPlan.allowed === false) {
-          return { ok: false, reason: revealPlan.reason as never };
+          const reason: AdminRevealFailureReason =
+            revealPlan.reason === 'ZERO_VALID_LOCATIONS'
+              ? 'ZERO_VALID_LOCATIONS'
+              : revealPlan.reason === 'INVALID_ROSTER'
+                ? 'INVALID_ROSTER'
+                : revealPlan.reason === 'INVALID_TIME'
+                  ? 'INVALID_GAME_CONFIG'
+                  : 'INVALID_ARGUMENT';
+          return { ok: false, reason };
         }
 
         if (revealPlan.snapshots.length === 0) {
           return { ok: false, reason: 'ZERO_VALID_LOCATIONS' };
         }
 
-        const timeStr = formatLogTime(now);
         const scopeLabel = input.scope === 'GLOBAL' ? '全員' : input.scope === 'TEAM_A' ? 'Team A' : 'Team B';
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} 管理者が${scopeLabel}の位置情報を${input.durationMinutes}分間強制公開しました`,
+          now,
+          message: `管理者が${scopeLabel}の位置情報を${input.durationMinutes}分間強制公開しました`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(configRef, {
           [revealPlan.configField]: Timestamp.fromMillis(revealPlan.expiresAt),
@@ -1305,19 +1358,22 @@ export const clientAdminScoreAdjustmentGateway: AdminScoreAdjustmentGateway = {
         });
 
         if (adjustment.allowed === false) {
-          return { ok: false, reason: adjustment.reason as never };
+          const reason: AdminScoreAdjustmentFailureReason =
+            adjustment.reason === 'SCORE_BELOW_ZERO'
+              ? 'SCORE_BELOW_ZERO'
+              : adjustment.reason === 'INVALID_CURRENT_SCORE'
+                ? 'INVALID_CONFIG'
+                : 'INVALID_ARGUMENT';
+          return { ok: false, reason };
         }
 
-        const timeStr = formatLogTime(now);
         const sign = adjustment.delta > 0 ? `+${adjustment.delta}` : `${adjustment.delta}`;
-        const log = {
+        const logs = appendToConfigLogs(configData.logs, {
           id: logId,
-          timestamp: now,
-          message: `${timeStr} 管理者が Team ${adjustment.team} のスコアを補正しました (${sign}pt, 理由: ${adjustment.reasonCode})`,
+          now,
+          message: `管理者が Team ${adjustment.team} のスコアを補正しました (${sign}pt, 理由: ${adjustment.reasonCode})`,
           type: 'SYSTEM',
-        };
-        const prevLogs = Array.isArray(configData.logs) ? configData.logs : [];
-        const logs = [log, ...prevLogs].slice(0, 200);
+        });
 
         transaction.update(configRef, {
           [adjustment.scoreField]: adjustment.nextScore,
@@ -1371,7 +1427,7 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
         const decision = resolveMissionModeChange(configData.missionMode, input.mode);
-        if (decision.allowed === false) return { ok: false, reason: 'INVALID_MODE' as never };
+        if (decision.allowed === false) return { ok: false, reason: 'INVALID_ARGUMENT' };
 
         transaction.update(configRef, { missionMode: decision.mode });
         return {
@@ -1409,7 +1465,7 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
         const decision = resolveMissionAssignment({
           phase: configData.gameStatus,
           currentMode: configData.missionMode,
-          catalog: catalog as never,
+          catalog: catalog as Mission[],
           strategy: input.strategy,
           target: input.target,
           missionId: input.strategy === 'MANUAL' ? input.missionId : undefined,
@@ -1417,7 +1473,15 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
         });
 
         if (decision.allowed === false) {
-          return { ok: false, reason: decision.reason as never };
+          const reason: AdminMissionFailureReason =
+            decision.reason === 'INVALID_PHASE'
+              ? 'INVALID_PHASE'
+              : decision.reason === 'ASSIGNMENT_NOT_ALLOWED'
+                ? 'ASSIGNMENT_NOT_ALLOWED'
+                : decision.reason === 'INVALID_MISSION'
+                  ? 'INVALID_MISSION'
+                  : 'INVALID_ARGUMENT';
+          return { ok: false, reason };
         }
 
         const updates: Record<string, unknown> = {};
@@ -1487,8 +1551,15 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
 
+      if (!isValidGameSessionId(input.expectedSessionId)) {
+        return { ok: false, reason: 'SESSION_CHANGED' };
+      }
+
       const configSnap = await getDoc(doc(db, 'game_config', 'current'));
       const configData = configSnap.exists() ? configSnap.data() : null;
+      if (!configData) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+      const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
+      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
       const [usersSnap, locsSnap, exposedSnap, projSnap] = await Promise.all([
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
@@ -1497,14 +1568,14 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         getDocs(collection(db, 'emergencyLocationProjections')),
       ]);
 
-      const participants: ResetDocumentIdentity[] = usersSnap.docs.map(d => ({ id: d.id, team: d.data().team }));
+      const participants: ResetParticipantDocument[] = usersSnap.docs.map(d => ({ id: d.id, team: d.data().team }));
       const privateLocations: ResetDocumentIdentity[] = locsSnap.docs.map(d => ({ id: d.id }));
       const exposedLocations: ResetDocumentIdentity[] = exposedSnap.docs.map(d => ({ id: d.id }));
       const emergencyProjections: ResetDocumentIdentity[] = projSnap.docs.map(d => ({ id: d.id }));
 
       const previewPlan = planGameResetPreview({
         config: configData,
-        participants: participants as never,
+        participants,
         privateLocations,
         exposedLocations,
         emergencyProjections,
@@ -1554,28 +1625,50 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
 
+      if (!isValidGameSessionId(input.expectedSessionId)) {
+        return { ok: false, reason: 'SESSION_CHANGED' };
+      }
+
       const confRef = doc(db, 'admins', uid, 'gameResetConfirmations', input.confirmationToken);
       const confSnap = await getDoc(confRef);
       if (!confSnap.exists()) return { ok: false, reason: 'CONFIRMATION_NOT_FOUND' };
 
       const conf = confSnap.data();
+      if (conf.currentSessionId !== input.expectedSessionId) {
+        return { ok: false, reason: 'SESSION_CHANGED' };
+      }
+      if (!conf.resetReady) {
+        return { ok: false, reason: 'RESET_NOT_READY' };
+      }
       if (isResetConfirmationExpired(conf.expiresAt, Date.now())) {
         return { ok: false, reason: 'CONFIRMATION_EXPIRED' };
       }
 
+      const configRef = doc(db, 'game_config', 'current');
+      const configSnap = await getDoc(configRef);
+      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+      const configData = configSnap.data();
+      const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
+      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
+
       const now = Date.now();
       const newSessionId = conf.proposedSessionId;
 
-      const [usersSnap, exposedSnap, projSnap] = await Promise.all([
+      const [usersSnap, privateSnap, exposedSnap, projSnap] = await Promise.all([
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
+        getDocs(collection(db, 'privateLocations')),
         getDocs(collection(db, 'exposedLocations')),
         getDocs(collection(db, 'emergencyLocationProjections')),
       ]);
 
+      const totalEstimatedWrites = 1 + usersSnap.docs.length + privateSnap.docs.length + exposedSnap.docs.length + projSnap.docs.length + 1;
+      if (totalEstimatedWrites > RESET_MAX_ESTIMATED_WRITES) {
+        return { ok: false, reason: 'RESET_TOO_LARGE' };
+      }
+
       const batch = writeBatch(db);
 
       // 1. game_config を初期状態にリセット
-      const configRef = doc(db, 'game_config', 'current');
       batch.set(configRef, {
         gameSessionId: newSessionId,
         sessionStartedAt: now,
@@ -1610,7 +1703,10 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         });
       }
 
-      // 3. 公開位置スナップショットと緊急プロジェクションを削除
+      // 3. プライベート位置情報、公開位置スナップショット、緊急プロジェクションを削除
+      for (const d of privateSnap.docs) {
+        batch.delete(doc(db, 'privateLocations', d.id));
+      }
       for (const d of exposedSnap.docs) {
         batch.delete(doc(db, 'exposedLocations', d.id));
       }
