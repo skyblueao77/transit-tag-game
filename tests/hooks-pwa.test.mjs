@@ -47,4 +47,14 @@ test('PWA manifest and asset configuration', async t => {
       assert.ok(manifestContent.icons.length >= 2, 'manifest defines multiple icons');
     }
   });
+
+  await t.test('OSM tile caching pattern matches legitimate tiles and rejects malicious domains', () => {
+    const tilePattern = /^https:\/\/[a-c]\.tile\.openstreetmap\.org\/.*/i;
+    assert.equal(tilePattern.test('https://a.tile.openstreetmap.org/13/7200/3200.png'), true);
+    assert.equal(tilePattern.test('https://b.tile.openstreetmap.org/13/7200/3200.png'), true);
+    assert.equal(tilePattern.test('https://c.tile.openstreetmap.org/13/7200/3200.png'), true);
+    assert.equal(tilePattern.test('https://evil.com/fake.tile.openstreetmap.org/test.png'), false);
+    assert.equal(tilePattern.test('https://attacker-tile.openstreetmap.org/test.png'), false);
+    assert.equal(tilePattern.test('http://a.tile.openstreetmap.org/test.png'), false);
+  });
 });
