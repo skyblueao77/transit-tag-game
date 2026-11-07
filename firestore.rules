@@ -181,17 +181,75 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    function validEmergencyProjectionWrite(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && hasCurrentGameSession()
+        && request.resource.data.keys().hasOnly([
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
+          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
+        ])
+        && request.resource.data.keys().hasAll([
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
+          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
+        ])
+        && request.resource.data.playerId == uid
+        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+        && request.resource.data.safetyStatus == 'EMERGENCY'
+        && request.resource.data.projectionKind == 'EMERGENCY'
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY'
+        && request.resource.data.latitude is number
+        && request.resource.data.latitude >= -90
+        && request.resource.data.latitude <= 90
+        && request.resource.data.longitude is number
+        && request.resource.data.longitude >= -180
+        && request.resource.data.longitude <= 180
+        && request.resource.data.projectedAt is timestamp
+        && request.resource.data.sourceLocationUpdatedAt is timestamp
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time;
+    }
+
     match /emergencyLocationProjections/{uid} {
       allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
       allow list: if isAdmin();
-      allow create, update: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow create, update: if validEmergencyProjectionWrite(uid) || isAdmin();
       allow delete: if isAdmin();
+    }
+
+    function validSelfUserUpdate(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.team == resource.data.team
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.gameSessionId == resource.data.gameSessionId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'status', 'waitingUntil', 'shinkansenStartTime',
+          'invincibleCards', 'invincibleUntil', 'score'
+        ]);
+    }
+
+    function validParticipantCaptureUpdate(uid) {
+      return signedIn()
+        && isCurrentParticipant(request.auth.uid)
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.name == resource.data.name
+        && request.resource.data.team == resource.data.team
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.score == resource.data.score
+        && request.resource.data.gameSessionId == resource.data.gameSessionId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'waitingUntil', 'invincibleUntil', 'invincibleCards'
+        ])
+        && request.resource.data.status in ['WAITING', 'CAPTURED', 'ACTIVE'];
     }
 
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if validPlayerCreate(uid) || isAdmin();
-      allow update: if signedIn() && (isAdmin() || request.auth.uid == uid || isCurrentParticipant(request.auth.uid));
+      allow update: if isAdmin() || validSelfUserUpdate(uid) || validParticipantCaptureUpdate(uid);
       allow delete: if isAdmin();
     }
 
@@ -200,16 +258,54 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    function validMissionCompletionCreate() {
+      let data = request.resource.data;
+      return signedIn()
+        && isCurrentParticipant(request.auth.uid)
+        && hasCurrentGameSession()
+        && data.keys().hasOnly([
+          'gameSessionId', 'missionId', 'team', 'completedBy',
+          'points', 'luckyReward', 'isFinalMission', 'completedAt'
+        ])
+        && data.keys().hasAll([
+          'gameSessionId', 'missionId', 'team', 'completedBy',
+          'points', 'isFinalMission', 'completedAt'
+        ])
+        && data.completedBy == request.auth.uid
+        && data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+        && data.team == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.team
+        && data.completedAt is timestamp;
+    }
+
     match /missionCompletions/{completionId} {
       allow read: if signedIn();
-      allow create: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
+      allow create: if isAdmin() || validMissionCompletionCreate();
       allow update, delete: if isAdmin();
+    }
+
+    function validParticipantConfigUpdate(configId) {
+      let currentData = resource.data;
+      let newData = request.resource.data;
+      return signedIn()
+        && configId == 'current'
+        && isCurrentParticipant(request.auth.uid)
+        && hasCurrentGameSession()
+        && newData.gameSessionId == currentData.gameSessionId
+        && newData.sessionStartedAt == currentData.sessionStartedAt
+        && newData.sessionSchemaVersion == currentData.sessionSchemaVersion
+        && newData.gameStatus == currentData.gameStatus
+        && newData.day == currentData.day
+        && newData.missionMode == currentData.missionMode
+        && newData.isGameOver == currentData.isGameOver
+        && newData.diff(currentData).affectedKeys().hasOnly([
+          'teamARole', 'teamBRole', 'nextRevealTime', 'teamAScore', 'teamBScore', 'logs'
+        ]);
     }
 
     match /game_config/{configId} {
       allow read: if signedIn();
       allow create, delete: if isAdmin();
-      allow update: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
+      allow update: if isAdmin() || validParticipantConfigUpdate(configId);
     }
 
     match /{document=**} {

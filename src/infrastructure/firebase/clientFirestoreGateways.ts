@@ -136,11 +136,24 @@ function formatLogTime(now: number): string {
   });
 }
 
-function createLogId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
+function generateSecureId(prefix = ''): string {
+  if (typeof crypto !== 'undefined') {
+    if (typeof crypto.randomUUID === 'function') {
+      const uuid = crypto.randomUUID();
+      return prefix ? `${prefix}_${uuid}` : uuid;
+    }
+    if (typeof crypto.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+      return prefix ? `${prefix}_${hex}` : hex;
+    }
   }
-  return 'log_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  throw new Error('Secure random generator is not available in this runtime.');
+}
+
+function createLogId(): string {
+  return generateSecureId('log');
 }
 
 function requireAuthUid(): string {
@@ -793,9 +806,7 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
           return result;
         }
 
-        const newSessionId = typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : 'sess_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        const newSessionId = generateSecureId();
 
         const newConfig = {
           gameSessionId: newSessionId,
@@ -1503,13 +1514,9 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         return { ok: false, reason: 'INVALID_CONFIG' };
       }
 
-      const confirmationToken = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : 'token_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const confirmationToken = generateSecureId('token');
       const expiresAt = Date.now() + 5 * 60 * 1000;
-      const proposedSessionId = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : 'sess_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const proposedSessionId = generateSecureId();
 
       const previewData = {
         confirmationToken,
