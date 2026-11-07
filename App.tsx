@@ -441,6 +441,20 @@ const App: React.FC = () => {
     if (result.ok === false) console.error('Waiting resume request was rejected:', result.reason);
   }, [gameConfig.gameSessionId]);
 
+  // 待機モードの自動復帰（Cloud Functions Cron不要化: Sparkプラン対応）
+  useEffect(() => {
+    if (!currentUser || currentUser.status !== 'WAITING' || !currentUser.waitingUntil) return;
+    const remainingMs = currentUser.waitingUntil - Date.now();
+    if (remainingMs <= 0) {
+      void handleResumeWaiting();
+      return;
+    }
+    const timer = setTimeout(() => {
+      void handleResumeWaiting();
+    }, remainingMs);
+    return () => clearTimeout(timer);
+  }, [currentUser?.status, currentUser?.waitingUntil, handleResumeWaiting]);
+
   // ---- 画面分岐 ----
 
   if (!authReady || userLoading) {

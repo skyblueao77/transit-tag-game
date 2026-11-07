@@ -6,6 +6,8 @@
 > **実装の正本は Firebase 版です。**
 > `supabase/` と `docs/migration/` は独立した PoC の土台であり、現在のアプリからは使用していません。
 >
+> **💡 無料版（Sparkプラン）対応:** クレジットカード不要で完全無料で運用できる構成に対応しています。詳細は [SPARK_PLAN.md](SPARK_PLAN.md) を参照してください。
+>
 > **リリース状態:** 自動検証は CONDITIONAL PASS、本番 rollout は NO-GO です。詳細と未実施の確認項目は
 > [RELEASE_READINESS.md](RELEASE_READINESS.md) を参照してください。
 
