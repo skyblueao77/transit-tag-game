@@ -7,7 +7,7 @@ service cloud.firestore {
     }
 
     // Bootstrap this document once from the Firebase Console after creating
-    // the administrator Auth account. Do not allow clients to create it.
+    // the administrator Auth account.
     function isAdmin() {
       return signedIn()
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
@@ -54,15 +54,6 @@ service cloud.firestore {
         && data.gameSessionId == get(configPath).data.gameSessionId;
     }
 
-    function validOwnerProfileUpdate(uid) {
-      return signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 80;
-    }
-
     function isCurrentParticipant(uid) {
       return signedIn()
         && hasCurrentGameSession()
@@ -75,10 +66,14 @@ service cloud.firestore {
     match /admins/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
+
+      match /{subCollection=**} {
+        allow read, write: if signedIn() && request.auth.uid == uid && isAdmin();
+      }
     }
 
     match /privateLocations/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow create, update: if signedIn()
         && request.auth.uid == uid
         && hasCurrentGameSession()
@@ -92,7 +87,7 @@ service cloud.firestore {
         && request.resource.data.longitude >= -180
         && request.resource.data.longitude <= 180
         && request.resource.data.updatedAt is timestamp;
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     function isRevealViewer() {
@@ -180,70 +175,41 @@ service cloud.firestore {
       allow get: if isRevealViewer()
         && (!exists(/databases/$(database)/documents/exposedLocations/$(uid))
           || validExposedLocation(uid));
-      allow list: if false;
-      allow create: if validOwnerExposedLocationWrite(uid);
-      allow update: if validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot();
-      allow delete: if false;
-    }
-
-    function validEmergencyProjection(uid) {
-      return hasCurrentGameSession()
-        && resource.data.keys().hasOnly([
-          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
-          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
-        ])
-        && resource.data.keys().hasAll([
-          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
-          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
-        ])
-        && resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-        && resource.data.playerId == uid
-        && resource.data.latitude is number
-        && resource.data.latitude >= -90
-        && resource.data.latitude <= 90
-        && resource.data.longitude is number
-        && resource.data.longitude >= -180
-        && resource.data.longitude <= 180
-        && resource.data.projectedAt is timestamp
-        && resource.data.sourceLocationUpdatedAt is timestamp
-        && resource.data.expiresAt is timestamp
-        && resource.data.sourceLocationUpdatedAt <= resource.data.projectedAt
-        && resource.data.expiresAt > resource.data.projectedAt
-        && resource.data.expiresAt > request.time
-        && resource.data.safetyStatus == 'EMERGENCY'
-        && resource.data.projectionKind == 'EMERGENCY'
-        && isCurrentParticipant(uid)
-        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY';
+      allow list: if isAdmin();
+      allow create: if validOwnerExposedLocationWrite(uid) || isAdmin();
+      allow update: if (validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot()) || isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /emergencyLocationProjections/{uid} {
-      allow get: if isAdmin()
-        && (!exists(/databases/$(database)/documents/emergencyLocationProjections/$(uid))
-          || validEmergencyProjection(uid));
-      allow list: if false;
-      allow create, update, delete: if false;
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow list: if isAdmin();
+      allow create, update: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /users/{uid} {
       allow read: if signedIn();
-      allow create: if validPlayerCreate(uid);
-      allow update: if validOwnerProfileUpdate(uid);
-      allow delete: if false;
+      allow create: if validPlayerCreate(uid) || isAdmin();
+      allow update: if signedIn() && (isAdmin() || request.auth.uid == uid || isCurrentParticipant(request.auth.uid));
+      allow delete: if isAdmin();
     }
 
     match /missions/{missionId} {
       allow read: if signedIn();
-      allow write: if false;
+      allow write: if isAdmin();
     }
 
     match /missionCompletions/{completionId} {
       allow read: if signedIn();
-      allow write: if false;
+      allow create: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
+      allow update, delete: if isAdmin();
     }
 
     match /game_config/{configId} {
       allow read: if signedIn();
-      allow write: if false;
+      allow create, delete: if isAdmin();
+      allow update: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
     }
 
     match /{document=**} {
