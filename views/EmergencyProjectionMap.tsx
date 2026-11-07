@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EmergencyLocationProjection, User } from '../types';
+import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup } from './playerMapPopup';
 
 interface Props {
@@ -10,8 +11,8 @@ interface Props {
 
 const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const markerLayerRef = useRef<any>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerLayerRef = useRef<L.LayerGroup | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const [now, setNow] = useState(Date.now());
 
@@ -30,41 +31,30 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
   }, []);
 
   useEffect(() => {
-    let timer: number | undefined;
-    let disposed = false;
-    const initialize = () => {
-      const leaflet = (window as any).L;
-      if (disposed || !containerRef.current) return;
-      if (!leaflet) {
-        timer = window.setTimeout(initialize, 100);
-        return;
-      }
-      const map = leaflet.map(containerRef.current).setView([35.6812, 139.7671], 11);
-      leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-      mapRef.current = map;
-      markerLayerRef.current = leaflet.layerGroup().addTo(map);
-      setMapReady(true);
-    };
-    initialize();
+    if (!containerRef.current) return;
+    const map = L.map(containerRef.current).setView([35.6812, 139.7671], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    mapRef.current = map;
+    markerLayerRef.current = L.layerGroup().addTo(map);
+    setMapReady(true);
+
     return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-      mapRef.current?.remove();
+      map.remove();
       mapRef.current = null;
       markerLayerRef.current = null;
+      setMapReady(false);
     };
   }, []);
 
   useEffect(() => {
-    const leaflet = (window as any).L;
     const map = mapRef.current;
     const layer = markerLayerRef.current;
-    if (!mapReady || !leaflet || !map || !layer) return;
+    if (!mapReady || !map || !layer) return;
 
     layer.clearLayers();
     activeProjections.forEach(projection => {
       const user = usersById.get(projection.playerId);
-      const marker = leaflet.circleMarker([projection.latitude, projection.longitude], {
+      const marker = L.circleMarker([projection.latitude, projection.longitude], {
         radius: 10,
         fillColor: '#ef4444',
         color: '#111827',

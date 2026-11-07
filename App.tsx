@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import {
   Map as MapIcon,
@@ -16,7 +16,8 @@ import {
   XCircle,
   Clock
 } from 'lucide-react';
-import type { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, Role, Mission } from './types';
+import { Toaster, toast } from 'sonner';
+import type { LocationLog, Role } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
@@ -40,11 +41,8 @@ import {
   getRoleForTeam,
   isGamePaused,
 } from './src/game';
-import { INITIAL_GAME_CONFIG } from './constants';
 import {
-  getCurrentAuthUserId,
   signOutCurrentUser,
-  subscribeAuthUserId,
 } from './src/infrastructure/firebase/auth';
 
 import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
@@ -56,58 +54,52 @@ import {
   createEmergencyLocationHeartbeatController,
   updateEmergencyLocationOnce,
 } from './src/infrastructure/emergencyLocationHeartbeat';
-import {
-  subscribeCurrentPlayer,
-  subscribeExposedLocations,
-  subscribeGameConfig,
-  subscribeMissions,
-  subscribePlayers,
-  subscribePrivateLocation,
-} from './src/infrastructure/firebase/subscriptions';
 
-// Views
-import SetupView from './views/SetupView';
-import MapView from './views/MapView';
-import MissionView from './views/MissionView';
-import AdminView from './views/AdminView';
+import useAuthUser from './src/hooks/useAuthUser';
+import useGameSubscriptions from './src/hooks/useGameSubscriptions';
+import useConfirmDialog from './src/hooks/useConfirmDialog';
+import ConfirmDialog from './src/components/ui/ConfirmDialog';
+import LoadingSpinner from './src/components/ui/LoadingSpinner';
+
+// Route-based Code Splitting with React.lazy
+const SetupView = lazy(() => import('./views/SetupView'));
+const MapView = lazy(() => import('./views/MapView'));
+const MissionView = lazy(() => import('./views/MissionView'));
+const AdminView = lazy(() => import('./views/AdminView'));
 
 const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
-  const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
-
-  const [authUserId, setAuthUserId] = useState(getCurrentAuthUserId);
+  const { authUserId, authReady, currentUser, userLoading, setCurrentUser } = useAuthUser();
   const authUserIdRef = useRef(authUserId);
+  useEffect(() => {
+    authUserIdRef.current = authUserId;
+  }, [authUserId]);
+
   const emergencyHeartbeat = useRef(createEmergencyLocationHeartbeatController());
-  const [authReady, setAuthReady] = useState(false);
-  const [userLoading, setUserLoading] = useState(true);
-  const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [missions, setMissions] = useState<Mission[]>([]);
-  const [gameConfig, setGameConfig] = useState<GameConfig>(INITIAL_GAME_CONFIG);
+
+  const onBroadcast = useCallback((message: string) => {
+    toast.info(`【運営からの通知】\n\n${message}`, { duration: 10000 });
+  }, []);
+
+  const onConfigError = useCallback((error: Error) => {
+    console.error('Error fetching game config data:', error);
+    toast.error('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
+  }, []);
+
+  const {
+    allUsers,
+    missions,
+    gameConfig,
+    privateLocation,
+    exposedLocations,
+  } = useGameSubscriptions(authUserId, onBroadcast, onConfigError);
+
+  const { confirm, dialogProps } = useConfirmDialog();
+
   const [locationLogs] = useState<LocationLog[]>([]);
-  const [lastBroadcastTime, setLastBroadcastTime] = useState(0);
   const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
   const [safetyActionBusy, setSafetyActionBusy] = useState(false);
   const safetyActionBusyRef = useRef(false);
   const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
-  const exposedPlayerIdsJson = useMemo(
-    () => JSON.stringify(allUsers.filter(user => user.team === 'A' || user.team === 'B').map(user => user.id)),
-    [allUsers],
-  );
-
-  useEffect(() => subscribeAuthUserId(uid => {
-    authUserIdRef.current = uid;
-    setAuthUserId(uid);
-    setAuthReady(true);
-    if (!uid) {
-      setCurrentUser(null);
-      setPrivateLocation(null);
-      setUserLoading(false);
-    } else {
-      setUserLoading(true);
-    }
-  }), []);
-
 
   // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
   const isAdmin = useMemo(
@@ -120,92 +112,6 @@ const App: React.FC = () => {
     if (isAdmin) return 'ONI';
     return getPlayerRole(currentUser, gameConfig);
   }, [currentUser, gameConfig.teamARole, gameConfig.teamBRole, isAdmin]);
-
-  // Auth UIDをキーにPlayer documentとrealtime dataを購読する
-  useEffect(() => {
-    if (!authUserId) return;
-
-    const unsubscribeCurrentUser = subscribeCurrentPlayer(
-      authUserId,
-      player => {
-        setCurrentUser(player);
-        setUserLoading(false);
-      },
-      error => {
-        console.error('Error fetching current user data:', error);
-        setCurrentUser(null);
-        setUserLoading(false);
-      },
-    );
-
-    const unsubscribeUsers = subscribePlayers(
-      setAllUsers,
-      error => console.error('Error fetching users data:', error),
-    );
-
-    return () => {
-      unsubscribeCurrentUser();
-      unsubscribeUsers();
-    };
-  }, [authUserId]);
-
-  useEffect(() => {
-    if (!authUserId || !gameConfig.gameSessionId) {
-      setPrivateLocation(null);
-      return;
-    }
-    return subscribePrivateLocation(
-      authUserId,
-      gameConfig.gameSessionId,
-      setPrivateLocation,
-      error => {
-        console.error('Error fetching private location:', error);
-        setPrivateLocation(null);
-      },
-    );
-  }, [authUserId, gameConfig.gameSessionId]);
-
-  useEffect(() => {
-    if (!authUserId) {
-      setExposedLocations({});
-      return;
-    }
-    const playerIds = JSON.parse(exposedPlayerIdsJson) as string[];
-    setExposedLocations({});
-    return subscribeExposedLocations(
-      playerIds,
-      gameConfig.gameSessionId ?? '',
-      setExposedLocations,
-      error => console.error('Error fetching exposed locations:', error),
-    );
-  }, [authUserId, exposedPlayerIdsJson, gameConfig.gameSessionId]);
-
-  useEffect(() => {
-    if (!authUserId) return;
-    return subscribeMissions(
-      setMissions,
-      error => console.error('Error fetching missions data:', error),
-    );
-  }, [authUserId]);
-
-  // GameConfig is read-only from clients; missing config remains uninitialized.
-  useEffect(() => {
-    if (!authUserId) return;
-    return subscribeGameConfig(
-      INITIAL_GAME_CONFIG,
-      config => {
-        setGameConfig(config);
-        if (config.broadcastTime > lastBroadcastTime && config.broadcastMessage) {
-          setLastBroadcastTime(config.broadcastTime);
-          alert(`【運営からの通知】\n\n${config.broadcastMessage}`);
-        }
-      },
-      error => {
-        console.error('Error fetching game config data:', error);
-        alert('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
-      },
-    );
-  }, [authUserId, lastBroadcastTime]);
 
 
   const handleUpdatePrivateLocation = useCallback(
@@ -234,7 +140,13 @@ const App: React.FC = () => {
   const handleUpdateLocation = useCallback(async (): Promise<void> => {
     if (!currentUser || !gameConfig.gameSessionId || !canRevealLocation(gameConfig.gameStatus)) return;
 
-    if (!confirm('現在地を公開しますか？\n\n公開された座標は5分間地図上に固定表示されます。\n（その後移動してもピンはその場に残ります）')) return;
+    const confirmed = await confirm({
+      title: '現在地の公開',
+      description: '公開された座標は5分間地図上に固定表示されます。\n（その後移動してもピンはその場に残ります）',
+      confirmLabel: '公開する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     const now = Date.now();
     const EXPOSE_DURATION = 5 * 60 * 1000; // 5 分
@@ -248,7 +160,7 @@ const App: React.FC = () => {
     if (snapLat == null || snapLng == null) {
       // Private Location がまだない場合は GPS から直接取得
       if (!('geolocation' in navigator)) {
-        alert('このブラウザは位置情報に対応していません。');
+        toast.error('このブラウザは位置情報に対応していません。');
         return;
       }
       navigator.geolocation.getCurrentPosition(
@@ -276,17 +188,17 @@ const App: React.FC = () => {
             }, firebaseExposedLocationStore);
             if (exposeResult.ok === false) throw new Error(exposeResult.reason);
 
-            alert('現在地を公開しました。5分後に自動で非公開になります。');
+            toast.success('現在地を公開しました。5分後に自動で非公開になります。');
           } catch (error) {
             console.error('Location expose error:', error);
-            alert('通信エラー：位置の公開に失敗しました。');
+            toast.error('通信エラー：位置の公開に失敗しました。');
           }
         },
         error => {
           const msg = error.code === 3
             ? 'GPSの取得がタイムアウトしました。場所を変えてお試しください。'
             : '位置情報を取得できませんでした。';
-          alert(msg);
+          toast.error(msg);
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
@@ -305,18 +217,18 @@ const App: React.FC = () => {
       }, firebaseExposedLocationStore);
       if (exposeResult.ok === false) throw new Error(exposeResult.reason);
 
-      alert('現在地を公開しました。5分後に自動で非公開になります。');
+      toast.success('現在地を公開しました。5分後に自動で非公開になります。');
     } catch (error) {
       console.error('Location expose error:', error);
-      alert('通信エラー：位置の公開に失敗しました。');
+      toast.error('通信エラー：位置の公開に失敗しました。');
     }
-  }, [currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
+  }, [confirm, currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
 
   // Mission scoring, identity, duplicate enforcement, and logging are server-authoritative.
   const handleScoreUpdate = useCallback(
     (missionId: string) => {
       if (!gameConfig.gameSessionId) {
-        alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+        toast.error('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
         return Promise.resolve({ ok: false as const, reason: 'SESSION_CHANGED' as const });
       }
       return completeMission({ missionId, expectedSessionId: gameConfig.gameSessionId }, firebaseMissionCompletionGateway);
@@ -329,19 +241,27 @@ const App: React.FC = () => {
     reasonCode: SafetyReasonCode,
   ): Promise<void> => {
     if (!currentUser || safetyActionBusyRef.current) return;
-    if (action === 'RETIRE' && !confirm('リタイアしますか？この操作は管理者のみが解除できます。')) return;
+    if (action === 'RETIRE') {
+      const confirmed = await confirm({
+        title: 'リタイア確認',
+        description: 'リタイアしますか？この操作は管理者のみが解除できます。',
+        confirmLabel: 'リタイアする',
+        variant: 'danger',
+      });
+      if (!confirmed) return;
+    }
 
     safetyActionBusyRef.current = true;
     setSafetyActionBusy(true);
     try {
       if (!gameConfig.gameSessionId) {
-        alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+        toast.error('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
         return;
       }
       const result = await requestSafetyAction({ action, reasonCode, expectedSessionId: gameConfig.gameSessionId }, firebaseSafetyActionGateway);
       setSafetyDialogOpen(false);
       if (result.ok === false) {
-        alert(result.reason === 'RETIRED_TERMINAL'
+        toast.error(result.reason === 'RETIRED_TERMINAL'
           ? 'リタイア確定後はEmergencyへ変更できません。必要な場合はLINE等で管理者へ直接連絡してください。'
           : '送信に失敗しました。緊急の場合はLINE等で直接連絡してください。');
         return;
@@ -370,69 +290,96 @@ const App: React.FC = () => {
           : existingProjectionAvailable
             ? '既存の位置共有は有効ですが、現在位置を更新できませんでした。'
             : '現在位置を更新できませんでした。位置を伝える必要がある場合はLINE等で運営へ直接連絡してください。';
-        alert(`${message}\n${locationMessage}`);
+        toast.info(`${message}\n${locationMessage}`);
       } else {
-        alert(message);
+        toast.success(message);
       }
     } finally {
       safetyActionBusyRef.current = false;
       setSafetyActionBusy(false);
     }
-  }, [currentUser, handleUpdatePrivateLocation, gameConfig.gameSessionId]);
+  }, [confirm, currentUser, handleUpdatePrivateLocation, gameConfig.gameSessionId]);
 
   // Capture validation, state changes, reward, and logging are server-authoritative.
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {
     if (!currentUser) return;
 
     const target = allUsers.find(user => user.id === targetId);
-    if (!target || !confirm(`${target.name} を捕獲しましたか？`)) return;
+    if (!target) return;
+
+    const confirmed = await confirm({
+      title: '捕獲確認',
+      description: `${target.name} を捕獲しましたか？`,
+      confirmLabel: '捕獲した',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     if (!gameConfig.gameSessionId) {
-      alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+      toast.error('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
       return;
     }
     const result = await capturePlayer({ targetId, expectedSessionId: gameConfig.gameSessionId }, firebaseCaptureGateway);
     if (result.ok === false) {
-      alert(result.reason === 'CAPTURE_REJECTED'
+      toast.error(result.reason === 'CAPTURE_REJECTED'
         ? 'このプレイヤーは捕獲できません。'
         : '捕獲処理に失敗しました。');
+    } else {
+      toast.success(`${target.name} を捕獲しました！`);
     }
-  }, [currentUser, allUsers, gameConfig.gameSessionId]);
+  }, [confirm, currentUser, allUsers, gameConfig.gameSessionId]);
 
   // 無敵カード使用
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {
-    if (!currentUser || !confirm('無敵カードを使いますか？（30分間有効）')) return;
+    if (!currentUser) return;
+
+    const confirmed = await confirm({
+      title: '無敵カード使用',
+      description: '無敵カードを使いますか？（30分間有効）',
+      confirmLabel: '使用する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     if (!gameConfig.gameSessionId) {
-      alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+      toast.error('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
       return;
     }
     const result = await activateInvincibility({ expectedSessionId: gameConfig.gameSessionId }, firebaseInvincibilityGateway);
     if (result.ok === false) {
-      alert(result.reason === 'NO_CARDS'
+      toast.error(result.reason === 'NO_CARDS'
         ? '無敵カードがありません。'
         : '現在の状態では無敵カードを使用できません。');
       return;
     }
 
-    alert('無敵モード発動！');
-  }, [currentUser, gameConfig.gameSessionId]);
+    toast.success('無敵モード発動！');
+  }, [confirm, currentUser, gameConfig.gameSessionId]);
 
   // Waiting eligibility, deadline, persistence, and logging are server-authoritative.
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
-    if (!currentUser || !confirm('新幹線移動（1時間待機）を開始しますか？')) return;
+    if (!currentUser) return;
+
+    const confirmed = await confirm({
+      title: '待機開始',
+      description: '新幹線移動（1時間待機）を開始しますか？',
+      confirmLabel: '開始する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
+
     if (!gameConfig.gameSessionId) {
-      alert('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
+      toast.error('ゲームセッション初期化待ちです。管理者の操作後に再度お試しください。');
       return;
     }
 
     const result = await startWaiting({ expectedSessionId: gameConfig.gameSessionId }, firebaseWaitingGateway);
     if (!result.ok) {
-      alert('現在の状態では待機を開始できません。');
+      toast.error('現在の状態では待機を開始できません。');
       return;
     }
-    alert('待機モードに入りました。お疲れ様でした。');
-  }, [currentUser, gameConfig.gameSessionId]);
+    toast.success('待機モードに入りました。お疲れ様でした。');
+  }, [confirm, currentUser, gameConfig.gameSessionId]);
 
   const handleResumeWaiting = useCallback(async (): Promise<void> => {
     if (!gameConfig.gameSessionId) return;
@@ -470,110 +417,110 @@ const App: React.FC = () => {
   if (!authReady || userLoading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
-        <div className="text-sm font-bold">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!currentUser) {
-    if (isAdminPath) {
-      return (
-        <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
-          <Routes>
-            <Route
-              path="/admin-tk-2026-secret"
-              element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
-            />
-            <Route path="*" element={<Navigate to="/admin-tk-2026-secret" replace />} />
-          </Routes>
-        </div>
-      );
-    }
-    return <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />;
-  }
-
-  // ゲームオーバー画面
-  if ((gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) && !isAdminPath) {
-    const aScore = gameConfig.teamAScore ?? 0;
-    const bScore = gameConfig.teamBScore ?? 0;
-    const winner = getRoleForTeam('A', gameConfig) === 'RUNNER' ? 'A' : getRoleForTeam('B', gameConfig) === 'RUNNER' ? 'B' : 'DRAW';
-    return (
-      <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
-        <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
-        <h1 className="text-4xl font-black italic mb-2">FINAL RESULT</h1>
-        <p className="text-slate-400 font-bold mb-12 uppercase tracking-widest">全行程終了！お疲れ様でした</p>
-
-        <div className="w-full max-w-md bg-slate-800 rounded-3xl p-8 border-2 border-slate-700 shadow-2xl mb-8">
-          <div className="text-center mb-8">
-            <div className="text-xs font-black text-slate-500 uppercase mb-2">Winner</div>
-            <div className={`text-6xl font-black ${winner === 'A' ? 'text-red-500' : winner === 'B' ? 'text-blue-500' : 'text-white'}`}>
-              {winner === 'DRAW' ? 'DRAW' : `TEAM ${winner}`}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="text-center p-4 bg-red-500/10 rounded-2xl border border-red-500/20">
-              <div className="text-[10px] font-black text-red-500 uppercase mb-1">Team A</div>
-              <div className="text-3xl font-black">{aScore} <span className="text-xs">pt</span></div>
-            </div>
-            <div className="text-center p-4 bg-blue-500/10 rounded-2xl border border-blue-500/20">
-              <div className="text-[10px] font-black text-blue-500 uppercase mb-1">Team B</div>
-              <div className="text-3xl font-black">{bScore} <span className="text-xs">pt</span></div>
-            </div>
-          </div>
-        </div>
-
-        <div className="w-full max-w-md bg-slate-800/50 rounded-3xl p-6 border border-slate-700">
-          <h3 className="flex items-center gap-2 font-black text-slate-400 mb-4 uppercase tracking-widest text-sm">
-            <History size={18} /> Game History
-          </h3>
-          <div className="space-y-3">
-            {(gameConfig.logs ?? []).map(log => (
-              <div key={log.id} className="text-xs border-b border-slate-700/50 pb-2 flex gap-3">
-                <span className="text-slate-500 shrink-0 font-mono">
-                  {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                <span className={
-                  log.type === 'CAPTURE' ? 'text-red-400 font-bold' :
-                  log.type === 'MISSION' ? 'text-indigo-400 font-bold' :
-                  log.type === 'EMERGENCY' ? 'text-amber-400 font-black' :
-                  'text-slate-300'
-                }>
-                  {log.message}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <button
-          onClick={() => setSafetyDialogOpen(true)}
-          className="mt-4 rounded-2xl bg-red-600 px-6 py-4 font-black text-white shadow-lg"
-        >
-          SOS / リタイア
-        </button>
-        {safetyDialogOpen && (
-          <SafetyActionDialog
-            busy={safetyActionBusy}
-            onClose={() => setSafetyDialogOpen(false)}
-            onChoose={handleSafetyAction}
-          />
-        )}
-
-        <button
-          onClick={async () => { await signOutCurrentUser(); window.location.reload(); }}
-          className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
-        >
-          <LogOut size={18} /> 最初に戻る
-        </button>
+        <LoadingSpinner message="ゲームデータを読み込み中..." />
       </div>
     );
   }
 
   const gamePaused = isGamePaused(gameConfig.gameStatus);
+  const aScore = gameConfig.teamAScore ?? 0;
+  const bScore = gameConfig.teamBScore ?? 0;
+  const winner = getRoleForTeam('A', gameConfig) === 'RUNNER' ? 'A' : getRoleForTeam('B', gameConfig) === 'RUNNER' ? 'B' : 'DRAW';
 
   return (
     <HashRouter>
-      <div className="flex flex-col h-screen max-h-screen bg-slate-50 overflow-hidden">
+      <Toaster position="top-center" richColors />
+      <ConfirmDialog {...dialogProps} />
+
+      {!currentUser ? (
+        isAdminPath ? (
+          <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
+            <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
+              <Routes>
+                <Route
+                  path="/admin-tk-2026-secret"
+                  element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
+                />
+                <Route path="*" element={<Navigate to="/admin-tk-2026-secret" replace />} />
+              </Routes>
+            </Suspense>
+          </div>
+        ) : (
+          <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
+            <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />
+          </Suspense>
+        )
+      ) : (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) && !isAdminPath ? (
+        <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
+          <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
+          <h1 className="text-4xl font-black italic mb-2">FINAL RESULT</h1>
+          <p className="text-slate-400 font-bold mb-12 uppercase tracking-widest">全行程終了！お疲れ様でした</p>
+
+          <div className="w-full max-w-md bg-slate-800 rounded-3xl p-8 border-2 border-slate-700 shadow-2xl mb-8">
+            <div className="text-center mb-8">
+              <div className="text-xs font-black text-slate-500 uppercase mb-2">Winner</div>
+              <div className={`text-6xl font-black ${winner === 'A' ? 'text-red-500' : winner === 'B' ? 'text-blue-500' : 'text-white'}`}>
+                {winner === 'DRAW' ? 'DRAW' : `TEAM ${winner}`}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="text-center p-4 bg-red-500/10 rounded-2xl border border-red-500/20">
+                <div className="text-[10px] font-black text-red-500 uppercase mb-1">Team A</div>
+                <div className="text-3xl font-black">{aScore} <span className="text-xs">pt</span></div>
+              </div>
+              <div className="text-center p-4 bg-blue-500/10 rounded-2xl border border-blue-500/20">
+                <div className="text-[10px] font-black text-blue-500 uppercase mb-1">Team B</div>
+                <div className="text-3xl font-black">{bScore} <span className="text-xs">pt</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="w-full max-w-md bg-slate-800/50 rounded-3xl p-6 border border-slate-700">
+            <h3 className="flex items-center gap-2 font-black text-slate-400 mb-4 uppercase tracking-widest text-sm">
+              <History size={18} /> Game History
+            </h3>
+            <div className="space-y-3">
+              {(gameConfig.logs ?? []).map(log => (
+                <div key={log.id} className="text-xs border-b border-slate-700/50 pb-2 flex gap-3">
+                  <span className="text-slate-500 shrink-0 font-mono">
+                    {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span className={
+                    log.type === 'CAPTURE' ? 'text-red-400 font-bold' :
+                    log.type === 'MISSION' ? 'text-indigo-400 font-bold' :
+                    log.type === 'EMERGENCY' ? 'text-amber-400 font-black' :
+                    'text-slate-300'
+                  }>
+                    {log.message}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={() => setSafetyDialogOpen(true)}
+            className="mt-4 rounded-2xl bg-red-600 px-6 py-4 font-black text-white shadow-lg"
+          >
+            SOS / リタイア
+          </button>
+          {safetyDialogOpen && (
+            <SafetyActionDialog
+              busy={safetyActionBusy}
+              onClose={() => setSafetyDialogOpen(false)}
+              onChoose={handleSafetyAction}
+            />
+          )}
+
+          <button
+            onClick={async () => { await signOutCurrentUser(); window.location.reload(); }}
+            className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
+          >
+            <LogOut size={18} /> 最初に戻る
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col h-screen max-h-screen bg-slate-50 overflow-hidden">
         {/* 一時中断オーバーレイ */}
         {gamePaused && !isAdmin && (
           <div className="absolute inset-0 z-[2000] bg-red-600/95 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center text-white">
@@ -688,50 +635,51 @@ const App: React.FC = () => {
                 </div>
             )
           ) : (
-            <Routes>
-              <Route
-                path="/map"
-                element={
-                  <MapView
-                    users={allUsers}
-                    logs={locationLogs}
-                    currentUser={currentUser}
-                    privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
-                    exposedLocations={exposedLocations}
-                    gameConfig={gameConfig}
-                    onUpdatePrivateLocation={handleUpdatePrivateLocation}
-                    onCapture={handleCapture}
-                    onActivateInvincibility={handleActivateInvincibility}
-                    onStartShinkansenWait={handleStartShinkansenWait}
-                    onResumeWaiting={handleResumeWaiting}
-                  />
-                }
-              />
-              <Route
-                path="/mission"
-                element={
-                  <MissionView
-                    config={gameConfig}
-                    onComplete={handleScoreUpdate}
-                    onExposeLocation={handleUpdateLocation}
-                    user={currentUser}
-                    missions={missions}
-                  />
-                }
-              />
-              <Route
-                path="/admin-tk-2026-secret"
-                element={
-                  <AdminView
-                    config={gameConfig}
-
-                    users={allUsers}
-                    missions={missions}
-                  />
-                }
-              />
-              <Route path="*" element={<Navigate to="/map" replace />} />
-            </Routes>
+            <Suspense fallback={<LoadingSpinner message="画面を読み込み中..." />}>
+              <Routes>
+                <Route
+                  path="/map"
+                  element={
+                    <MapView
+                      users={allUsers}
+                      logs={locationLogs}
+                      currentUser={currentUser}
+                      privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
+                      exposedLocations={exposedLocations}
+                      gameConfig={gameConfig}
+                      onUpdatePrivateLocation={handleUpdatePrivateLocation}
+                      onCapture={handleCapture}
+                      onActivateInvincibility={handleActivateInvincibility}
+                      onStartShinkansenWait={handleStartShinkansenWait}
+                      onResumeWaiting={handleResumeWaiting}
+                    />
+                  }
+                />
+                <Route
+                  path="/mission"
+                  element={
+                    <MissionView
+                      config={gameConfig}
+                      onComplete={handleScoreUpdate}
+                      onExposeLocation={handleUpdateLocation}
+                      user={currentUser}
+                      missions={missions}
+                    />
+                  }
+                />
+                <Route
+                  path="/admin-tk-2026-secret"
+                  element={
+                    <AdminView
+                      config={gameConfig}
+                      users={allUsers}
+                      missions={missions}
+                    />
+                  }
+                />
+                <Route path="*" element={<Navigate to="/map" replace />} />
+              </Routes>
+            </Suspense>
           )}
 
           {isAdmin && (
@@ -750,6 +698,7 @@ const App: React.FC = () => {
           <NavAnchor to="/mission" icon={<Target size={24} />} label="MISSION" />
         </nav>
       </div>
+      )}
     </HashRouter>
   );
 };
