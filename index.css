@@ -1,4 +1,5 @@
-@import "tailwindcss"; /* これを先頭に追加 */
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 /* Leaflet ポップアップの視認性向上 */
 .leaflet-popup-content-wrapper {

@@ -15,10 +15,8 @@ import {
   SHINKANSEN_LIMIT_DURATION_MS,
 } from '../src/game';
 import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
+import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
-
-
-
 
 interface Props {
   users: User[];
@@ -37,13 +35,13 @@ interface Props {
 const MapView: React.FC<Props> = ({
   users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting
 }) => {
-  const mapRef = useRef<any>(null);
+  const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const markersRef = useRef<Record<string, any>>({});
+  const markersRef = useRef<Record<string, L.CircleMarker>>({});
   const [timeLeft, setTimeLeft] = useState({
     waiting: 0, invincible: 0, nextReveal: 0, final: 0, oniLock: 0, shinkansenRemaining: 0, forceReveal: 0, teamSearchRemaining: 0 // ← これを追加
   });
-  const [isLeafletReady, setIsLeafletReady] = useState(false);
+  const isLeafletReady = true;
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -66,12 +64,6 @@ const MapView: React.FC<Props> = ({
       setSelectedTargetId(captureCandidates[0]?.id ?? '');
     }
   }, [captureCandidates, selectedTargetId]);
-
-  // Leaflet 読み込み確認
-  useEffect(() => {
-    const check = () => { if ((window as any).L) setIsLeafletReady(true); else setTimeout(check, 100); };
-    check();
-  }, []);
 
   // オンライン状態監視
   useEffect(() => {
@@ -186,21 +178,29 @@ const MapView: React.FC<Props> = ({
   // 地図初期化
   useEffect(() => {
     if (!containerRef.current || !isLeafletReady || timeLeft.oniLock > 0) return;
-    const L = (window as any).L;
     if (!mapRef.current) {
-      mapRef.current = L.map(containerRef.current).setView(
+      const map = L.map(containerRef.current).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13
       );
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapRef.current);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+      mapRef.current = map;
     } else {
       mapRef.current.setView([privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13);
     }
+
+    return () => {
+      // Map cleanup on unmount
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, [isLeafletReady, timeLeft.oniLock, privateLocation?.latitude, privateLocation?.longitude]);
 
 // ── マーカー描画（強制共有・チーム別サーチ対応版） ────────────────────────
   useEffect(() => {
-    const L = (window as any).L;
-    if (!mapRef.current || !L) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
 
     // 既存マーカーを全削除
     Object.values(markersRef.current).forEach((m: any) => {
@@ -247,7 +247,7 @@ const MapView: React.FC<Props> = ({
         weight: isInvincible ? 4 : 3,
         opacity: 1,
         fillOpacity: isSelf ? 0.95 : isTeamSearchActive ? 0.9 : 0.7,
-      }).addTo(mapRef.current);
+      }).addTo(currentMap);
 
       let popupVariant: PlayerMapPopupVariant;
       let remainingTime: string | undefined;
