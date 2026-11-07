@@ -17,6 +17,8 @@ import {
 import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
 import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
+import useWakeLock from '../src/hooks/useWakeLock';
+import useOnlineStatus from '../src/hooks/useOnlineStatus';
 
 interface Props {
   users: User[];
@@ -44,10 +46,14 @@ const MapView: React.FC<Props> = ({
   const isLeafletReady = true;
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const isOnline = useOnlineStatus();
+  const isOffline = !isOnline;
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
   const resumeRequestedUntil = useRef<number | null>(null);
+
+  // Keep screen awake while MapView is active
+  useWakeLock(true);
 
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
   const captureCandidates = currentRole === 'ONI'
@@ -64,15 +70,6 @@ const MapView: React.FC<Props> = ({
       setSelectedTargetId(captureCandidates[0]?.id ?? '');
     }
   }, [captureCandidates, selectedTargetId]);
-
-  // オンライン状態監視
-  useEffect(() => {
-    const on = () => setIsOffline(false);
-    const off = () => setIsOffline(true);
-    window.addEventListener('online', on);
-    window.addEventListener('offline', off);
-    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
-  }, []);
 
   // 位置情報更新
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
@@ -100,25 +97,48 @@ const MapView: React.FC<Props> = ({
     }
   }, [currentUser, gameConfig.gameStatus, gameConfig.gameSessionId, onUpdatePrivateLocation]);
 
-  // watchPosition
+  // watchPosition with Page Visibility optimization (Battery saving when app/tab is backgrounded)
   useEffect(() => {
     if (!currentUser || !('geolocation' in navigator)) return;
-    if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
 
-    watchId.current = navigator.geolocation.watchPosition(
-      position => {
-        const latDiff = Math.abs(position.coords.latitude - (privateLocation?.latitude ?? 0));
-        const lngDiff = Math.abs(position.coords.longitude - (privateLocation?.longitude ?? 0));
-        if (latDiff > 0.0001 || lngDiff > 0.0001) updateLocation(position);
-      },
-      error => console.error('Geolocation watch error:', error),
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
-    );
-
-    return () => {
-      if (watchId.current) { navigator.geolocation.clearWatch(watchId.current); watchId.current = null; }
+    const startWatching = () => {
+      if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
+      watchId.current = navigator.geolocation.watchPosition(
+        position => {
+          const latDiff = Math.abs(position.coords.latitude - (privateLocation?.latitude ?? 0));
+          const lngDiff = Math.abs(position.coords.longitude - (privateLocation?.longitude ?? 0));
+          if (latDiff > 0.0001 || lngDiff > 0.0001) updateLocation(position);
+        },
+        error => console.error('Geolocation watch error:', error),
+        { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
+      );
     };
-  }, [currentUser, updateLocation]);
+
+    const stopWatching = () => {
+      if (watchId.current) {
+        navigator.geolocation.clearWatch(watchId.current);
+        watchId.current = null;
+      }
+    };
+
+    if (document.visibilityState === 'visible') {
+      startWatching();
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        startWatching();
+      } else {
+        stopWatching();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopWatching();
+    };
+  }, [currentUser, updateLocation, privateLocation?.latitude, privateLocation?.longitude]);
 
   // タイマー
   useEffect(() => {

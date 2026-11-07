@@ -14,7 +14,8 @@ import {
   AlertTriangle,
   Phone,
   XCircle,
-  Clock
+  Clock,
+  WifiOff,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import type { LocationLog, Role } from './types';
@@ -58,6 +59,7 @@ import {
 import useAuthUser from './src/hooks/useAuthUser';
 import useGameSubscriptions from './src/hooks/useGameSubscriptions';
 import useConfirmDialog from './src/hooks/useConfirmDialog';
+import useOnlineStatus from './src/hooks/useOnlineStatus';
 import ConfirmDialog from './src/components/ui/ConfirmDialog';
 import LoadingSpinner from './src/components/ui/LoadingSpinner';
 
@@ -94,6 +96,7 @@ const App: React.FC = () => {
   } = useGameSubscriptions(authUserId, onBroadcast, onConfigError);
 
   const { confirm, dialogProps } = useConfirmDialog();
+  const isOnline = useOnlineStatus();
 
   const [locationLogs] = useState<LocationLog[]>([]);
   const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
@@ -431,6 +434,13 @@ const App: React.FC = () => {
     <HashRouter>
       <Toaster position="top-center" richColors />
       <ConfirmDialog {...dialogProps} />
+
+      {!isOnline && (
+        <div className="fixed top-0 left-0 right-0 z-[5000] bg-red-600 text-white text-xs py-1.5 px-4 font-bold flex items-center justify-center gap-2 shadow-md">
+          <WifiOff size={14} className="animate-pulse" />
+          <span>通信が切断されています（オフラインモード）</span>
+        </div>
+      )}
 
       {!currentUser ? (
         isAdminPath ? (

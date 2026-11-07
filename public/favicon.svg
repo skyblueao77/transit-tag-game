@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="url(#accent)" stroke-width="12" opacity="0.6"/>
+  <!-- Train Shape -->
+  <rect x="140" y="110" width="232" height="260" rx="44" fill="#ffffff" opacity="0.95"/>
+  <rect x="164" y="140" width="184" height="90" rx="16" fill="#0f172a"/>
+  <!-- Train Windshield Split -->
+  <line x1="256" y1="140" x2="256" y2="230" stroke="#ffffff" stroke-width="4" opacity="0.2"/>
+  <!-- Headlights -->
+  <circle cx="186" cy="310" r="18" fill="#eab308"/>
+  <circle cx="326" cy="310" r="18" fill="#eab308"/>
+  <!-- Center Tag Emblem -->
+  <circle cx="256" cy="300" r="22" fill="#ef4444"/>
+  <!-- Tracks Below -->
+  <line x1="120" y1="410" x2="392" y2="410" stroke="#94a3b8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="160" y1="440" x2="352" y2="440" stroke="#94a3b8" stroke-width="14" stroke-linecap="round"/>
+  <line x1="180" y1="390" x2="160" y2="460" stroke="#64748b" stroke-width="10" stroke-linecap="round"/>
+  <line x1="332" y1="390" x2="352" y2="460" stroke="#64748b" stroke-width="10" stroke-linecap="round"/>
+</svg>
