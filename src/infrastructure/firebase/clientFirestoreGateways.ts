@@ -11,6 +11,8 @@ import {
   Timestamp,
   where,
   writeBatch,
+  type DocumentData,
+  type UpdateData,
 } from 'firebase/firestore';
 import { auth, db } from './firebaseClient';
 
@@ -304,7 +306,7 @@ export const clientCaptureGateway: CaptureGateway = {
 
         for (const change of capture.playerChanges) {
           const userRef = doc(db, 'users', change.playerId);
-          const updates: Record<string, unknown> = {
+          const updates: UpdateData<DocumentData> = {
             status: change.status,
             waitingUntil: change.waitingUntil,
           };
@@ -1484,7 +1486,7 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
           return { ok: false, reason };
         }
 
-        const updates: Record<string, unknown> = {};
+        const updates: UpdateData<DocumentData> = {};
         if (decision.activeMissionA !== undefined) updates.activeMissionA = decision.activeMissionA;
         if (decision.activeMissionB !== undefined) updates.activeMissionB = decision.activeMissionB;
 

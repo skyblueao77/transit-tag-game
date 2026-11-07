@@ -41,11 +41,8 @@ export interface LocationVisibilityResult {
   expiresAt?: number;
 }
 
-function hasCoordinates(
-  latitude: number | null | undefined,
-  longitude: number | null | undefined,
-): latitude is number {
-  return Number.isFinite(latitude) && Number.isFinite(longitude);
+function isCoordinate(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function visibleRealtime(
@@ -53,7 +50,9 @@ function visibleRealtime(
   player: LocationVisibilityPlayer,
   expiresAt?: number,
 ): LocationVisibilityResult {
-  if (!hasCoordinates(player.privateLatitude, player.privateLongitude)) return { mode: 'HIDDEN' };
+  if (!isCoordinate(player.privateLatitude) || !isCoordinate(player.privateLongitude)) {
+    return { mode: 'HIDDEN' };
+  }
   return {
     mode,
     latitude: player.privateLatitude,
@@ -69,8 +68,14 @@ function visibleSnapshot(
   deadline?: number,
 ): LocationVisibilityResult {
   const snapshot = player.exposedLocation;
-  if (!snapshot || !hasCoordinates(snapshot.latitude, snapshot.longitude)
-    || !isActiveUntil(snapshot.expiresAt, now)) return { mode: 'HIDDEN' };
+  if (
+    !snapshot ||
+    !isCoordinate(snapshot.latitude) ||
+    !isCoordinate(snapshot.longitude) ||
+    !isActiveUntil(snapshot.expiresAt, now)
+  ) {
+    return { mode: 'HIDDEN' };
+  }
   const expiresAt = deadline === undefined ? snapshot.expiresAt : Math.min(snapshot.expiresAt as number, deadline);
   if (!isActiveUntil(expiresAt, now)) return { mode: 'HIDDEN' };
   return {

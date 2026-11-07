@@ -93,7 +93,9 @@ export function subscribeExposedLocations(
   publish();
   return () => {
     active = false;
-    unsubscribes.forEach(unsubscribe => unsubscribe());
+    unsubscribes.forEach(unsubscribe => {
+      unsubscribe();
+    });
   };
 }
 
@@ -127,7 +129,9 @@ export function subscribeEmergencyLocationProjections(
   publish();
   return () => {
     active = false;
-    unsubscribes.forEach(unsubscribe => unsubscribe());
+    unsubscribes.forEach(unsubscribe => {
+      unsubscribe();
+    });
   };
 }
 

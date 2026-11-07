@@ -61,7 +61,7 @@ function hasCanonicalMissionShape(value: unknown): value is Mission {
   const keys = Object.keys(value).sort();
   const required = ['area', 'description', 'id', 'points', 'region', 'title', 'type'];
   const optional = ['lat', 'lng'];
-  if (required.some(key => !Object.prototype.hasOwnProperty.call(value, key))) return false;
+  if (required.some(key => !Object.hasOwn(value, key))) return false;
   if (keys.some(key => !required.includes(key) && !optional.includes(key))) return false;
   if (typeof value.id !== 'string' || value.id.length === 0
     || typeof value.area !== 'string' || typeof value.region !== 'string'
@@ -69,8 +69,8 @@ function hasCanonicalMissionShape(value: unknown): value is Mission {
     || typeof value.description !== 'string'
     || typeof value.points !== 'number' || !Number.isFinite(value.points) || value.points < 0
     || typeof value.type !== 'string' || !missionTypes.has(value.type)) return false;
-  if (Object.prototype.hasOwnProperty.call(value, 'lat') && (typeof value.lat !== 'number' || !Number.isFinite(value.lat))) return false;
-  if (Object.prototype.hasOwnProperty.call(value, 'lng') && (typeof value.lng !== 'number' || !Number.isFinite(value.lng))) return false;
+  if (Object.hasOwn(value, 'lat') && (typeof value.lat !== 'number' || !Number.isFinite(value.lat))) return false;
+  if (Object.hasOwn(value, 'lng') && (typeof value.lng !== 'number' || !Number.isFinite(value.lng))) return false;
   return true;
 }
 
@@ -193,7 +193,7 @@ export function planMissionCatalogSync(
   let updatedCount = 0;
   let unchangedCount = 0;
   for (const mission of catalog) {
-    const persisted = Object.prototype.hasOwnProperty.call(persistedById, mission.id) ? persistedById[mission.id] : null;
+    const persisted = Object.hasOwn(persistedById, mission.id) ? persistedById[mission.id] : null;
     if (persisted === null || persisted === undefined) {
       upserts.push({ ...mission });
       createdCount += 1;
