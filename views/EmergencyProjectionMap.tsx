@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type React from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EmergencyLocationProjection, User } from '../types';
 import { createPlayerMapPopup } from './playerMapPopup';
 

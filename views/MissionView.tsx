@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { GameConfig, Mission, User } from '../types';
+import type React from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import type { GameConfig, Mission, User } from '../types';
 import { FINAL_MISSIONS } from '../constants';
 import type { CompleteMissionResult } from '../src/application/gameplayPorts';
 import { canCompleteMission, isSameMissionId } from '../src/game';
@@ -13,7 +14,7 @@ interface Props {
   missions: Mission[];
 }
 
-const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocation, missions = [] }) => {
+const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocation: _onExposeLocation, missions = [] }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFinalReported, setIsFinalReported] = useState(false);
   const [lastCompletedMissionId, setLastCompletedMissionId] = useState<string | null>(null);

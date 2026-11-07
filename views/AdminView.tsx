@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GameConfig, User, Mission } from '../types';
+import type React from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { GameConfig, User, Mission } from '../types';
 import { MISSIONS } from '../constants';
 import {
   Users, Lock, Trash2, Shield, Trophy, Play,
@@ -496,7 +497,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
           </div>
         <div className="bg-white/10 p-3 rounded-2xl border border-white/20">
             <label htmlFor="duration-input" className="block text-[9px] font-black uppercase opacity-70 mb-1">Search Duration (Min)</label>            <div className="flex items-center gap-3">
-              <input id="duration-input" type="number" min={1} max={30} step={1} value={searchDuration} onChange={(e) => setSearchDuration(Math.min(30, Math.max(1, parseInt(e.target.value) || 1)))} className="w-20 bg-white text-amber-600 font-black px-3 py-2 rounded-xl outline-none text-center" />
+              <input id="duration-input" type="number" min={1} max={30} step={1} value={searchDuration} onChange={(e) => setSearchDuration(Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 1)))} className="w-20 bg-white text-amber-600 font-black px-3 py-2 rounded-xl outline-none text-center" />
               <span className="font-black text-xs">分間に設定中</span>
             </div>
           </div>

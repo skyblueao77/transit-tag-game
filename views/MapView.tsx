@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
+import type React from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import type { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
 import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
 import {
   canUpdatePrivateLocation,
@@ -13,7 +14,7 @@ import {
   remainingSeconds,
   SHINKANSEN_LIMIT_DURATION_MS,
 } from '../src/game';
-import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
+import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
 
 
@@ -202,7 +203,9 @@ const MapView: React.FC<Props> = ({
     if (!mapRef.current || !L) return;
 
     // 既存マーカーを全削除
-    Object.values(markersRef.current).forEach((m: any) => m.remove());
+    Object.values(markersRef.current).forEach((m: any) => {
+      m.remove();
+    });
     markersRef.current = {};
 
     const now = Date.now();
@@ -231,7 +234,6 @@ const MapView: React.FC<Props> = ({
       const isSelf = visibility.mode === 'SELF_PRIVATE';
       const isTeamSearchActive = visibility.mode === 'TEAM_SNAPSHOT';
       const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
-      const isIndividualExposed = visibility.mode === 'INDIVIDUAL_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
       const marker = L.circleMarker([visibility.latitude, visibility.longitude], {

@@ -1,25 +1,22 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type React from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { HashRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import {
   Map as MapIcon,
   Target,
   Settings,
-  RefreshCw,
-  AlertCircle,
   Trophy,
-  Navigation,
   Shield,
   Zap,
   Swords,
   History,
-  Medal,
   LogOut,
   AlertTriangle,
   Phone,
   XCircle,
   Clock
 } from 'lucide-react';
-import { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, Role, Mission } from './types';
+import type { User, PrivateLocation, ExposedLocation, GameConfig, LocationLog, Role, Mission } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
@@ -241,6 +238,8 @@ const App: React.FC = () => {
 
     const now = Date.now();
     const EXPOSE_DURATION = 5 * 60 * 1000; // 5 分
+    const currentUserId = currentUser.id;
+    const expectedSessionId = gameConfig.gameSessionId;
 
     // MapView が随時private locationを更新しているので、それをスナップショットとして使う
     const snapLat = privateLocation?.latitude;
@@ -256,18 +255,18 @@ const App: React.FC = () => {
         async pos => {
           try {
             const privateResult = await handleUpdatePrivateLocation({
-              playerId: currentUser.id,
-              expectedSessionId: gameConfig.gameSessionId,
+              playerId: currentUserId,
+              expectedSessionId,
               latitude: pos.coords.latitude,
               longitude: pos.coords.longitude,
             });
             if (!privateResult.ok) throw new Error(privateResult.reason);
 
             const exposeResult = await exposeLocation({
-              playerId: currentUser.id,
-              expectedSessionId: gameConfig.gameSessionId,
+              playerId: currentUserId,
+              expectedSessionId,
               privateLocation: {
-                gameSessionId: gameConfig.gameSessionId,
+                gameSessionId: expectedSessionId,
                 latitude: pos.coords.latitude,
                 longitude: pos.coords.longitude,
               },
@@ -443,7 +442,7 @@ const App: React.FC = () => {
 
   // 待機モードの自動復帰（Cloud Functions Cron不要化: Sparkプラン対応）
   useEffect(() => {
-    if (!currentUser || currentUser.status !== 'WAITING' || !currentUser.waitingUntil) return;
+    if (currentUser?.status !== 'WAITING' || !currentUser.waitingUntil) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
 
@@ -476,7 +475,22 @@ const App: React.FC = () => {
     );
   }
 
-  if (!currentUser && !isAdminPath) return <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />;
+  if (!currentUser) {
+    if (isAdminPath) {
+      return (
+        <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
+          <Routes>
+            <Route
+              path="/admin-tk-2026-secret"
+              element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
+            />
+            <Route path="*" element={<Navigate to="/admin-tk-2026-secret" replace />} />
+          </Routes>
+        </div>
+      );
+    }
+    return <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />;
+  }
 
   // ゲームオーバー画面
   if ((gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) && !isAdminPath) {
