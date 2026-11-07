@@ -504,6 +504,7 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         transaction.update(userRef, {
           score: (typeof userData.score === 'number' ? userData.score : 0) + score.playerScoreDelta,
           invincibleCards: (typeof userData.invincibleCards === 'number' ? userData.invincibleCards : 0) + score.invincibleCardDelta,
+          lastCompletionId: completionId,
         });
 
         transaction.update(configRef, {
