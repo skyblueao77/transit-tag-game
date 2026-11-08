@@ -7,7 +7,7 @@ service cloud.firestore {
     }
 
     // Bootstrap this document once from the Firebase Console after creating
-    // the administrator Auth account. Do not allow clients to create it.
+    // the administrator Auth account.
     function isAdmin() {
       return signedIn()
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
@@ -24,6 +24,12 @@ service cloud.firestore {
         && get(configPath).data.sessionSchemaVersion >= 2;
     }
 
+    function hasNoCoordinates(data) {
+      return !data.keys().hasAny([
+        'latitude', 'longitude', 'privateLatitude', 'privateLongitude', 'lastLat', 'lastLng'
+      ]);
+    }
+
     function validPlayerCreate(uid) {
       let configPath = /databases/$(database)/documents/game_config/current;
       let data = request.resource.data;
@@ -33,7 +39,7 @@ service cloud.firestore {
         && hasCurrentGameSession()
         && data.keys().hasOnly([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards'
+          'gameSessionId', 'invincibleCards', 'lastCompletionId'
         ])
         && data.keys().hasAll([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
@@ -54,15 +60,6 @@ service cloud.firestore {
         && data.gameSessionId == get(configPath).data.gameSessionId;
     }
 
-    function validOwnerProfileUpdate(uid) {
-      return signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 80;
-    }
-
     function isCurrentParticipant(uid) {
       return signedIn()
         && hasCurrentGameSession()
@@ -75,6 +72,10 @@ service cloud.firestore {
     match /admins/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
+
+      match /{subCollection=**} {
+        allow read, write: if signedIn() && request.auth.uid == uid && isAdmin();
+      }
     }
 
     match /privateLocations/{uid} {
@@ -92,7 +93,7 @@ service cloud.firestore {
         && request.resource.data.longitude >= -180
         && request.resource.data.longitude <= 180
         && request.resource.data.updatedAt is timestamp;
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     function isRevealViewer() {
@@ -180,70 +181,303 @@ service cloud.firestore {
       allow get: if isRevealViewer()
         && (!exists(/databases/$(database)/documents/exposedLocations/$(uid))
           || validExposedLocation(uid));
-      allow list: if false;
+      allow list: if isAdmin();
       allow create: if validOwnerExposedLocationWrite(uid);
       allow update: if validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot();
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
-    function validEmergencyProjection(uid) {
-      return hasCurrentGameSession()
-        && resource.data.keys().hasOnly([
+    function validEmergencyProjectionWrite(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && hasCurrentGameSession()
+        && request.resource.data.keys().hasOnly([
           'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
           'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
         ])
-        && resource.data.keys().hasAll([
+        && request.resource.data.keys().hasAll([
           'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
           'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
         ])
-        && resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-        && resource.data.playerId == uid
-        && resource.data.latitude is number
-        && resource.data.latitude >= -90
-        && resource.data.latitude <= 90
-        && resource.data.longitude is number
-        && resource.data.longitude >= -180
-        && resource.data.longitude <= 180
-        && resource.data.projectedAt is timestamp
-        && resource.data.sourceLocationUpdatedAt is timestamp
-        && resource.data.expiresAt is timestamp
-        && resource.data.sourceLocationUpdatedAt <= resource.data.projectedAt
-        && resource.data.expiresAt > resource.data.projectedAt
-        && resource.data.expiresAt > request.time
-        && resource.data.safetyStatus == 'EMERGENCY'
-        && resource.data.projectionKind == 'EMERGENCY'
-        && isCurrentParticipant(uid)
-        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY';
+        && request.resource.data.playerId == uid
+        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+        && request.resource.data.safetyStatus == 'EMERGENCY'
+        && request.resource.data.projectionKind == 'EMERGENCY'
+        && existsAfter(/databases/$(database)/documents/users/$(uid))
+        && getAfter(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY'
+        && request.resource.data.latitude is number
+        && request.resource.data.latitude >= -90
+        && request.resource.data.latitude <= 90
+        && request.resource.data.longitude is number
+        && request.resource.data.longitude >= -180
+        && request.resource.data.longitude <= 180
+        && request.resource.data.projectedAt is timestamp
+        && request.resource.data.sourceLocationUpdatedAt is timestamp
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time;
     }
 
     match /emergencyLocationProjections/{uid} {
-      allow get: if isAdmin()
-        && (!exists(/databases/$(database)/documents/emergencyLocationProjections/$(uid))
-          || validEmergencyProjection(uid));
-      allow list: if false;
-      allow create, update, delete: if false;
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow list: if isAdmin();
+      allow create, update: if validEmergencyProjectionWrite(uid);
+      allow delete: if isAdmin();
+    }
+
+    function validMissionRewardUpdate(uid, b, a, diff) {
+      return diff.hasOnly(['score', 'invincibleCards', 'lastCompletionId'])
+        && a.keys().hasAny(['lastCompletionId'])
+        && a.lastCompletionId is string
+        && !exists(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId))
+        && existsAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId))
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.completedBy == uid
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.team == b.team
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.gameSessionId == b.gameSessionId
+        && a.lastCompletionId == b.team + '_' + b.gameSessionId + '_' + getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.missionId
+        && a.score == b.score + getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.points
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.points > 0
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.points <= 100
+        && (a.invincibleCards == b.invincibleCards
+            || (a.invincibleCards == b.invincibleCards + 1
+                && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.keys().hasAny(['luckyReward'])
+                && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.luckyReward == true));
+    }
+
+    function validSelfUserUpdate(uid) {
+      let b = resource.data;
+      let a = request.resource.data;
+      let diff = a.diff(b).affectedKeys();
+      let nowMs = request.time.toMillis();
+      return signedIn()
+        && request.auth.uid == uid
+        && hasNoCoordinates(a)
+        && a.id == b.id
+        && a.team == b.team
+        && a.role == b.role
+        && a.gameSessionId == b.gameSessionId
+        && (
+          // 1. Profile name update
+          (diff.hasOnly(['name']) && a.name is string && a.name.size() > 0 && a.name.size() <= 80)
+          // 2. Waiting resume upon expiry
+          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+              && b.status == 'WAITING' && a.status == 'ACTIVE'
+              && b.waitingUntil is int && b.waitingUntil <= nowMs
+              && a.waitingUntil == 0)
+          // 3. Manual waiting start (60 min max duration + 60s tolerance)
+          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+              && b.status == 'ACTIVE' && a.status == 'WAITING'
+              && a.waitingUntil is int && a.waitingUntil > nowMs
+              && a.waitingUntil <= nowMs + 3660000)
+          // 4. Powerup invincibility card use (30 min max duration + 60s tolerance)
+          || (diff.hasOnly(['invincibleCards', 'invincibleUntil'])
+              && b.invincibleCards is int && b.invincibleCards >= 1
+              && a.invincibleCards == b.invincibleCards - 1
+              && a.invincibleUntil is int && a.invincibleUntil > nowMs
+              && a.invincibleUntil <= nowMs + 1860000)
+          // 5. Safety action: Emergency or Retire
+          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'invincibleUntil'])
+              && a.status in ['EMERGENCY', 'RETIRED']
+              && a.waitingUntil == 0
+              && a.invincibleUntil == 0)
+          // 6. Mission completion reward: only evaluated if diff has 'score'
+          || (diff.hasAny(['score']) && validMissionRewardUpdate(uid, b, a, diff))
+        );
+    }
+
+    function validParticipantCaptureUpdate(uid) {
+      let b = resource.data;
+      let a = request.resource.data;
+      let diff = a.diff(b).affectedKeys();
+      let configPath = /databases/$(database)/documents/game_config/current;
+      let curConfig = get(configPath).data;
+      let afterConfig = getAfter(configPath).data;
+      let me = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      let myRole = me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
+      let nowMs = request.time.toMillis();
+      return signedIn()
+        && isCurrentParticipant(request.auth.uid)
+        && hasNoCoordinates(a)
+        && a.id == b.id
+        && a.name == b.name
+        && a.team == b.team
+        && a.role == b.role
+        && a.score == b.score
+        && a.gameSessionId == b.gameSessionId
+        && (!b.keys().hasAny(['color']) || a.color == b.color)
+        && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && myRole == 'ONI'
+        && me.status == 'ACTIVE'
+        && afterConfig.teamARole != curConfig.teamARole
+        && b.status != 'EMERGENCY'
+        && b.status != 'RETIRED'
+        && (
+          // Branch A: Captured side (opposing team b.team != me.team)
+          // All players transition to WAITING (capped at 30 min + 60s) with invincibility cleared
+          (b.team != me.team
+           && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
+           && a.status == 'WAITING'
+           && a.waitingUntil is int
+           && a.waitingUntil > nowMs
+           && a.waitingUntil <= nowMs + 1860000
+           && a.invincibleUntil == 0)
+          // Branch B: Capturing side (own team b.team == me.team, including captor)
+          // All players transition to ACTIVE, clear waiting, and receive exactly +1 invincibleCard
+          || (b.team == me.team
+              && diff.hasOnly(['status', 'waitingUntil', 'invincibleCards'])
+              && a.status == 'ACTIVE'
+              && a.waitingUntil == 0
+              && a.invincibleCards == (b.keys().hasAny(['invincibleCards']) ? b.invincibleCards : 0) + 1)
+        );
     }
 
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if validPlayerCreate(uid);
-      allow update: if validOwnerProfileUpdate(uid);
-      allow delete: if false;
+      allow update: if (isAdmin() && hasNoCoordinates(request.resource.data))
+        || validSelfUserUpdate(uid)
+        || validParticipantCaptureUpdate(uid);
+      allow delete: if isAdmin();
     }
 
     match /missions/{missionId} {
       allow read: if signedIn();
-      allow write: if false;
+      allow write: if isAdmin();
+    }
+
+    function validMissionCompletionCreate(completionId) {
+      let data = request.resource.data;
+      let configPath = /databases/$(database)/documents/game_config/current;
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let missionPath = /databases/$(database)/documents/missions/$(data.missionId);
+      return signedIn()
+        && isCurrentParticipant(request.auth.uid)
+        && hasCurrentGameSession()
+        && data.keys().hasOnly([
+          'gameSessionId', 'missionId', 'team', 'completedBy',
+          'points', 'luckyReward', 'isFinalMission', 'completedAt'
+        ])
+        && data.keys().hasAll([
+          'gameSessionId', 'missionId', 'team', 'completedBy',
+          'points', 'isFinalMission', 'completedAt'
+        ])
+        && data.completedBy == request.auth.uid
+        && data.gameSessionId == get(configPath).data.gameSessionId
+        && data.team == get(userPath).data.team
+        && get(userPath).data.status == 'ACTIVE'
+        && exists(missionPath)
+        && data.points is int
+        && data.points == get(missionPath).data.points
+        && data.isFinalMission is bool
+        && (data.isFinalMission == false
+            || (get(configPath).data.keys().hasAny(['activeFinalMissionId'])
+                && get(configPath).data.activeFinalMissionId == data.missionId))
+        && data.completedAt is timestamp
+        && completionId == data.team + '_' + data.gameSessionId + '_' + data.missionId;
     }
 
     match /missionCompletions/{completionId} {
       allow read: if signedIn();
-      allow write: if false;
+      allow create: if isAdmin() || validMissionCompletionCreate(completionId);
+      allow update, delete: if isAdmin();
+    }
+
+    function validLogOnlyConfigUpdate(currentData, newData, diff) {
+      return diff.hasOnly(['logs'])
+        && newData.logs is list
+        && newData.logs.size() <= 200
+        && newData.teamARole == currentData.teamARole
+        && newData.teamBRole == currentData.teamBRole
+        && newData.teamAScore == currentData.teamAScore
+        && newData.teamBScore == currentData.teamBScore
+        && (!currentData.keys().hasAny(['nextRevealTime']) || newData.nextRevealTime == currentData.nextRevealTime);
+    }
+
+    function validMissionScoreConfigUpdate(currentData, newData, diff) {
+      let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return existsAfter(mePath)
+        && getAfter(mePath).data.keys().hasAny(['lastCompletionId'])
+        && getAfter(mePath).data.lastCompletionId is string
+        && existsAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId))
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.completedBy == request.auth.uid
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.team == getAfter(mePath).data.team
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.gameSessionId == currentData.gameSessionId
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.points > 0
+        && getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.points <= 100
+        && newData.teamARole == currentData.teamARole
+        && newData.teamBRole == currentData.teamBRole
+        && (!currentData.keys().hasAny(['nextRevealTime']) || newData.nextRevealTime == currentData.nextRevealTime)
+        && newData.logs is list
+        && newData.logs.size() <= 200
+        && (getAfter(mePath).data.team == 'A'
+            ? (diff.hasOnly(['teamAScore', 'logs'])
+               && newData.teamAScore == currentData.teamAScore + getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.points
+               && newData.teamBScore == currentData.teamBScore)
+            : (diff.hasOnly(['teamBScore', 'logs'])
+               && newData.teamBScore == currentData.teamBScore + getAfter(/databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId)).data.points
+               && newData.teamAScore == currentData.teamAScore));
+    }
+
+    function validCaptureConfigUpdate(currentData, newData, diff) {
+      let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let targetPath = /databases/$(database)/documents/users/$(newData.lastCaptureTargetId);
+      let nowMs = request.time.toMillis();
+      return exists(mePath)
+        && currentData.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && (get(mePath).data.team == 'A' ? currentData.teamARole : currentData.teamBRole) == 'ONI'
+        && get(mePath).data.status == 'ACTIVE'
+        && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])
+        && newData.nextRevealTime is int
+        && newData.lastCaptureTargetId is string
+        && exists(targetPath)
+        && existsAfter(targetPath)
+        && get(targetPath).data.team != get(mePath).data.team
+        && get(targetPath).data.status == 'ACTIVE'
+        && (!get(targetPath).data.keys().hasAny(['invincibleUntil']) || get(targetPath).data.invincibleUntil <= nowMs)
+        && getAfter(targetPath).data.status == 'WAITING'
+        && getAfter(targetPath).data.waitingUntil is int
+        && getAfter(targetPath).data.waitingUntil > nowMs
+        && getAfter(targetPath).data.waitingUntil <= nowMs + 1860000
+        && newData.logs is list
+        && newData.logs.size() <= 200
+        && (get(mePath).data.team == 'A'
+            ? (currentData.teamARole == 'ONI'
+               && newData.teamARole == 'RUNNER'
+               && newData.teamBRole == 'ONI'
+               && newData.teamAScore == currentData.teamAScore + 50
+               && newData.teamBScore == currentData.teamBScore)
+            : (currentData.teamBRole == 'ONI'
+               && newData.teamBRole == 'RUNNER'
+               && newData.teamARole == 'ONI'
+               && newData.teamBScore == currentData.teamBScore + 50
+               && newData.teamAScore == currentData.teamAScore));
+    }
+
+    function validParticipantConfigUpdate(configId) {
+      let currentData = resource.data;
+      let newData = request.resource.data;
+      let diff = newData.diff(currentData).affectedKeys();
+      return signedIn()
+        && configId == 'current'
+        && isCurrentParticipant(request.auth.uid)
+        && hasCurrentGameSession()
+        && newData.gameSessionId == currentData.gameSessionId
+        && newData.sessionStartedAt == currentData.sessionStartedAt
+        && newData.sessionSchemaVersion == currentData.sessionSchemaVersion
+        && newData.gameStatus == currentData.gameStatus
+        && newData.day == currentData.day
+        && newData.missionMode == currentData.missionMode
+        && newData.isGameOver == currentData.isGameOver
+        && (
+          (diff.hasOnly(['logs']) && validLogOnlyConfigUpdate(currentData, newData, diff))
+          || (diff.hasAny(['teamARole', 'teamBRole']) && validCaptureConfigUpdate(currentData, newData, diff))
+          || (diff.hasAny(['teamAScore', 'teamBScore']) && validMissionScoreConfigUpdate(currentData, newData, diff))
+        );
     }
 
     match /game_config/{configId} {
       allow read: if signedIn();
-      allow write: if false;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || validParticipantConfigUpdate(configId);
     }
 
     match /{document=**} {

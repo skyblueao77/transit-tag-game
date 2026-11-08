@@ -60,10 +60,6 @@ export function sessionScopedCompletionId(
   if (!isValidGameSessionId(gameSessionId) || !missionId || missionId.includes('/')) {
     throw new Error('Invalid session completion scope');
   }
-  const input = JSON.stringify([gameSessionId, team, missionId]);
-  const bytes = new TextEncoder().encode(input);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  const digest = btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-  return `${team}_${digest}`;
+  return `${team}_${gameSessionId}_${missionId}`;
 }
+

@@ -7,6 +7,7 @@ export function mapUserDocument(id: string, data: Record<string, unknown>): User
   for (const field of [
     'name', 'role', 'team', 'color', 'score', 'status', 'invincibleUntil',
     'waitingUntil', 'invincibleCards', 'lastStation', 'shinkansenStartTime',
+    'lastCompletionId',
   ]) {
     if (Object.hasOwn(data, field)) user[field] = data[field];
   }
@@ -151,6 +152,7 @@ export function mapGameConfigDocument(
   if (data.teamARole === 'ONI' || data.teamARole === 'RUNNER') config.teamARole = data.teamARole;
   if (data.teamBRole === 'ONI' || data.teamBRole === 'RUNNER') config.teamBRole = data.teamBRole;
   if (typeof data.nextRevealTime === 'number' && Number.isFinite(data.nextRevealTime)) config.nextRevealTime = data.nextRevealTime;
+  if (typeof data.lastCaptureTargetId === 'string') config.lastCaptureTargetId = data.lastCaptureTargetId;
   for (const field of ['locationRevealUntil', 'teamARevealUntil', 'teamBRevealUntil'] as const) {
     const value = data[field];
     if (value === undefined) continue;

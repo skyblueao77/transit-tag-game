@@ -1,31 +1,53 @@
 import { initializeApp } from "firebase/app";
+import "firebase/auth";
+import "firebase/firestore";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { getAuth, connectAuthEmulator } from "firebase/auth";
-import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 
-// 1. あなたの環境変数（Config）をここに復活させます
+// 1. 環境変数（Config: Vite / Node.js 両対応）
+const env = (typeof import.meta !== 'undefined' && import.meta.env)
+  ? import.meta.env
+  : ((typeof process !== 'undefined' && process.env) ? process.env : {} as Record<string, string | undefined>);
+
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  apiKey: env.VITE_FIREBASE_API_KEY || "demo-key",
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || "demo-no-project.firebaseapp.com",
+  projectId: env.VITE_FIREBASE_PROJECT_ID || "demo-no-project",
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || "demo-no-project.appspot.com",
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || "123456789",
+  appId: env.VITE_FIREBASE_APP_ID || "1:123456789:web:abcdef",
+  measurementId: env.VITE_FIREBASE_MEASUREMENT_ID || "G-ABCDEF",
 };
 
 // 2. 初期化
 const app = initializeApp(firebaseConfig);
 const dbInstance = getFirestore(app);
-export const auth = getAuth(app);
-export const functions = getFunctions(app, 'asia-northeast1');
 
-// 3. エミュレータ接続設定
-if (typeof window !== 'undefined' && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
-  console.log("🛠️ Admin App connecting to Emulators...");
-  connectFirestoreEmulator(dbInstance, '127.0.0.1', 8080);
-  connectAuthEmulator(auth, "http://127.0.0.1:9099");
-  connectFunctionsEmulator(functions, '127.0.0.1', 5001);
+// 3. エミュレータ接続設定（ローカル開発・テスト用: Sparkプラン対応）
+const isLocal = (typeof window !== 'undefined' && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
+  || (typeof process !== 'undefined' && (process.env.FIRESTORE_EMULATOR_HOST || process.env.NODE_ENV === 'test' || process.env.ENABLE_EMULATOR === 'true'));
+
+if (isLocal) {
+  try {
+    connectFirestoreEmulator(dbInstance, '127.0.0.1', 8080);
+  } catch {
+    // already connected
+  }
 }
+
+// 4. Auth初期化（ブラウザでは本物のgetAuth、Nodeテスト環境では差し替え可能なAuthオブジェクト）
+let authInstance: any = { currentUser: null };
+if (typeof window !== 'undefined') {
+  authInstance = getAuth(app);
+  if (isLocal) {
+    try {
+      connectAuthEmulator(authInstance, "http://127.0.0.1:9099");
+    } catch {
+      // already connected
+    }
+  }
+}
+
+export const auth = authInstance;
 
 export const db = dbInstance;

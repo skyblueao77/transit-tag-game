@@ -25,6 +25,7 @@ export interface User {
   invincibleCards: number;
   lastStation?: string;
   shinkansenStartTime?: number;
+  lastCompletionId?: string;
 }
 
 export interface PrivateLocation {
@@ -105,6 +106,7 @@ export interface GameConfig {
   // イベントログ
   logs: GameLog[];
 
+  lastCaptureTargetId?: string;
   locationRevealUntil?: number;
   teamARevealUntil?: number;
   teamBRevealUntil?: number;

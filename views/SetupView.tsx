@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { User } from '../types';
+import type React from 'react';
+import { useState, useEffect } from 'react';
+import type { User } from '../types';
 import { TEAM_COLORS } from '../constants';
 import { Users, Train, MapPin } from 'lucide-react';
 import { ensureAnonymousAuthUser } from '../src/infrastructure/firebase/auth';

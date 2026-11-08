@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
+import type React from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import type { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
 import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
 import {
   canUpdatePrivateLocation,
@@ -12,12 +13,13 @@ import {
   ONI_INITIAL_LOCK_DURATION_MS,
   remainingSeconds,
   SHINKANSEN_LIMIT_DURATION_MS,
+  shouldThrottleLocationUpdate,
 } from '../src/game';
-import { Shield, Clock, Zap, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
+import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
+import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
-
-
-
+import useWakeLock from '../src/hooks/useWakeLock';
+import useOnlineStatus from '../src/hooks/useOnlineStatus';
 
 interface Props {
   users: User[];
@@ -36,19 +38,24 @@ interface Props {
 const MapView: React.FC<Props> = ({
   users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting
 }) => {
-  const mapRef = useRef<any>(null);
+  const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const markersRef = useRef<Record<string, any>>({});
+  const markersRef = useRef<Record<string, L.CircleMarker>>({});
   const [timeLeft, setTimeLeft] = useState({
     waiting: 0, invincible: 0, nextReveal: 0, final: 0, oniLock: 0, shinkansenRemaining: 0, forceReveal: 0, teamSearchRemaining: 0 // ← これを追加
   });
-  const [isLeafletReady, setIsLeafletReady] = useState(false);
+  const isLeafletReady = true;
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const isOnline = useOnlineStatus();
+  const isOffline = !isOnline;
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
+  const lastUploadedCoords = useRef<Coordinates | null>(null);
   const resumeRequestedUntil = useRef<number | null>(null);
+
+  // Keep screen awake while MapView is active
+  useWakeLock(true);
 
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
   const captureCandidates = currentRole === 'ONI'
@@ -66,64 +73,83 @@ const MapView: React.FC<Props> = ({
     }
   }, [captureCandidates, selectedTargetId]);
 
-  // Leaflet 読み込み確認
-  useEffect(() => {
-    const check = () => { if ((window as any).L) setIsLeafletReady(true); else setTimeout(check, 100); };
-    check();
-  }, []);
-
-  // オンライン状態監視
-  useEffect(() => {
-    const on = () => setIsOffline(false);
-    const off = () => setIsOffline(true);
-    window.addEventListener('online', on);
-    window.addEventListener('offline', off);
-    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
-  }, []);
-
-  // 位置情報更新
+  // 位置情報更新 (30m 移動 または 5分間隔フォールバックによるBaaS書き込みクォータ保護)
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
     if (!currentUser || !gameConfig.gameSessionId || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
     if (!navigator.onLine) return;
 
     const now = Date.now();
-    if (now - lastUploadTime.current < 60000) return;
-    if (position.coords.accuracy > 400) return;
+    const currentCoords: Coordinates = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+    };
+
+    const decision = shouldThrottleLocationUpdate({
+      currentCoords,
+      currentAccuracy: position.coords.accuracy,
+      currentTimeMs: now,
+      lastUploadedCoords: lastUploadedCoords.current,
+      lastUploadedTimeMs: lastUploadTime.current,
+    });
+
+    if (!decision.shouldUpload) return;
 
     try {
       const result = await onUpdatePrivateLocation({
         playerId: currentUser.id,
         expectedSessionId: gameConfig.gameSessionId,
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
+        latitude: currentCoords.latitude,
+        longitude: currentCoords.longitude,
       });
       if (!result.ok) {
         console.error('Failed to update private location:', result.reason);
         return;
       }
       lastUploadTime.current = now;
+      lastUploadedCoords.current = currentCoords;
     } catch (error) {
       console.error('Failed to update location:', error);
     }
   }, [currentUser, gameConfig.gameStatus, gameConfig.gameSessionId, onUpdatePrivateLocation]);
 
-  // watchPosition
+  // watchPosition with Page Visibility optimization (Battery saving when app/tab is backgrounded)
   useEffect(() => {
     if (!currentUser || !('geolocation' in navigator)) return;
-    if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
 
-    watchId.current = navigator.geolocation.watchPosition(
-      position => {
-        const latDiff = Math.abs(position.coords.latitude - (privateLocation?.latitude ?? 0));
-        const lngDiff = Math.abs(position.coords.longitude - (privateLocation?.longitude ?? 0));
-        if (latDiff > 0.0001 || lngDiff > 0.0001) updateLocation(position);
-      },
-      error => console.error('Geolocation watch error:', error),
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
-    );
+    const startWatching = () => {
+      if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
+      watchId.current = navigator.geolocation.watchPosition(
+        position => {
+          updateLocation(position);
+        },
+        error => console.error('Geolocation watch error:', error),
+        { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
+      );
+    };
 
+    const stopWatching = () => {
+      if (watchId.current) {
+        navigator.geolocation.clearWatch(watchId.current);
+        watchId.current = null;
+      }
+    };
+
+    if (document.visibilityState === 'visible') {
+      startWatching();
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        startWatching();
+      } else {
+        stopWatching();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
-      if (watchId.current) { navigator.geolocation.clearWatch(watchId.current); watchId.current = null; }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopWatching();
     };
   }, [currentUser, updateLocation]);
 
@@ -185,24 +211,34 @@ const MapView: React.FC<Props> = ({
   // 地図初期化
   useEffect(() => {
     if (!containerRef.current || !isLeafletReady || timeLeft.oniLock > 0) return;
-    const L = (window as any).L;
     if (!mapRef.current) {
-      mapRef.current = L.map(containerRef.current).setView(
+      const map = L.map(containerRef.current).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13
       );
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapRef.current);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+      mapRef.current = map;
     } else {
       mapRef.current.setView([privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13);
     }
+
+    return () => {
+      // Map cleanup on unmount
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, [isLeafletReady, timeLeft.oniLock, privateLocation?.latitude, privateLocation?.longitude]);
 
 // ── マーカー描画（強制共有・チーム別サーチ対応版） ────────────────────────
   useEffect(() => {
-    const L = (window as any).L;
-    if (!mapRef.current || !L) return;
+    const currentMap = mapRef.current;
+    if (!currentMap) return;
 
     // 既存マーカーを全削除
-    Object.values(markersRef.current).forEach((m: any) => m.remove());
+    Object.values(markersRef.current).forEach((m: any) => {
+      m.remove();
+    });
     markersRef.current = {};
 
     const now = Date.now();
@@ -231,7 +267,6 @@ const MapView: React.FC<Props> = ({
       const isSelf = visibility.mode === 'SELF_PRIVATE';
       const isTeamSearchActive = visibility.mode === 'TEAM_SNAPSHOT';
       const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
-      const isIndividualExposed = visibility.mode === 'INDIVIDUAL_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
       const marker = L.circleMarker([visibility.latitude, visibility.longitude], {
@@ -245,7 +280,7 @@ const MapView: React.FC<Props> = ({
         weight: isInvincible ? 4 : 3,
         opacity: 1,
         fillOpacity: isSelf ? 0.95 : isTeamSearchActive ? 0.9 : 0.7,
-      }).addTo(mapRef.current);
+      }).addTo(currentMap);
 
       let popupVariant: PlayerMapPopupVariant;
       let remainingTime: string | undefined;
