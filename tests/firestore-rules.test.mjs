@@ -627,6 +627,32 @@ describe('Firestore Security Rules', () => {
         },
       },
     ];
+
+    // 2a. Attempting same-team capture (Team B member targeting self or another Team B member) -> MUST FAIL (403)!
+    const sameTeamCaptureWrites = [
+      {
+        update: {
+          name: configDocName,
+          fields: fields({
+            gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+            sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: Date.now() + 600000, logs: [],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${userBUid}`,
+          fields: fields({
+            id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', role: 'ONI', name: 'User B', color: '#3b82f6', status: 'WAITING',
+            score: 50, invincibleCards: 0, waitingUntil: Date.now() + 600000,
+          }).fields,
+        },
+      },
+    ];
+    assert.equal((await commitBatch(sameTeamCaptureWrites, userBToken)).status, 403);
+
+    // 2b. Legitimate cross-team capture (Team B capturing Team A RUNNER) -> MUST SUCCEED (200)!
     assert.equal((await commitBatch(legitCaptureWrites, userBToken)).status, 200);
   });
 });
