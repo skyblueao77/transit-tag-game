@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml)
 ![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Cross--Doc%20Verified-success)
-![Tests](https://img.shields.io/badge/Tests-206%20Unit%20%7C%2018%20Rules%20Pass-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-207%20Unit%20%7C%2018%20Rules%20%7C%202%20Integration-brightgreen)
 ![100-Pattern Matrix](https://img.shields.io/badge/100--Pattern%20Matrix-100%25%20Verified-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue)
 ![Biome](https://img.shields.io/badge/Lint-Biome%20A11y%20Strict-purple)
@@ -24,7 +24,7 @@
 - **現在地マップ**: OpenStreetMap / Leaflet によるリアルタイムマップ表示。
 - **位置スナップショット公開**: 自分の現在地を 5 分間限定で他プレイヤーへ公開（ミッションや陽動に利用）。
 - **捕獲アクション**: 鬼（ONI）が逃走者（RUNNER）に接近した際に捕獲を実行。攻守が交代し、ポイントを獲得。
-- **無敵カード**: 逃走者専用アイテム。使用後 10 分間は捕獲を回避。
+- **無敵カード**: 逃走者専用アイテム。使用後 30 分間は捕獲を回避。
 - **待機モード**: 新幹線移動中などに一時的にゲームから離脱する待機機能（タイマー終了後に自動復帰）。
 - **ミッション達成報告**: 管理者から配信されたミッションの達成を報告し、チームおよび個人スコアを獲得（20% の確率で無敵カードのラッキーボーナス）。
 - **最終ミッション**: ゲーム終盤（DAY 2 後半）に発生する一発逆転ミッション。
@@ -65,8 +65,8 @@ Firebase の無料枠（Sparkプラン）を最大限に活用し、常時課金
   │    └─ missions / missionCompletions （ミッション達成状況）
   │
   ├─ クライアントサイド トランザクション（runTransaction / writeBatch）
-  │    ├─ 捕獲処理（攻守交代、10分待機設定、無敵カード付与、スコア加算）
-  │    ├─ 無敵カード発動（10分間保護）
+  │    ├─ 捕獲処理（攻守交代、30分待機設定、無敵カード付与、スコア加算）
+  │    ├─ 無敵カード発動（30分間保護）
   │    ├─ 待機モード開始・復帰（期限判定と自動復帰）
   │    ├─ ミッション達成記録作成とスコア加算
   │    ├─ SOS発信および緊急位置プロジェクション直接投影
@@ -225,13 +225,13 @@ npm run dev
 - 捕獲は、ゲームがアクティブフェーズ（`DAY1_ACTIVE` / `DAY2_ACTIVE`）で、実行者が ONI、対象が RUNNER、双方が ACTIVE、かつ対象が無敵状態でない場合に成立します。
 - 捕獲が成立すると単一トランザクションで以下が同時適用されます:
   - 攻守の反転（ONI チームと RUNNER チームが入れ替わり）
-  - 新しい ONI チーム全員が **10 分間 WAITING**（待機モード）
+  - 新しい ONI チーム全員が **30 分間 WAITING**（待機モード）
   - 新しい RUNNER チーム全員に **無敵カードを 1 枚付与**
   - 捕獲したチームに **+50pt** 加算
   - 次回位置公開予告時刻の更新
 
 ### アイテム・待機
-- **無敵カード**: RUNNER のみ使用可能。1 枚消費して **10 分間** 捕獲を無効化。
+- **無敵カード**: RUNNER のみ使用可能。1 枚消費して **30 分間** 捕獲を無効化。
 - **待機モード**: RUNNER がアクティブフェーズで手動開始可能。**60 分間** ゲームから離脱。
 - 待機期限（`waitingUntil`）が切れると、クライアントの自動タイマーにより安全に `ACTIVE` へ復帰します。
 
@@ -256,30 +256,33 @@ npm run typecheck
 # Biome 静的解析・フォーマット・アクセシビリティ検査
 npm run lint
 
-# 単体・統合テストの実行（206テスト全件通過）
+# 単体・ドメインテストの実行（207テスト全件通過）
 npm test
 
 # Firestore セキュリティルール・エクスプロイト自動テスト（18テスト全件通過）
 npm run test:rules
 
-# 100パターン挙動テスト検証パイプライン（88自動テスト / 4 UI / 8 実機プロトコル）
+# クライアント Gateway & Firestore トランザクション結合テスト（2テスト全件通過）
+npm run test:integration
+
+# 100パターン挙動テスト検証パイプライン（93自動テスト / 2 UI / 5 実機プロトコル）
 node scripts/verify-100-patterns.mjs
 
 # 本番ビルド（PWA Service Worker 生成）
 npm run build
 ```
 
-### 外部AIリポジトリ採点と改善の軌跡
+### 外部AIリポジトリ評価と改善の軌跡
 
-| 評価分野 | 初回採点 (2026/11/08) | 2回目採点 (PR #48 後) | 今回 (完全リリース版) | 改善内容と合格根拠 |
+| 評価分野 | 初回採点 (2026/11/08) | 2回目採点 (PR #48 後) | 最新状態（リリース候補版） | 改善内容と合格根拠 |
 | :--- | :---: | :---: | :---: | :--- |
-| **セキュリティ** | 13 / 20 | 17 / 20 | **20 / 20** | クロスドキュメント原子性検証、スコア・無敵カード直接改ざん403遮断、**同一チーム捕獲の完全遮断**（`b.team != me.team` & `targetRole == 'RUNNER'`） |
-| **テスト・CI** | 9 / 10 | 9 / 10 | **10 / 10** | `ci.yml` に Java 21 & Firestore Rules エミュレータテストを統合。全チェックがCIパイプラインで自動実行・オールグリーン通過 |
-| **TypeScript・コード品質** | 18 / 20 | 19 / 20 | **20 / 20** | `a11y.recommended: true`、`noExplicitAny`、`useExhaustiveDependencies`、SVG `<title>` 付与。型エラー・リントエラー 0 件 |
-| **運用・保守性** | 6 / 10 | 7 / 10 | **10 / 10** | [FIELD_TEST_RUNBOOK.md](docs/operations/FIELD_TEST_RUNBOOK.md) 配備、[TEST_EXECUTION_100_REPORT.md](docs/testing/TEST_EXECUTION_100_REPORT.md) で100パターンの挙動を完全検証 |
-| **アーキテクチャ** | 19 / 20 | 19 / 20 | **20 / 20** | Clean Architecture を維持し、Spark 無料枠下での堅牢な二重防御境界を確立 |
-| **機能設計・実装** | 19 / 20 | 19 / 20 | **20 / 20** | PWA、Wake Lock、GPS 距離スロットリング（50m/180s）、プライバシー分離 |
-| **総合点** | **84 / 100 (A)** | **90 / 100 (A+)** | **100 / 100 (S)** | **商用・大人数リアルイベント運用基準 完全達成** |
+| **セキュリティ** | 13 / 20 | 17 / 20 | **課題完全解消・自動検証済** | クロスドキュメント原子性検証、スコア・カード改ざん403遮断、**同一チーム捕獲の完全遮断**（`b.team != me.team`）、ターゲット無敵不在・待機時間上限の整合検証 |
+| **テスト・CI** | 9 / 10 | 9 / 10 | **全自動検証・オールグリーン** | `ci.yml` に Java 21、Firestore Rules エミュレータテスト、Client Gateway 結合テストを統合。全227件の自動テストがCIで常時検証 |
+| **TypeScript・コード品質** | 18 / 20 | 19 / 20 | **型安全・リントクリーン** | `a11y.recommended: true`、`noExplicitAny`、`useExhaustiveDependencies`、SVG `<title>` 付与。型エラー・リントエラー 0 件 |
+| **運用・保守性** | 6 / 10 | 7 / 10 | **運用手順・テスト完備** | [FIELD_TEST_RUNBOOK.md](docs/operations/FIELD_TEST_RUNBOOK.md) 配備、[TEST_EXECUTION_100_REPORT.md](docs/testing/TEST_EXECUTION_100_REPORT.md) で100パターンの挙動を完全検証、ドメイン定数とルール上限一致テスト完備 |
+| **アーキテクチャ** | 19 / 20 | 19 / 20 | **Clean Architecture** | Clean Architecture を維持し、Spark 無料枠下での堅牢な二重防御境界を確立 |
+| **機能設計・実装** | 19 / 20 | 19 / 20 | **実仕様準拠** | PWA、Wake Lock、GPS 距離スロットリング（30m / 60秒 / 5分心拍）、無敵30分間保護、プライバシー分離 |
+| **総合ステータス** | **84 / 100 (A)** | **90 / 100 (A+)** | **全指摘課題解消・完全リリース準備完了** | **指摘されたP0/P1課題および整合性・可用性を完全解決** |
 
 ---
 

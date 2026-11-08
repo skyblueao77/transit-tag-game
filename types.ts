@@ -106,6 +106,7 @@ export interface GameConfig {
   // イベントログ
   logs: GameLog[];
 
+  lastCaptureTargetId?: string;
   locationRevealUntil?: number;
   teamARevealUntil?: number;
   teamBRevealUntil?: number;

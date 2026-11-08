@@ -578,8 +578,25 @@ describe('Firestore Security Rules', () => {
   test('P1 Exploit: capture transaction only allowed by active ONI team with score +50 and role flip', async () => {
     // Current state: Team B is ONI, Team A is RUNNER
     // Target userCUid who is active RUNNER on Team A and NOT invincible
+    await seed(`users/${userCUid}`, {
+      id: userCUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'User C', role: 'RUNNER', color: '#ef4444',
+      status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0, waitingUntil: 0,
+    });
+    await seed(`users/${userBUid}`, {
+      id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'User B', role: 'RUNNER', color: '#3b82f6',
+      status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0, waitingUntil: 0,
+    });
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+      sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+      teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 150, teamBScore: 50, logs: [],
+    });
+
     const configDocName = `projects/${projectId}/databases/(default)/documents/game_config/current`;
     const targetUserDocName = `projects/${projectId}/databases/(default)/documents/users/${userCUid}`;
+    const captorUserDocName = `projects/${projectId}/databases/(default)/documents/users/${userBUid}`;
+    const now = Date.now();
+    const waitingUntil = now + 1800000; // 30 mins
 
     // 1. Team A (RUNNER) attempting to perform capture -> MUST FAIL (403)!
     const runnerAttemptWrites = [
@@ -589,7 +606,8 @@ describe('Firestore Security Rules', () => {
           fields: fields({
             gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
             sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
-            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 200, teamBScore: 50, nextRevealTime: Date.now() + 600000, logs: [],
+            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 200, teamBScore: 50, nextRevealTime: waitingUntil,
+            lastCaptureTargetId: userCUid, logs: [],
           }).fields,
         },
       },
@@ -598,37 +616,30 @@ describe('Firestore Security Rules', () => {
           name: targetUserDocName,
           fields: fields({
             id: userCUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'User C', color: '#ef4444', status: 'WAITING',
-            score: 0, invincibleCards: 0, waitingUntil: Date.now() + 600000,
+            score: 0, invincibleCards: 0, waitingUntil,
           }).fields,
         },
       },
     ];
     assert.equal((await commitBatch(runnerAttemptWrites, userAToken)).status, 403);
 
-    // 2. Team B (ONI) legitimate capture: roles flip (A becomes ONI, B becomes RUNNER), ONI score +50, runner WAITING -> MUST SUCCEED (200)!
-    const legitCaptureWrites = [
+    // 2. Exploit: ONI attempting config-only update without capturing target user doc -> MUST FAIL (403)!
+    const configOnlyWrites = [
       {
         update: {
           name: configDocName,
           fields: fields({
             gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
             sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
-            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: Date.now() + 600000, logs: [],
-          }).fields,
-        },
-      },
-      {
-        update: {
-          name: targetUserDocName,
-          fields: fields({
-            id: userCUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'User C', color: '#ef4444', status: 'WAITING',
-            score: 0, invincibleCards: 0, waitingUntil: Date.now() + 600000,
+            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: waitingUntil,
+            lastCaptureTargetId: userCUid, logs: [],
           }).fields,
         },
       },
     ];
+    assert.equal((await commitBatch(configOnlyWrites, userBToken)).status, 403);
 
-    // 2a. Attempting same-team capture (Team B member targeting self or another Team B member) -> MUST FAIL (403)!
+    // 3. Exploit: Same-team capture (Team B member targeting self or another Team B member) -> MUST FAIL (403)!
     const sameTeamCaptureWrites = [
       {
         update: {
@@ -636,7 +647,8 @@ describe('Firestore Security Rules', () => {
           fields: fields({
             gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
             sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
-            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: Date.now() + 600000, logs: [],
+            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: waitingUntil,
+            lastCaptureTargetId: userBUid, logs: [],
           }).fields,
         },
       },
@@ -645,14 +657,70 @@ describe('Firestore Security Rules', () => {
           name: `projects/${projectId}/databases/(default)/documents/users/${userBUid}`,
           fields: fields({
             id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', role: 'ONI', name: 'User B', color: '#3b82f6', status: 'WAITING',
-            score: 50, invincibleCards: 0, waitingUntil: Date.now() + 600000,
+            score: 50, invincibleCards: 0, waitingUntil,
           }).fields,
         },
       },
     ];
     assert.equal((await commitBatch(sameTeamCaptureWrites, userBToken)).status, 403);
 
-    // 2b. Legitimate cross-team capture (Team B capturing Team A RUNNER) -> MUST SUCCEED (200)!
+    // 4. Exploit: Infinite waitingUntil (> 30 min + 60s) on captured target -> MUST FAIL (403)!
+    const excessiveWaitingWrites = [
+      {
+        update: {
+          name: configDocName,
+          fields: fields({
+            gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+            sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: waitingUntil,
+            lastCaptureTargetId: userCUid, logs: [],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: targetUserDocName,
+          fields: fields({
+            id: userCUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'User C', color: '#ef4444', status: 'WAITING',
+            score: 0, invincibleCards: 0, waitingUntil: now + 365 * 24 * 3600 * 1000,
+          }).fields,
+        },
+      },
+    ];
+    assert.equal((await commitBatch(excessiveWaitingWrites, userBToken)).status, 403);
+
+    // 5. Legitimate cross-team capture: roles flip, ONI score +50, runner WAITING, captor ACTIVE with card +1 -> MUST SUCCEED (200)!
+    const legitCaptureWrites = [
+      {
+        update: {
+          name: configDocName,
+          fields: fields({
+            gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+            sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+            teamARole: 'ONI', teamBRole: 'RUNNER', teamAScore: 150, teamBScore: 100, nextRevealTime: waitingUntil,
+            lastCaptureTargetId: userCUid, logs: [],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: targetUserDocName,
+          fields: fields({
+            id: userCUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'User C', color: '#ef4444', status: 'WAITING',
+            score: 0, invincibleCards: 0, waitingUntil, invincibleUntil: 0,
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: captorUserDocName,
+          fields: fields({
+            id: userBUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', role: 'RUNNER', name: 'User B', color: '#3b82f6', status: 'ACTIVE',
+            score: 0, invincibleCards: 1, waitingUntil: 0, invincibleUntil: 0,
+          }).fields,
+        },
+      },
+    ];
     assert.equal((await commitBatch(legitCaptureWrites, userBToken)).status, 200);
   });
 });
