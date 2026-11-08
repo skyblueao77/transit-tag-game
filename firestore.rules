@@ -293,8 +293,10 @@ service cloud.firestore {
       let afterConfig = getAfter(configPath).data;
       let me = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
       let myRole = me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
+      let targetRole = b.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
       return signedIn()
         && isCurrentParticipant(request.auth.uid)
+        && request.auth.uid != uid
         && hasNoCoordinates(a)
         && a.id == b.id
         && a.name == b.name
@@ -304,11 +306,16 @@ service cloud.firestore {
         && a.gameSessionId == b.gameSessionId
         && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
         && myRole == 'ONI'
+        && targetRole == 'RUNNER'
+        && b.team != me.team
+        && b.status == 'ACTIVE'
         && afterConfig.teamARole != curConfig.teamARole
         && (!b.keys().hasAny(['invincibleUntil'])
             || !(b.invincibleUntil is int && b.invincibleUntil > request.time.toMillis()))
         && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil', 'invincibleCards'])
-        && a.status in ['WAITING', 'ACTIVE'];
+        && a.status == 'WAITING'
+        && a.waitingUntil is int
+        && a.waitingUntil > request.time.toMillis();
     }
 
     match /users/{uid} {
