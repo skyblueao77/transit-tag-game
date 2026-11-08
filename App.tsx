@@ -45,6 +45,9 @@ import {
 import {
   signOutCurrentUser,
 } from './src/infrastructure/firebase/auth';
+import {
+  updatePlayerLastStation,
+} from './src/infrastructure/firebase/playerStore';
 
 import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
 import { firebaseMissionCompletionGateway } from './src/infrastructure/firebase/missionActions';
@@ -226,6 +229,18 @@ const App: React.FC = () => {
       toast.error('通信エラー：位置の公開に失敗しました。');
     }
   }, [confirm, currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
+
+  const handleUpdateLastStation = useCallback(async (stationName: string): Promise<void> => {
+    if (!currentUser) return;
+    try {
+      await updatePlayerLastStation(currentUser.id, stationName);
+      toast.success(`現在地を「${stationName}」に更新しました`);
+    } catch (error) {
+      console.error('Failed to update player last station:', error);
+      toast.error('現在地の更新に失敗しました');
+      throw error;
+    }
+  }, [currentUser]);
 
   // Mission scoring, identity, duplicate enforcement, and logging are server-authoritative.
   const handleScoreUpdate = useCallback(
@@ -666,6 +681,7 @@ const App: React.FC = () => {
                       onActivateInvincibility={handleActivateInvincibility}
                       onStartShinkansenWait={handleStartShinkansenWait}
                       onResumeWaiting={handleResumeWaiting}
+                      onUpdateLastStation={handleUpdateLastStation}
                     />
                   }
                 />

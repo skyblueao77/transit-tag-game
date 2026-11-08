@@ -185,3 +185,15 @@ export type {
   ShouldUploadResult,
   ThrottleDecisionReason,
 } from './locationThrottling';
+export {
+  findCandidateStations,
+  findNearestStation,
+  formatDistanceMeters,
+  formatStationLabel,
+} from './stationInference';
+export type {
+  StationData,
+  StationProximity,
+  StationSuggestion,
+  SuggestStationOptions,
+} from './stationInference';
