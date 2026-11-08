@@ -39,8 +39,9 @@ service cloud.firestore {
         && hasCurrentGameSession()
         && data.keys().hasOnly([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards', 'lastCompletionId'
+          'gameSessionId', 'invincibleCards', 'lastCompletionId', 'lastStation'
         ])
+        && (!data.keys().hasAny(['lastStation']) || (data.lastStation is string && data.lastStation.size() <= 100))
         && data.keys().hasAll([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
           'gameSessionId', 'invincibleCards'
@@ -256,8 +257,12 @@ service cloud.firestore {
         && a.role == b.role
         && a.gameSessionId == b.gameSessionId
         && (
-          // 1. Profile name update
+          // 1. Profile name or lastStation update
           (diff.hasOnly(['name']) && a.name is string && a.name.size() > 0 && a.name.size() <= 80)
+          || (diff.hasOnly(['lastStation']) && a.lastStation is string && a.lastStation.size() <= 100)
+          || (diff.hasOnly(['name', 'lastStation'])
+              && a.name is string && a.name.size() > 0 && a.name.size() <= 80
+              && a.lastStation is string && a.lastStation.size() <= 100)
           // 2. Waiting resume upon expiry
           || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
               && b.status == 'WAITING' && a.status == 'ACTIVE'

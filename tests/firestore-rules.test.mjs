@@ -252,6 +252,17 @@ describe('Firestore Security Rules', () => {
     })).status, 200);
   });
 
+  test('allows a user to update their lastStation', async () => {
+    assert.equal((await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'Updated A', color: '#ef4444', status: 'ACTIVE', score: 0,
+        invincibleCards: 1, invincibleUntil: 0, lastStation: '東京 (JR山手線 他)',
+      }),
+    })).status, 200);
+  });
+
   test('allows only strict current-Session Setup create and rejects Admin creating Player doc', async () => {
     const validPlayer = {
       id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Setup Player',

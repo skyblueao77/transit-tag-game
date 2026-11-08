@@ -6,7 +6,8 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["**", "!!**/dist", "!!**/functions"]
+		"includes": ["**", "!!**/dist", "!!**/functions", "!!src/data/stations.json"],
+		"maxSize": 2097152
 	},
 	"formatter": {
 		"enabled": false

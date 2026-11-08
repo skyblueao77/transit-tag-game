@@ -89,4 +89,21 @@ describe('Leaflet player popup text rendering', () => {
     assert.match(search.textContent, /🚨 チーム個別サーチ中 \(位置スナップショット公開\)/);
     assert.match(reveal.textContent, /📸 全員スナップショット公開中/);
   });
+
+  test('renders lastStation label when present', () => {
+    const selfPopup = createPlayerMapPopup(
+      fakeDocument,
+      player({ lastStation: '東京 (JR山手線 他)' }),
+      'SELF',
+    );
+    assert.match(selfPopup.textContent, /最寄: 東京 \(JR山手線 他\)/);
+
+    const exposedPopup = createPlayerMapPopup(
+      fakeDocument,
+      player({ lastStation: '新宿 (JR山手線 他)' }),
+      'EXPOSED',
+      '2:15',
+    );
+    assert.match(exposedPopup.textContent, /🚉 新宿 \(JR山手線 他\)/);
+  });
 });

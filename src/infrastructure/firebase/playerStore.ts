@@ -1,4 +1,4 @@
-import { doc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 
@@ -21,4 +21,12 @@ export async function createPlayerWithPrivateLocation(
     updatedAt: serverTimestamp(),
   });
   await batch.commit();
+}
+
+export async function updatePlayerLastStation(
+  playerId: string,
+  lastStation: string,
+): Promise<void> {
+  const userRef = doc(db, 'users', playerId);
+  await setDoc(userRef, { lastStation }, { merge: true });
 }

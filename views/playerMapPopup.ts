@@ -7,7 +7,7 @@ export type PlayerMapPopupVariant =
   | 'GLOBAL_REVEAL'
   | 'EXPOSED';
 
-type PopupPlayer = Pick<User, 'name' | 'team' | 'status'>;
+type PopupPlayer = Pick<User, 'name' | 'team' | 'status'> & { lastStation?: string };
 
 function appendText(document: Document, parent: Node, value: unknown): void {
   parent.appendChild(document.createTextNode(typeof value === 'string' ? value : ''));
@@ -36,7 +36,7 @@ export function createPlayerMapPopup(
     appendPlayerTitle(document, title, user);
     popup.appendChild(title);
     popup.appendChild(document.createElement('br'));
-    appendText(document, popup, '現在地');
+    appendText(document, popup, user.lastStation ? `最寄: ${user.lastStation}` : '現在地');
     return popup;
   }
 
@@ -45,6 +45,12 @@ export function createPlayerMapPopup(
     appendText(document, title, `【緊急:${typeof user.status === 'string' ? user.status : ''}】`);
     appendText(document, title, user.name);
     popup.appendChild(title);
+    if (user.lastStation) {
+      popup.appendChild(document.createElement('br'));
+      const st = document.createElement('small');
+      appendText(document, st, `最寄: ${user.lastStation}`);
+      popup.appendChild(st);
+    }
     return popup;
   }
 
@@ -65,6 +71,15 @@ export function createPlayerMapPopup(
     appendText(document, detail, `📍 公開中の位置 (残り ${remainingTime ?? ''})`);
   }
   popup.appendChild(detail);
+
+  if (user.lastStation) {
+    popup.appendChild(document.createElement('br'));
+    const st = document.createElement('small');
+    st.style.color = '#2563eb';
+    st.style.fontWeight = 'bold';
+    appendText(document, st, `🚉 ${user.lastStation}`);
+    popup.appendChild(st);
+  }
 
   return popup;
 }

@@ -27,6 +27,14 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+import {
+  findCandidateStations,
+  type StationData,
+  type StationSuggestion,
+} from '../src/game';
+import stationsData from '../src/data/stations.json';
+import StationSuggestCard from '../src/components/StationSuggestCard';
+
 interface Props {
   users: User[];
   logs: LocationLog[];
@@ -39,10 +47,11 @@ interface Props {
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
   onResumeWaiting: () => Promise<void>;
+  onUpdateLastStation?: (stationName: string) => Promise<void>;
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting
+  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting, onUpdateLastStation
 }) => {
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -58,6 +67,45 @@ const MapView: React.FC<Props> = ({
   const lastUploadTime = useRef<number>(0);
   const lastUploadedCoords = useRef<Coordinates | null>(null);
   const resumeRequestedUntil = useRef<number | null>(null);
+
+  const [stationSuggestion, setStationSuggestion] = useState<StationSuggestion | null>(null);
+  const [stationCandidates, setStationCandidates] = useState<StationSuggestion[]>([]);
+  const [isSuggestDismissed, setIsSuggestDismissed] = useState(false);
+  const lastDismissedStationId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!privateLocation) {
+      setStationSuggestion(null);
+      setStationCandidates([]);
+      return;
+    }
+    const currentCoords: Coordinates = {
+      latitude: privateLocation.latitude,
+      longitude: privateLocation.longitude,
+    };
+    const candidates = findCandidateStations(currentCoords, stationsData as StationData[], 5);
+    const nearest = candidates[0] ?? null;
+
+    setStationCandidates(candidates);
+    setStationSuggestion(nearest);
+
+    if (nearest && nearest.station.id !== lastDismissedStationId.current) {
+      setIsSuggestDismissed(false);
+    }
+  }, [privateLocation]);
+
+  const handleConfirmStation = async (stationName: string) => {
+    if (!onUpdateLastStation) return;
+    try {
+      await onUpdateLastStation(stationName);
+      setIsSuggestDismissed(true);
+      if (stationSuggestion) {
+        lastDismissedStationId.current = stationSuggestion.station.id;
+      }
+    } catch (error) {
+      console.error('Failed to update station:', error);
+    }
+  };
 
   // Keep screen awake while MapView is active
   useWakeLock(true);
@@ -368,7 +416,31 @@ const MapView: React.FC<Props> = ({
   ) : null}
       <div ref={containerRef} style={{ flex: 1, width: '100%', zIndex: 0 }} />
 
-      <div className="absolute top-16 left-4 z-[1000] flex flex-col gap-2">
+      {/* 最寄り駅・路線の自動提案カード */}
+      {!isSuggestDismissed && stationSuggestion && onUpdateLastStation && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] w-full px-4 max-w-sm pointer-events-none">
+          <StationSuggestCard
+            suggestion={stationSuggestion}
+            candidates={stationCandidates}
+            currentLastStation={currentUser.lastStation}
+            onConfirmStation={handleConfirmStation}
+            onDismiss={() => {
+              setIsSuggestDismissed(true);
+              if (stationSuggestion) {
+                lastDismissedStationId.current = stationSuggestion.station.id;
+              }
+            }}
+          />
+        </div>
+      )}
+
+      <div className="absolute top-16 left-4 z-[1000] flex flex-col gap-2 pointer-events-none">
+        {currentUser.lastStation && (
+          <div className="bg-slate-900/95 backdrop-blur text-blue-400 px-3 py-1.5 rounded-xl text-[10px] font-black shadow-lg border border-slate-700/60 flex items-center gap-1.5">
+            <Train size={12} className="text-blue-400 shrink-0" />
+            <span className="text-slate-200 truncate max-w-[140px]">{currentUser.lastStation}</span>
+          </div>
+        )}
         {timeLeft.invincible > 0 && (
           <div className="bg-amber-500 text-white px-3 py-1.5 rounded-xl text-[10px] font-black shadow-lg">
             無敵中: {formatTime(timeLeft.invincible)}
