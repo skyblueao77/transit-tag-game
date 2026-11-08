@@ -253,12 +253,25 @@ describe('Firestore Security Rules', () => {
   });
 
   test('allows a user to update their lastStation', async () => {
-    assert.equal((await firestore(`users/${userAUid}`, {
-      token: userAToken,
+    const stationUser = await auth('signUp', {});
+    const stUid = stationUser.localId;
+    const stToken = stationUser.idToken;
+
+    assert.equal((await firestore(`users/${stUid}`, {
+      token: stToken,
       method: 'PATCH',
       body: fields({
-        id: userAUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'Updated A', color: '#ef4444', status: 'ACTIVE', score: 0,
-        invincibleCards: 1, invincibleUntil: 0, lastStation: '東京 (JR山手線 他)',
+        id: stUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Station Player', role: 'RUNNER',
+        color: '#ef4444', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      }),
+    })).status, 200);
+
+    assert.equal((await firestore(`users/${stUid}`, {
+      token: stToken,
+      method: 'PATCH',
+      body: fields({
+        id: stUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'Station Player',
+        color: '#ef4444', status: 'ACTIVE', score: 0, invincibleCards: 0, lastStation: '東京 (JR山手線 他)',
       }),
     })).status, 200);
   });
