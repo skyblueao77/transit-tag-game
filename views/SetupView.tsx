@@ -112,10 +112,11 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
 
         {/* プレイヤー名 */}
         <div className="mb-8">
-          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">
+          <label htmlFor="player-name" className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">
             Player Name
           </label>
           <input
+            id="player-name"
             type="text"
             value={name}
             onChange={e => setName(e.target.value)}
@@ -129,9 +130,9 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
 
         {/* チーム選択 */}
         <div className="mb-10">
-          <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-4 ml-1">
+          <span className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-4 ml-1">
             Select Team
-          </label>
+          </span>
           <div className="grid grid-cols-2 gap-4">
             {(['A', 'B'] as const).map(t => (
               <button

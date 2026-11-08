@@ -46,7 +46,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
     if (activeMissionId !== lastCompletedMissionId) {
       setLastCompletedMissionId(null);
     }
-  }, [activeMissionId]);
+  }, [activeMissionId, lastCompletedMissionId]);
 
   // 最終ミッションのカウントダウン
   useEffect(() => {
@@ -133,6 +133,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
           </div>
 
           <button
+            type="button"
             onClick={handleComplete}
             disabled={isSubmitting || isFinalReported}
             className={`w-full py-5 font-black rounded-2xl shadow-xl transition-all text-xl uppercase ${
@@ -222,6 +223,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
             </div>
 
             <button
+              type="button"
               onClick={handleComplete}
               disabled={isSubmitting}
               className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-lg disabled:bg-slate-300"

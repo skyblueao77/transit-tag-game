@@ -21,10 +21,6 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
     [projections, now],
   );
   const usersById = useMemo(() => new Map(users.map(user => [user.id, user])), [users]);
-  const projectionSignature = activeProjections
-    .map(projection => `${projection.playerId}:${projection.latitude}:${projection.longitude}:${projection.expiresAt}`)
-    .join('|');
-
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -74,7 +70,7 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
       const first = activeProjections[0];
       map.setView([first.latitude, first.longitude], Math.max(map.getZoom(), 13));
     }
-  }, [projectionSignature, mapReady, users]);
+  }, [mapReady, activeProjections, usersById]);
 
   return (
     <section className="rounded-3xl border border-red-200 bg-white p-6 shadow-sm">
@@ -82,7 +78,7 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
       <p className="mb-4 text-xs text-slate-600">
         SOS時の正確な位置です。位置更新から2分で表示期限が切れます。
       </p>
-      <div ref={containerRef} className="h-72 w-full overflow-hidden rounded-2xl bg-slate-100" aria-label="Emergency player locations" />
+      <div ref={containerRef} className="h-72 w-full overflow-hidden rounded-2xl bg-slate-100" />
       {activeProjections.length === 0 && (
         <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">有効なEmergency位置はありません。</p>
       )}

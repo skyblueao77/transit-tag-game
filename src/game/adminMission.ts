@@ -155,11 +155,12 @@ export function resolveMissionAssignment(input: {
   }
   const firstIndex = indexFromRandom(randomValues[0], input.catalog.length);
   const secondValue = input.currentMode === 'SAME' ? randomValues[0] : randomValues[1];
-  if (firstIndex === null || indexFromRandom(secondValue, input.catalog.length) === null) {
+  const secondIndexRaw = indexFromRandom(secondValue, input.catalog.length);
+  if (firstIndex === null || secondIndexRaw === null) {
     return { allowed: false, reason: 'INVALID_RANDOM' };
   }
   const first = input.catalog[firstIndex];
-  let secondIndex = indexFromRandom(secondValue, input.catalog.length)!;
+  let secondIndex = secondIndexRaw;
   if (input.currentMode === 'DIFFERENT' && secondIndex === firstIndex) {
     // Deterministically map the second draw to one of the other canonical entries.
     secondIndex = (firstIndex + 1 + Math.floor(secondValue * (input.catalog.length - 1))) % input.catalog.length;

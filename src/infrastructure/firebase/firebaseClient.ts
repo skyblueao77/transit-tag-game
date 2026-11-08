@@ -2,7 +2,7 @@ import { initializeApp } from "firebase/app";
 import "firebase/auth";
 import "firebase/firestore";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
-import { getAuth, connectAuthEmulator } from "firebase/auth";
+import { getAuth, connectAuthEmulator, type Auth } from "firebase/auth";
 
 // 1. 環境変数（Config: Vite / Node.js 両対応）
 const env = (typeof import.meta !== 'undefined' && import.meta.env)
@@ -36,7 +36,7 @@ if (isLocal) {
 }
 
 // 4. Auth初期化（ブラウザでは本物のgetAuth、Nodeテスト環境では差し替え可能なAuthオブジェクト）
-let authInstance: any = { currentUser: null };
+let authInstance: Auth = { currentUser: null } as unknown as Auth;
 if (typeof window !== 'undefined') {
   authInstance = getAuth(app);
   if (isLocal) {

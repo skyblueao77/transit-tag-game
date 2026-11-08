@@ -21,6 +21,12 @@ import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPop
 import useWakeLock from '../src/hooks/useWakeLock';
 import useOnlineStatus from '../src/hooks/useOnlineStatus';
 
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 interface Props {
   users: User[];
   logs: LocationLog[];
@@ -44,7 +50,6 @@ const MapView: React.FC<Props> = ({
   const [timeLeft, setTimeLeft] = useState({
     waiting: 0, invincible: 0, nextReveal: 0, final: 0, oniLock: 0, shinkansenRemaining: 0, forceReveal: 0, teamSearchRemaining: 0 // ← これを追加
   });
-  const isLeafletReady = true;
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
   const isOnline = useOnlineStatus();
@@ -206,11 +211,11 @@ const MapView: React.FC<Props> = ({
     void onResumeWaiting().catch(error => {
       console.error('Waiting resume request failed:', error);
     });
-  }, [currentUser.id, currentUser.status, currentUser.waitingUntil, timeLeft, onResumeWaiting]);
+  }, [currentUser.status, currentUser.waitingUntil, onResumeWaiting]);
 
   // 地図初期化
   useEffect(() => {
-    if (!containerRef.current || !isLeafletReady || timeLeft.oniLock > 0) return;
+    if (!containerRef.current || timeLeft.oniLock > 0) return;
     if (!mapRef.current) {
       const map = L.map(containerRef.current).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13
@@ -228,7 +233,7 @@ const MapView: React.FC<Props> = ({
         mapRef.current = null;
       }
     };
-  }, [isLeafletReady, timeLeft.oniLock, privateLocation?.latitude, privateLocation?.longitude]);
+  }, [timeLeft.oniLock, privateLocation?.latitude, privateLocation?.longitude]);
 
 // ── マーカー描画（強制共有・チーム別サーチ対応版） ────────────────────────
   useEffect(() => {
@@ -236,7 +241,7 @@ const MapView: React.FC<Props> = ({
     if (!currentMap) return;
 
     // 既存マーカーを全削除
-    Object.values(markersRef.current).forEach((m: any) => {
+    Object.values(markersRef.current).forEach((m: L.CircleMarker) => {
       m.remove();
     });
     markersRef.current = {};
@@ -304,18 +309,12 @@ const MapView: React.FC<Props> = ({
     currentUser,
     privateLocation,
     exposedLocations,
-    timeLeft, 
     gameConfig.locationRevealUntil, 
     gameConfig.teamARevealUntil, 
-    gameConfig.teamBRevealUntil
+    gameConfig.teamBRevealUntil,
+    gameConfig.gameStatus,
   ]); // 依存配列にチーム別の開示期限を追加
   
-  const formatTime = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
   if (timeLeft.oniLock > 0) {
     return (
       <div className="h-full bg-slate-900 flex flex-col items-center justify-center p-6 text-center text-white">
@@ -409,6 +408,7 @@ const MapView: React.FC<Props> = ({
               )}
             </select>
             <button
+              type="button"
               onClick={async () => {
                 setIsProcessing(true);
                 try { await onCapture(selectedTargetId); }
@@ -432,6 +432,7 @@ const MapView: React.FC<Props> = ({
         {currentRole === 'RUNNER' && (
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={async () => {
                 setIsProcessing(true);
                 try { await onActivateInvincibility(); }
@@ -446,6 +447,7 @@ const MapView: React.FC<Props> = ({
               無敵カード ({currentUser.invincibleCards ?? 0})
             </button>
             <button
+              type="button"
               onClick={async () => {
                 setIsProcessing(true);
                 try { await onStartShinkansenWait(); }

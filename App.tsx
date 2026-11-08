@@ -114,7 +114,7 @@ const App: React.FC = () => {
     if (!currentUser) return 'RUNNER';
     if (isAdmin) return 'ONI';
     return getPlayerRole(currentUser, gameConfig);
-  }, [currentUser, gameConfig.teamARole, gameConfig.teamBRole, isAdmin]);
+  }, [currentUser, gameConfig, isAdmin]);
 
 
   const handleUpdatePrivateLocation = useCallback(
@@ -509,6 +509,7 @@ const App: React.FC = () => {
           </div>
 
           <button
+            type="button"
             onClick={() => setSafetyDialogOpen(true)}
             className="mt-4 rounded-2xl bg-red-600 px-6 py-4 font-black text-white shadow-lg"
           >
@@ -523,6 +524,7 @@ const App: React.FC = () => {
           )}
 
           <button
+            type="button"
             onClick={async () => { await signOutCurrentUser(); window.location.reload(); }}
             className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
           >
@@ -543,6 +545,7 @@ const App: React.FC = () => {
               ゲーム操作は一時停止中です。待機時間や無敵時間などの期限は進行します。
             </div>
             <button
+              type="button"
               onClick={() => setSafetyDialogOpen(true)}
               className="pointer-events-auto mt-6 rounded-2xl bg-white px-6 py-4 font-black text-red-700 shadow-lg"
             >
@@ -586,6 +589,7 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
             <button
+              type="button"
               onClick={() => setSafetyDialogOpen(true)}
               aria-label="SOS / リタイア"
               className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center border border-red-100 active:scale-90 transition-all shadow-sm"
@@ -722,16 +726,16 @@ const SafetyActionDialog: React.FC<{
     <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-black text-slate-900">緊急連絡 / リタイア</h2>
-        <button onClick={onClose} disabled={busy} aria-label="閉じる" className="rounded-lg p-2 text-slate-500 disabled:opacity-50">
+        <button type="button" onClick={onClose} disabled={busy} aria-label="閉じる" className="rounded-lg p-2 text-slate-500 disabled:opacity-50">
           <XCircle size={22} />
         </button>
       </div>
       <p className="mb-4 text-sm font-medium text-slate-600">該当する内容を選択してください。詳細な個人情報は記録されません。Emergencyを選ぶと、最新の位置情報がある場合に限り、正確な位置を管理者だけに最大2分間共有します。リタイアでは位置を共有しません。</p>
       <div className="grid gap-2">
-        <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'ILLNESS_OR_INJURY')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">急病・怪我</button>
-        <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'EQUIPMENT_ISSUE')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">機材トラブル</button>
-        <button disabled={busy} onClick={() => void onChoose('EMERGENCY', 'OTHER')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">その他の緊急事態</button>
-        <button disabled={busy} onClick={() => void onChoose('RETIRE', 'RETIREMENT_REQUEST')} className="mt-2 rounded-xl bg-slate-900 px-4 py-3 text-left font-bold text-white disabled:opacity-50">リタイア</button>
+        <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'ILLNESS_OR_INJURY')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">急病・怪我</button>
+        <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'EQUIPMENT_ISSUE')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">機材トラブル</button>
+        <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'OTHER')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">その他の緊急事態</button>
+        <button type="button" disabled={busy} onClick={() => void onChoose('RETIRE', 'RETIREMENT_REQUEST')} className="mt-2 rounded-xl bg-slate-900 px-4 py-3 text-left font-bold text-white disabled:opacity-50">リタイア</button>
       </div>
       {busy && <p className="mt-4 text-center text-sm font-bold text-slate-500">送信中...</p>}
       <p className="mt-4 text-xs text-slate-500">送信できない場合はLINE等で運営へ直接連絡してください。</p>

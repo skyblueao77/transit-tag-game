@@ -4,7 +4,7 @@ import type { GameConfig, User, Mission } from '../types';
 import { MISSIONS } from '../constants';
 import {
   Users, Lock, Trash2, Shield, Trophy, Play,
-  AlertTriangle, Shuffle, Flag, MapPin,
+  AlertTriangle, Shuffle, MapPin,
   RefreshCw 
 } from 'lucide-react';
 import { signInAdmin } from '../src/infrastructure/firebase/auth';
@@ -37,7 +37,7 @@ interface Props {
   missions: Mission[];
 }
 
-const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
+const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = [] }) => {
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(false);
@@ -444,13 +444,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter"><Play size={20} /> Phase Control</h3>
         <div className="grid grid-cols-2 gap-2">
-          {config.gameStatus === 'PRE_GAME' && <button onClick={() => handlePhaseAction('START_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 開始</button>}
-          {config.gameStatus === 'DAY1_ACTIVE' && <><button onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button onClick={() => handlePhaseAction('END_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 終了</button></>}
-          {config.gameStatus === 'DAY1_PAUSED' && <button onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 再開</button>}
-          {config.gameStatus === 'DAY1_ENDED' && <button onClick={() => handlePhaseAction('START_DAY2')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 開始</button>}
-          {config.gameStatus === 'DAY2_ACTIVE' && <><button onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">Final 開始</button></>}
-          {config.gameStatus === 'DAY2_PAUSED' && <button onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 再開</button>}
-          {config.gameStatus === 'FINAL_MISSION' && <button onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 col-span-2 bg-red-600 text-white rounded-xl font-black text-xs mt-2 shadow-lg">GAME OVER / RESULT</button>}
+          {config.gameStatus === 'PRE_GAME' && <button type="button" onClick={() => handlePhaseAction('START_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 開始</button>}
+          {config.gameStatus === 'DAY1_ACTIVE' && <><button type="button" onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button type="button" onClick={() => handlePhaseAction('END_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 終了</button></>}
+          {config.gameStatus === 'DAY1_PAUSED' && <button type="button" onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 再開</button>}
+          {config.gameStatus === 'DAY1_ENDED' && <button type="button" onClick={() => handlePhaseAction('START_DAY2')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 開始</button>}
+          {config.gameStatus === 'DAY2_ACTIVE' && <><button type="button" onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">Final 開始</button></>}
+          {config.gameStatus === 'DAY2_PAUSED' && <button type="button" onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 再開</button>}
+          {config.gameStatus === 'FINAL_MISSION' && <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 col-span-2 bg-red-600 text-white rounded-xl font-black text-xs mt-2 shadow-lg">GAME OVER / RESULT</button>}
         </div>
       </section>
           {/* AdminView.tsx の return 内 */}
@@ -470,6 +470,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
           </div>
           
           <button
+            type="button"
             onClick={handleForceRoleSwap}
             disabled={isProcessing}
             className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"
@@ -486,7 +487,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         <h3 className="font-black flex items-center gap-2 mb-4 uppercase tracking-tighter"><MapPin size={20} /> Special Command</h3>
         <div className="space-y-4">
         <div className="bg-white/10 p-3 rounded-2xl border border-white/20">
-            <label className="block text-[9px] font-black uppercase opacity-70 mb-1">Next Reveal Time</label>
+            <span className="block text-[9px] font-black uppercase opacity-70 mb-1">Next Reveal Time</span>
             <div className="text-[10px] font-black text-white/70 mb-2">
               {config.nextRevealTime
                 ? `現在: ${new Date(config.nextRevealTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
@@ -501,10 +502,10 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               <span className="font-black text-xs">分間に設定中</span>
             </div>
           </div>
-          <button onClick={() => void handleLocationReveal('GLOBAL')} disabled={isProcessing} className="w-full py-4 bg-white text-amber-600 rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2">全員スナップショット公開</button>
+          <button type="button" onClick={() => void handleLocationReveal('GLOBAL')} disabled={isProcessing} className="w-full py-4 bg-white text-amber-600 rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2">全員スナップショット公開</button>
           <div className="grid grid-cols-2 gap-3 pt-2 border-t border-white/20">
-            <button onClick={() => void handleLocationReveal('TEAM_A')} disabled={isProcessing} className="py-3 bg-red-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team A サーチ</button>
-            <button onClick={() => void handleLocationReveal('TEAM_B')} disabled={isProcessing} className="py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team B サーチ</button>
+            <button type="button" onClick={() => void handleLocationReveal('TEAM_A')} disabled={isProcessing} className="py-3 bg-red-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team A サーチ</button>
+            <button type="button" onClick={() => void handleLocationReveal('TEAM_B')} disabled={isProcessing} className="py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team B サーチ</button>
           </div>
         </div>
       </section>
@@ -514,8 +515,8 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         <h3 className="font-black flex items-center gap-2 mb-1 text-red-500"><AlertTriangle size={20} /> Penalty Roulette</h3>
         <p className="text-[10px] text-white/50 font-bold mb-4 uppercase">ミッション失敗時などのランダム罰</p>
         <div className="grid grid-cols-2 gap-3">
-          <button disabled className="py-4 bg-red-600/20 text-red-500/50 rounded-2xl font-black text-xs border border-red-600/30">Team A へ</button>
-          <button disabled className="py-4 bg-blue-600/20 text-blue-500/50 rounded-2xl font-black text-xs border border-blue-600/30">Team B へ</button>
+          <button type="button" disabled className="py-4 bg-red-600/20 text-red-500/50 rounded-2xl font-black text-xs border border-red-600/30">Team A へ</button>
+          <button type="button" disabled className="py-4 bg-blue-600/20 text-blue-500/50 rounded-2xl font-black text-xs border border-blue-600/30">Team B へ</button>
         </div>
         <p className="mt-3 text-[10px] font-bold text-white/60">通知・Penalty送信はTrusted操作への移行まで停止中です。</p>
         {config.broadcastMessage && <p className="text-[10px] text-white/60">表示中の通知は直接消去できません。</p>}
@@ -527,6 +528,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         <h3 className="font-black flex items-center gap-2 mb-4"><Shuffle size={20} /> Mission Control</h3>
         
         <button 
+          type="button"
           onClick={handleToggleMissionMode}
           disabled={isProcessing}
           className="w-full mb-4 py-2 rounded-xl border border-white/30 text-[11px] font-black flex items-center justify-center gap-2 bg-white/10 active:bg-white/20 transition-all disabled:opacity-50"
@@ -549,7 +551,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
           })}
         </div>
 
-        <button onClick={handleShuffleMissions} disabled={isProcessing} className="w-full py-4 bg-white text-indigo-700 rounded-2xl font-black text-lg shadow-lg mb-6 active:scale-95 transition-all">🎲 ランダム配信実行</button>
+        <button type="button" onClick={handleShuffleMissions} disabled={isProcessing} className="w-full py-4 bg-white text-indigo-700 rounded-2xl font-black text-lg shadow-lg mb-6 active:scale-95 transition-all">🎲 ランダム配信実行</button>
 
         <div className="pt-4 border-t border-white/20">
           <label htmlFor="mission-select" className="block text-[10px] font-black opacity-70 mb-2 uppercase tracking-widest text-center">Manual Mission Assign</label>
@@ -558,8 +560,8 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             {MISSIONS.map(m => <option key={m.id} value={m.id}>[{m.points}pt] {m.title}</option>)}
           </select>
           <div className="grid grid-cols-2 gap-3">
-            <button onClick={() => handleManualAssign('A')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Aに指定配信</button>
-            <button onClick={() => handleManualAssign('B')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Bに指定配信</button>
+            <button type="button" onClick={() => handleManualAssign('A')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Aに指定配信</button>
+            <button type="button" onClick={() => handleManualAssign('B')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Bに指定配信</button>
           </div>
         </div>
       </section>
@@ -600,6 +602,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
 
                 {/* 2. すべての待機状態から復帰させるボタン */}
                 <button
+                  type="button"
                   onClick={() => void handleResumePlayer(u)}
                   disabled={resumingPlayerIds.has(u.id)}
                   className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 active:bg-emerald-100 disabled:opacity-50"
@@ -653,7 +656,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       </section>
 
       <div className="space-y-4">
-        <button onClick={handleSyncMissionCatalog} disabled={isProcessing} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs border border-blue-100 mb-2 uppercase tracking-widest active:bg-blue-100 disabled:opacity-50">🔄 ミッションDB同期</button>
+        <button type="button" onClick={handleSyncMissionCatalog} disabled={isProcessing} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs border border-blue-100 mb-2 uppercase tracking-widest active:bg-blue-100 disabled:opacity-50">🔄 ミッションDB同期</button>
         <section className="rounded-2xl border-2 border-red-100 bg-red-50 p-4 text-slate-800">
           <h3 className="flex items-center gap-2 font-black text-red-700"><AlertTriangle size={18} /> Master Reset Preview</h3>
           <p className="mt-2 text-xs font-bold text-slate-600">Previewのみです。実行後のロールバックはできません。Session対応が完了するまでResetは実行できません。</p>

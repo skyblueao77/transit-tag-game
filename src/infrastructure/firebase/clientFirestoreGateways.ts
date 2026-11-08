@@ -110,7 +110,6 @@ import {
 import { FINAL_MISSIONS } from '../../game/finalMissions.ts';
 import {
   resolveAdminRoleSwap,
-  type AdminPlayerStatus,
   type AdminRoleSwapPlayer,
 } from '../../game/adminGameState.ts';
 import {
@@ -134,7 +133,7 @@ import {
 } from '../../game/gameReset.ts';
 import { MISSIONS } from '../../../constants.ts';
 import type { Mission } from '../../../types.ts';
-import type { GameStatus, Role, TeamRoles } from '../../game/types.ts';
+import type { GameStatus, Role } from '../../game/types.ts';
 
 // ============================================================
 // ユーティリティ
@@ -678,7 +677,7 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
     try {
       const uid = auth.currentUser?.uid;
       if (!uid) return { ok: false, reason: 'UNAUTHENTICATED' };
-      if (!input || !input.action || !input.reasonCode) {
+      if (!input?.action || !input.reasonCode) {
         return { ok: false, reason: 'INVALID_ARGUMENT' };
       }
       if (!isValidGameSessionId(input.expectedSessionId)) {
@@ -1511,7 +1510,7 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
     }
   },
 
-  async syncMissionCatalog(input: SyncMissionCatalogInput): Promise<SyncMissionCatalogResult> {
+  async syncMissionCatalog(_input: SyncMissionCatalogInput): Promise<SyncMissionCatalogResult> {
     try {
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);

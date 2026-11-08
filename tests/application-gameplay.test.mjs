@@ -39,10 +39,6 @@ const missionSuccess = overrides => ({
   ...overrides,
 });
 
-function player(id, team, overrides = {}) {
-  return { id, team, status: 'ACTIVE', invincibleCards: 0, ...overrides };
-}
-
 
 describe('completeMission application use case', () => {
   test('forwards only missionId and returns the trusted gateway result', async () => {

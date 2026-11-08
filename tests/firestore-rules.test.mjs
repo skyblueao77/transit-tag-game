@@ -16,9 +16,6 @@ let userCToken;
 let userCUid;
 let userDToken;
 let userDUid;
-let userEToken;
-let userEUid;
-let unknownViewerToken;
 let unknownViewerUid;
 let adminToken;
 let adminUid;
@@ -56,7 +53,7 @@ async function commitBatch(writes, token) {
   });
   if (response.status !== 200) {
     const text = await response.text();
-    console.error('commitBatch error (status ' + response.status + '):', text);
+    console.error(`commitBatch error (status ${response.status}):`, text);
   }
   return response;
 }
@@ -154,11 +151,8 @@ before(async () => {
   const userD = await auth('signUp', {});
   userDToken = userD.idToken;
   userDUid = userD.localId;
-  const userE = await auth('signUp', {});
-  userEToken = userE.idToken;
-  userEUid = userE.localId;
+  await auth('signUp', {});
   const unknownViewer = await auth('signUp', {});
-  unknownViewerToken = unknownViewer.idToken;
   unknownViewerUid = unknownViewer.localId;
   adminToken = (await auth('signUp', { email: 'admin@example.test', password: 'test-password-123' })).idToken;
 
