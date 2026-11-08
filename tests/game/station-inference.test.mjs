@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  calculatePointToSegmentDistance,
   findCandidateStations,
+  findCandidateTransitSuggestions,
   findNearestStation,
+  findTransitSuggestion,
   formatDistanceMeters,
+  formatSegmentLabel,
   formatStationLabel,
 } from '../../src/game/stationInference.ts';
 
@@ -133,3 +137,73 @@ test('real stations.json dataset verification', () => {
   assert.equal(shinjukuSuggestion.proximity, 'AT_STATION');
   assert.ok(shinjukuSuggestion.station.lines.includes('JR中央線(快速)'));
 });
+
+test('calculatePointToSegmentDistance calculates orthogonal distance and projection ratio', () => {
+  const stationA = { latitude: 35.658871, longitude: 139.701238 }; // Shibuya
+  const stationB = { latitude: 35.646685, longitude: 139.710070 }; // Ebisu
+
+  // Exact midpoint
+  const midPoint = {
+    latitude: (stationA.latitude + stationB.latitude) / 2,
+    longitude: (stationA.longitude + stationB.longitude) / 2,
+  };
+  const midResult = calculatePointToSegmentDistance(midPoint, stationA, stationB);
+  assert.equal(midResult.isBetween, true);
+  assert.ok(Math.abs(midResult.projectionRatio - 0.5) < 0.01);
+  assert.ok(midResult.crossTrackDistanceMeters < 10);
+
+  // Point beyond station B (t > 1)
+  const beyondB = { latitude: 35.635, longitude: 139.72 };
+  const beyondResult = calculatePointToSegmentDistance(beyondB, stationA, stationB);
+  assert.equal(beyondResult.isBetween, false);
+  assert.ok(beyondResult.projectionRatio > 1);
+
+  // Identical points (degenerate segment)
+  const degenResult = calculatePointToSegmentDistance(stationA, stationA, stationA);
+  assert.equal(degenResult.isBetween, false);
+  assert.equal(degenResult.crossTrackDistanceMeters, 0);
+});
+
+test('formatSegmentLabel formats transit line and endpoints correctly', () => {
+  const stA = { id: '1', name: '渋谷', lat: 0, lng: 0, lines: [] };
+  const stB = { id: '2', name: '恵比寿', lat: 0, lng: 0, lines: [] };
+  assert.equal(formatSegmentLabel('JR山手線', stA, stB), 'JR山手線 渋谷〜恵比寿間');
+});
+
+test('findTransitSuggestion identifies in-transit segment between Shibuya and Ebisu', () => {
+  const filePath = path.resolve('src/data/stations.json');
+  const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+  // Midpoint between Shibuya and Ebisu on Yamanote Line
+  const midPoint = { latitude: 35.652778, longitude: 139.705654 };
+  const suggestion = findTransitSuggestion(midPoint, allStations);
+
+  assert.ok(suggestion !== null);
+  assert.equal(suggestion.type, 'SEGMENT');
+  assert.equal(suggestion.proximity, 'IN_TRANSIT');
+  assert.ok(suggestion.displayText.includes('恵比寿〜渋谷間') || suggestion.displayText.includes('渋谷〜恵比寿間'));
+  assert.ok(suggestion.displayText.includes('JR山手線'));
+  assert.ok(suggestion.formattedDistance.startsWith('線路から'));
+
+  // Candidates list includes segment as top suggestion, followed by nearby stations
+  const candidates = findCandidateTransitSuggestions(midPoint, allStations);
+  assert.ok(candidates.length >= 2);
+  assert.equal(candidates[0].type, 'SEGMENT');
+  assert.equal(candidates[0].proximity, 'IN_TRANSIT');
+  assert.ok(candidates.some(c => c.type === 'STATION' && (c.station?.name === '渋谷' || c.station?.name === '恵比寿')));
+});
+
+test('findTransitSuggestion prioritizes AT_STATION when within station threshold', () => {
+  const filePath = path.resolve('src/data/stations.json');
+  const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+  // Tokyo Station platform
+  const tokyoCoords = { latitude: 35.681236, longitude: 139.767125 };
+  const suggestion = findTransitSuggestion(tokyoCoords, allStations);
+
+  assert.ok(suggestion !== null);
+  assert.equal(suggestion.type, 'STATION');
+  assert.equal(suggestion.proximity, 'AT_STATION');
+  assert.ok(suggestion.station?.name === '東京');
+});
+
