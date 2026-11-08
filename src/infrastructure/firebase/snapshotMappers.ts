@@ -7,6 +7,7 @@ export function mapUserDocument(id: string, data: Record<string, unknown>): User
   for (const field of [
     'name', 'role', 'team', 'color', 'score', 'status', 'invincibleUntil',
     'waitingUntil', 'invincibleCards', 'lastStation', 'shinkansenStartTime',
+    'lastCompletionId',
   ]) {
     if (Object.hasOwn(data, field)) user[field] = data[field];
   }

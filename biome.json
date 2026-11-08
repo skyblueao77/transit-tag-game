@@ -16,7 +16,10 @@
 		"rules": {
 			"recommended": true,
 			"a11y": {
-				"recommended": false
+				"recommended": true,
+				"useButtonType": "warn",
+				"noLabelWithoutControl": "warn",
+				"useAriaPropsSupportedByRole": "warn"
 			},
 			"complexity": {
 				"noImportantStyles": "off",
@@ -24,7 +27,7 @@
 			},
 			"correctness": {
 				"noUnusedImports": "warn",
-				"useExhaustiveDependencies": "off",
+				"useExhaustiveDependencies": "warn",
 				"noUnusedFunctionParameters": "warn",
 				"noUnusedVariables": "warn"
 			},
@@ -32,7 +35,7 @@
 				"useNodejsImportProtocol": "warn"
 			},
 			"suspicious": {
-				"noExplicitAny": "off"
+				"noExplicitAny": "warn"
 			}
 		}
 	},

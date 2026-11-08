@@ -25,6 +25,7 @@ export interface User {
   invincibleCards: number;
   lastStation?: string;
   shinkansenStartTime?: number;
+  lastCompletionId?: string;
 }
 
 export interface PrivateLocation {
