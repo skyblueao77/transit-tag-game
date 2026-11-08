@@ -268,12 +268,12 @@ service cloud.firestore {
               && b.status == 'ACTIVE' && a.status == 'WAITING'
               && a.waitingUntil is int && a.waitingUntil > nowMs
               && a.waitingUntil <= nowMs + 3660000)
-          // 4. Powerup invincibility card use (10 min max duration + 60s tolerance)
+          // 4. Powerup invincibility card use (30 min max duration + 60s tolerance)
           || (diff.hasOnly(['invincibleCards', 'invincibleUntil'])
               && b.invincibleCards is int && b.invincibleCards >= 1
               && a.invincibleCards == b.invincibleCards - 1
               && a.invincibleUntil is int && a.invincibleUntil > nowMs
-              && a.invincibleUntil <= nowMs + 660000)
+              && a.invincibleUntil <= nowMs + 1860000)
           // 5. Safety action: Emergency or Retire
           || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'invincibleUntil'])
               && a.status in ['EMERGENCY', 'RETIRED']
@@ -293,10 +293,9 @@ service cloud.firestore {
       let afterConfig = getAfter(configPath).data;
       let me = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
       let myRole = me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
-      let targetRole = b.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
+      let nowMs = request.time.toMillis();
       return signedIn()
         && isCurrentParticipant(request.auth.uid)
-        && request.auth.uid != uid
         && hasNoCoordinates(a)
         && a.id == b.id
         && a.name == b.name
@@ -304,18 +303,31 @@ service cloud.firestore {
         && a.role == b.role
         && a.score == b.score
         && a.gameSessionId == b.gameSessionId
+        && (!b.keys().hasAny(['color']) || a.color == b.color)
         && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
         && myRole == 'ONI'
-        && targetRole == 'RUNNER'
-        && b.team != me.team
-        && b.status == 'ACTIVE'
+        && me.status == 'ACTIVE'
         && afterConfig.teamARole != curConfig.teamARole
-        && (!b.keys().hasAny(['invincibleUntil'])
-            || !(b.invincibleUntil is int && b.invincibleUntil > request.time.toMillis()))
-        && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil', 'invincibleCards'])
-        && a.status == 'WAITING'
-        && a.waitingUntil is int
-        && a.waitingUntil > request.time.toMillis();
+        && b.status != 'EMERGENCY'
+        && b.status != 'RETIRED'
+        && (
+          // Branch A: Captured side (opposing team b.team != me.team)
+          // All players transition to WAITING (capped at 30 min + 60s) with invincibility cleared
+          (b.team != me.team
+           && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
+           && a.status == 'WAITING'
+           && a.waitingUntil is int
+           && a.waitingUntil > nowMs
+           && a.waitingUntil <= nowMs + 1860000
+           && a.invincibleUntil == 0)
+          // Branch B: Capturing side (own team b.team == me.team, including captor)
+          // All players transition to ACTIVE, clear waiting, and receive exactly +1 invincibleCard
+          || (b.team == me.team
+              && diff.hasOnly(['status', 'waitingUntil', 'invincibleCards'])
+              && a.status == 'ACTIVE'
+              && a.waitingUntil == 0
+              && a.invincibleCards == (b.keys().hasAny(['invincibleCards']) ? b.invincibleCards : 0) + 1)
+        );
     }
 
     match /users/{uid} {
@@ -407,12 +419,24 @@ service cloud.firestore {
 
     function validCaptureConfigUpdate(currentData, newData, diff) {
       let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let targetPath = /databases/$(database)/documents/users/$(newData.lastCaptureTargetId);
+      let nowMs = request.time.toMillis();
       return exists(mePath)
         && currentData.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
         && (get(mePath).data.team == 'A' ? currentData.teamARole : currentData.teamBRole) == 'ONI'
         && get(mePath).data.status == 'ACTIVE'
-        && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'logs'])
+        && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])
         && newData.nextRevealTime is int
+        && newData.lastCaptureTargetId is string
+        && exists(targetPath)
+        && existsAfter(targetPath)
+        && get(targetPath).data.team != get(mePath).data.team
+        && get(targetPath).data.status == 'ACTIVE'
+        && (!get(targetPath).data.keys().hasAny(['invincibleUntil']) || get(targetPath).data.invincibleUntil <= nowMs)
+        && getAfter(targetPath).data.status == 'WAITING'
+        && getAfter(targetPath).data.waitingUntil is int
+        && getAfter(targetPath).data.waitingUntil > nowMs
+        && getAfter(targetPath).data.waitingUntil <= nowMs + 1860000
         && newData.logs is list
         && newData.logs.size() <= 200
         && (get(mePath).data.team == 'A'

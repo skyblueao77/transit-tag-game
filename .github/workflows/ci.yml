@@ -38,6 +38,9 @@ jobs:
       - name: Run Firestore security rules tests
         run: npm run test:rules
 
+      - name: Run Client Gateway Firestore integration tests
+        run: npm run test:integration
+
       - name: Build production bundle
         run: npm run build
 

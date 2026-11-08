@@ -14,7 +14,7 @@ import {
   type DocumentData,
   type UpdateData,
 } from 'firebase/firestore';
-import { auth, db } from './firebaseClient';
+import { auth, db } from './firebaseClient.ts';
 
 import type {
   ActivateInvincibilityInput,
@@ -67,74 +67,74 @@ import type {
   TransitionGamePhaseInput,
   TransitionGamePhaseResult,
   WaitingGateway,
-} from '../../application/gameplayPorts';
+} from '../../application/gameplayPorts.ts';
 
 import {
   resolveCapture,
   type CapturePlayer,
   type CapturePlayerStatus,
-} from '../../game/capture';
+} from '../../game/capture.ts';
 import {
   activateInvincibility as resolveInvincibility,
-} from '../../game/powerups';
+} from '../../game/powerups.ts';
 import {
   canCompleteMission,
   calculateMissionReward,
-} from '../../game/missions';
-import { calculateMissionScore } from '../../game/scoring';
+} from '../../game/missions.ts';
+import { calculateMissionScore } from '../../game/scoring.ts';
 import {
   startManualWaiting,
   resumeExpiredWaiting,
-} from '../../game/waitingLifecycle';
+} from '../../game/waitingLifecycle.ts';
 import {
   resolvePlayerSafetyAction,
   type SafetyAction,
   type SafetyReasonCode,
-} from '../../game/playerSafety';
+} from '../../game/playerSafety.ts';
 import {
   resolveEmergencyLocationProjection,
-} from '../../game/emergencyLocationProjection';
+} from '../../game/emergencyLocationProjection.ts';
 import {
   canUsePowerup,
-} from '../../game/phases';
-import { getPlayerRole } from '../../game/roles';
+} from '../../game/phases.ts';
+import { getPlayerRole } from '../../game/roles.ts';
 import {
   isValidGameSessionId,
   sessionScopedCompletionId,
   validateExpectedSession,
   validateGameSession,
-} from '../../game/gameSession';
+} from '../../game/gameSession.ts';
 import {
   resolveAdminPhaseTransition,
-} from '../../game/adminPhaseTransition';
-import { FINAL_MISSIONS } from '../../game/finalMissions';
+} from '../../game/adminPhaseTransition.ts';
+import { FINAL_MISSIONS } from '../../game/finalMissions.ts';
 import {
   resolveAdminRoleSwap,
   type AdminPlayerStatus,
   type AdminRoleSwapPlayer,
-} from '../../game/adminGameState';
+} from '../../game/adminGameState.ts';
 import {
   resolveAdminRevealPlan,
   type AdminRevealLocation,
   type AdminRevealPlayer,
-} from '../../game/adminReveal';
+} from '../../game/adminReveal.ts';
 import {
   resolveTeamScoreAdjustment,
-} from '../../game/adminScoreAdjustment';
+} from '../../game/adminScoreAdjustment.ts';
 import {
   resolveMissionModeChange,
   resolveMissionAssignment,
-} from '../../game/adminMission';
+} from '../../game/adminMission.ts';
 import {
   planGameResetPreview,
   isResetConfirmationExpired,
   type ResetDocumentIdentity,
   type ResetParticipantDocument,
   RESET_MAX_ESTIMATED_WRITES,
-} from '../../game/gameReset';
-import { MISSIONS } from '../../../constants';
-import type { Mission } from '../../../types';
-import type { GameStatus, Role, TeamRoles } from '../../game/types';
+} from '../../game/gameReset.ts';
+import { MISSIONS } from '../../../constants.ts';
+import type { Mission } from '../../../types.ts';
+import type { GameStatus, Role, TeamRoles } from '../../game/types.ts';
 
 // ============================================================
 // ユーティリティ
@@ -300,6 +300,7 @@ export const clientCaptureGateway: CaptureGateway = {
           teamARole: capture.teamRoles.teamARole,
           teamBRole: capture.teamRoles.teamBRole,
           nextRevealTime: capture.nextRevealTime,
+          lastCaptureTargetId: input.targetId,
           [teamScoreField]: increment(capture.reward.scoreDelta),
           logs,
         });
