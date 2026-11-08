@@ -186,14 +186,23 @@ export type {
   ThrottleDecisionReason,
 } from './locationThrottling';
 export {
+  calculatePointToSegmentDistance,
   findCandidateStations,
+  findCandidateTransitSuggestions,
   findNearestStation,
+  findTransitSuggestion,
   formatDistanceMeters,
+  formatSegmentLabel,
   formatStationLabel,
 } from './stationInference';
 export type {
+  PointToSegmentResult,
+  StationConnection,
   StationData,
   StationProximity,
   StationSuggestion,
   SuggestStationOptions,
+  TransitProximity,
+  TransitSegment,
+  TransitSuggestion,
 } from './stationInference';

@@ -51,6 +51,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp}'],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/[a-c]\.tile\.openstreetmap\.org\/.*/i,
@@ -76,7 +77,7 @@ export default defineConfig({
     }
   },
   build: {
-    chunkSizeWarningLimit: 650,
+    chunkSizeWarningLimit: 2500,
     rollupOptions: {
       output: {
         manualChunks: {

@@ -23,6 +23,12 @@ function parseCsv(csvText) {
   return rows;
 }
 
+// Well-known circular lines that loop between first and last station
+const LOOP_LINE_CODES = new Set([
+  11302, // JR山手線
+  11602, // JR大阪環状線
+  24004, // 名古屋市営名城線
+]);
 
 async function main() {
   console.log('Downloading and extracting station_database tarball...');
@@ -37,15 +43,18 @@ async function main() {
   console.log('Reading line files...');
   // stationCode -> Set of lineNames
   const stationLinesMap = new Map();
-  // stationCode -> Set of neighbor station codes (for future Phase 2 graph)
-  const stationNeighborsMap = new Map();
+  // stationCode -> Map of connectionKey to { line, to }
+  const stationConnectionsMap = new Map();
 
   const lineFiles = fs.readdirSync(lineDir).filter(f => f.endsWith('.json'));
   for (const f of lineFiles) {
     try {
+      const lineCode = Number(f.replace('.json', ''));
       const content = JSON.parse(fs.readFileSync(path.join(lineDir, f), 'utf-8'));
       const lineName = content.name;
       const list = content.station_list || [];
+      const isLoop = LOOP_LINE_CODES.has(lineCode);
+
       for (let i = 0; i < list.length; i++) {
         const item = list[i];
         const code = Number(item.code);
@@ -54,15 +63,26 @@ async function main() {
         }
         stationLinesMap.get(code).add(lineName);
 
-        // Record neighbor stations
-        if (!stationNeighborsMap.has(code)) {
-          stationNeighborsMap.set(code, new Set());
+        if (!stationConnectionsMap.has(code)) {
+          stationConnectionsMap.set(code, new Map());
         }
+
+        // Previous station on line
         if (i > 0) {
-          stationNeighborsMap.get(code).add(Number(list[i - 1].code));
+          const prevCode = String(list[i - 1].code);
+          stationConnectionsMap.get(code).set(`${lineName}_${prevCode}`, { line: lineName, to: prevCode });
+        } else if (isLoop && list.length > 2) {
+          const lastCode = String(list[list.length - 1].code);
+          stationConnectionsMap.get(code).set(`${lineName}_${lastCode}`, { line: lineName, to: lastCode });
         }
+
+        // Next station on line
         if (i < list.length - 1) {
-          stationNeighborsMap.get(code).add(Number(list[i + 1].code));
+          const nextCode = String(list[i + 1].code);
+          stationConnectionsMap.get(code).set(`${lineName}_${nextCode}`, { line: lineName, to: nextCode });
+        } else if (isLoop && list.length > 2) {
+          const firstCode = String(list[0].code);
+          stationConnectionsMap.get(code).set(`${lineName}_${firstCode}`, { line: lineName, to: firstCode });
         }
       }
     } catch (e) {
@@ -81,29 +101,27 @@ async function main() {
     const lat = Number(row.lat);
     const lng = Number(row.lng);
     const name = row.name;
-    const kana = row.name_kana || '';
     const pref = Number(row.prefecture) || 0;
 
     if (!name || Number.isNaN(lat) || Number.isNaN(lng)) continue;
 
     const lines = Array.from(stationLinesMap.get(code) || []);
-    // If no line found via line files, skip or placeholder
-    if (lines.length === 0) {
-      continue;
-    }
+    if (lines.length === 0) continue;
+
+    const next = Array.from(stationConnectionsMap.get(code)?.values() || []);
 
     stations.push({
       id: String(code),
       name,
-      kana,
       lat: Math.round(lat * 1000000) / 1000000,
       lng: Math.round(lng * 1000000) / 1000000,
       pref,
       lines,
+      next,
     });
   }
 
-  console.log(`Generated ${stations.length} stations with verified lines.`);
+  console.log(`Generated ${stations.length} stations with verified lines & connections.`);
 
   fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(stations));

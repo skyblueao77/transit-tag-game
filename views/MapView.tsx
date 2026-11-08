@@ -28,9 +28,10 @@ function formatTime(sec: number): string {
 }
 
 import {
-  findCandidateStations,
+  findCandidateTransitSuggestions,
+  findTransitSuggestion,
   type StationData,
-  type StationSuggestion,
+  type TransitSuggestion,
 } from '../src/game';
 import stationsData from '../src/data/stations.json';
 import StationSuggestCard from '../src/components/StationSuggestCard';
@@ -68,28 +69,28 @@ const MapView: React.FC<Props> = ({
   const lastUploadedCoords = useRef<Coordinates | null>(null);
   const resumeRequestedUntil = useRef<number | null>(null);
 
-  const [stationSuggestion, setStationSuggestion] = useState<StationSuggestion | null>(null);
-  const [stationCandidates, setStationCandidates] = useState<StationSuggestion[]>([]);
+  const [transitSuggestion, setTransitSuggestion] = useState<TransitSuggestion | null>(null);
+  const [transitCandidates, setTransitCandidates] = useState<TransitSuggestion[]>([]);
   const [isSuggestDismissed, setIsSuggestDismissed] = useState(false);
-  const lastDismissedStationId = useRef<string | null>(null);
+  const lastDismissedKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (!privateLocation) {
-      setStationSuggestion(null);
-      setStationCandidates([]);
+      setTransitSuggestion(null);
+      setTransitCandidates([]);
       return;
     }
     const currentCoords: Coordinates = {
       latitude: privateLocation.latitude,
       longitude: privateLocation.longitude,
     };
-    const candidates = findCandidateStations(currentCoords, stationsData as StationData[], 5);
-    const nearest = candidates[0] ?? null;
+    const suggestion = findTransitSuggestion(currentCoords, stationsData as StationData[]);
+    const candidates = findCandidateTransitSuggestions(currentCoords, stationsData as StationData[]);
 
-    setStationCandidates(candidates);
-    setStationSuggestion(nearest);
+    setTransitCandidates(candidates);
+    setTransitSuggestion(suggestion);
 
-    if (nearest && nearest.station.id !== lastDismissedStationId.current) {
+    if (suggestion && suggestion.displayText !== lastDismissedKey.current) {
       setIsSuggestDismissed(false);
     }
   }, [privateLocation]);
@@ -99,8 +100,8 @@ const MapView: React.FC<Props> = ({
     try {
       await onUpdateLastStation(stationName);
       setIsSuggestDismissed(true);
-      if (stationSuggestion) {
-        lastDismissedStationId.current = stationSuggestion.station.id;
+      if (transitSuggestion) {
+        lastDismissedKey.current = transitSuggestion.displayText;
       }
     } catch (error) {
       console.error('Failed to update station:', error);
@@ -417,17 +418,17 @@ const MapView: React.FC<Props> = ({
       <div ref={containerRef} style={{ flex: 1, width: '100%', zIndex: 0 }} />
 
       {/* 最寄り駅・路線の自動提案カード */}
-      {!isSuggestDismissed && stationSuggestion && onUpdateLastStation && (
+      {!isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] w-full px-4 max-w-sm pointer-events-none">
           <StationSuggestCard
-            suggestion={stationSuggestion}
-            candidates={stationCandidates}
+            suggestion={transitSuggestion}
+            candidates={transitCandidates}
             currentLastStation={currentUser.lastStation}
             onConfirmStation={handleConfirmStation}
             onDismiss={() => {
               setIsSuggestDismissed(true);
-              if (stationSuggestion) {
-                lastDismissedStationId.current = stationSuggestion.station.id;
+              if (transitSuggestion) {
+                lastDismissedKey.current = transitSuggestion.displayText;
               }
             }}
           />
