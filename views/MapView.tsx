@@ -27,6 +27,7 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+import { toast } from 'sonner';
 import {
   findCandidateTransitSuggestions,
   findTransitSuggestion,
@@ -73,20 +74,51 @@ const MapView: React.FC<Props> = ({
   const [transitCandidates, setTransitCandidates] = useState<TransitSuggestion[]>([]);
   const [isSuggestDismissed, setIsSuggestDismissed] = useState(false);
   const lastDismissedKey = useRef<string | null>(null);
+  const prevCoordsRef = useRef<Coordinates | null>(null);
+
+  const [isAutoUpdateEnabled, setIsAutoUpdateEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('transit_auto_update_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleAutoUpdate = (enabled: boolean) => {
+    setIsAutoUpdateEnabled(enabled);
+    try {
+      localStorage.setItem('transit_auto_update_enabled', String(enabled));
+    } catch (e) {
+      console.error('Failed to save auto update preference:', e);
+    }
+    if (enabled) {
+      toast.success('現在地の自動反映をONにしました');
+    } else {
+      toast.info('現在地の自動反映をOFFにしました');
+    }
+  };
 
   useEffect(() => {
     if (!privateLocation) {
       setTransitSuggestion(null);
       setTransitCandidates([]);
+      prevCoordsRef.current = null;
       return;
     }
     const currentCoords: Coordinates = {
       latitude: privateLocation.latitude,
       longitude: privateLocation.longitude,
     };
-    const suggestion = findTransitSuggestion(currentCoords, stationsData as StationData[]);
-    const candidates = findCandidateTransitSuggestions(currentCoords, stationsData as StationData[]);
+    const previousCoords = prevCoordsRef.current;
 
+    const suggestion = findTransitSuggestion(currentCoords, stationsData as StationData[], {
+      previousCoords,
+    });
+    const candidates = findCandidateTransitSuggestions(currentCoords, stationsData as StationData[], {
+      previousCoords,
+    });
+
+    prevCoordsRef.current = currentCoords;
     setTransitCandidates(candidates);
     setTransitSuggestion(suggestion);
 
@@ -94,6 +126,44 @@ const MapView: React.FC<Props> = ({
       setIsSuggestDismissed(false);
     }
   }, [privateLocation]);
+
+  // Phase 3: 自動反映（オートチェックイン）ロジック
+  const stableSuggestionRef = useRef<{ text: string; count: number }>({ text: '', count: 0 });
+  const lastAutoUpdatedKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isAutoUpdateEnabled || !transitSuggestion || !onUpdateLastStation) {
+      return;
+    }
+
+    const currentTarget = transitSuggestion.displayText;
+
+    // 既に現在地として記録されている場合はスキップ
+    if (currentUser.lastStation === currentTarget || lastAutoUpdatedKey.current === currentTarget) {
+      stableSuggestionRef.current = { text: currentTarget, count: 0 };
+      return;
+    }
+
+    // 安定化カウンター（GPSノイズ防止のため2回連続で同一判定となった場合に確定）
+    if (stableSuggestionRef.current.text === currentTarget) {
+      stableSuggestionRef.current.count += 1;
+    } else {
+      stableSuggestionRef.current = { text: currentTarget, count: 1 };
+    }
+
+    if (stableSuggestionRef.current.count >= 2) {
+      lastAutoUpdatedKey.current = currentTarget;
+      onUpdateLastStation(currentTarget)
+        .then(() => {
+          toast.success(`現在地を自動更新しました: ${currentTarget}`, {
+            duration: 3500,
+          });
+        })
+        .catch(err => {
+          console.error('Failed to auto update station:', err);
+        });
+    }
+  }, [transitSuggestion, isAutoUpdateEnabled, currentUser.lastStation, onUpdateLastStation]);
 
   const handleConfirmStation = async (stationName: string) => {
     if (!onUpdateLastStation) return;
@@ -431,6 +501,8 @@ const MapView: React.FC<Props> = ({
                 lastDismissedKey.current = transitSuggestion.displayText;
               }
             }}
+            isAutoUpdateEnabled={isAutoUpdateEnabled}
+            onToggleAutoUpdate={handleToggleAutoUpdate}
           />
         </div>
       )}

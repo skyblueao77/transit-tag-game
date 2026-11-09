@@ -194,9 +194,11 @@ export {
   formatDistanceMeters,
   formatSegmentLabel,
   formatStationLabel,
+  inferSegmentHeading,
 } from './stationInference';
 export type {
   PointToSegmentResult,
+  SegmentHeadingResult,
   StationConnection,
   StationData,
   StationProximity,

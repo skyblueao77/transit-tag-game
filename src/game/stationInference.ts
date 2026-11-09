@@ -33,6 +33,7 @@ export interface TransitSegment {
   stationB: StationData;
   crossTrackDistanceMeters: number;
   projectionRatio: number;
+  headingStation?: StationData;
 }
 
 export interface TransitSuggestion {
@@ -43,6 +44,7 @@ export interface TransitSuggestion {
   distanceMeters: number;
   displayText: string;
   formattedDistance: string;
+  headingStation?: StationData;
 }
 
 export interface SuggestStationOptions {
@@ -54,12 +56,17 @@ export interface SuggestStationOptions {
   nearStationThresholdMeters?: number;
   /** Distance threshold to track line for in-transit detection (default: 600m) */
   segmentThresholdMeters?: number;
+  /** Previous coordinates to infer movement heading / direction (Phase 3) */
+  previousCoords?: Coordinates | null;
+  /** Minimum movement distance in meters to detect direction (default: 15m) */
+  minHeadingMoveMeters?: number;
 }
 
 const DEFAULT_MAX_DISTANCE_METERS = 5000;
 const DEFAULT_AT_STATION_THRESHOLD_METERS = 250;
 const DEFAULT_NEAR_STATION_THRESHOLD_METERS = 1500;
 const DEFAULT_SEGMENT_THRESHOLD_METERS = 600;
+const DEFAULT_MIN_HEADING_MOVE_METERS = 15;
 
 /**
  * Formats station name and lines into a user-friendly label.
@@ -80,13 +87,18 @@ export function formatStationLabel(station: StationData): string {
 
 /**
  * Formats segment into a user-friendly Japanese transit label.
- * E.g. "JR山手線 渋谷〜恵比寿間"
+ * E.g. "JR山手線 渋谷〜恵比寿間" or "JR山手線 渋谷〜恵比寿間 (次は恵比寿)"
  */
 export function formatSegmentLabel(
   lineName: string,
   stationA: StationData,
   stationB: StationData,
+  headingStation?: StationData,
 ): string {
+  if (headingStation) {
+    const originStation = headingStation.id === stationA.id ? stationB : stationA;
+    return `${lineName} ${originStation.name}〜${headingStation.name}間 (次は${headingStation.name})`;
+  }
   return `${lineName} ${stationA.name}〜${stationB.name}間`;
 }
 
@@ -167,6 +179,76 @@ export function calculatePointToSegmentDistance(
     crossTrackDistanceMeters,
     projectionRatio,
     isBetween,
+  };
+}
+
+export interface SegmentHeadingResult {
+  headingStation: StationData;
+  originStation: StationData;
+  alignment: number;
+}
+
+/**
+ * Phase 3: Infers transit travel direction and next station from movement vector.
+ * Uses dot product between movement vector and railway segment vector.
+ */
+export function inferSegmentHeading(
+  currentCoords: Coordinates,
+  previousCoords: Coordinates,
+  stationA: StationData,
+  stationB: StationData,
+  minHeadingMoveMeters = DEFAULT_MIN_HEADING_MOVE_METERS,
+): SegmentHeadingResult | null {
+  if (!currentCoords || !previousCoords || !stationA || !stationB) {
+    return null;
+  }
+
+  const moveDist = calculateHaversineDistanceMeters(previousCoords, currentCoords);
+  if (moveDist < minHeadingMoveMeters) {
+    // Insufficient movement to infer directional vector reliably
+    return null;
+  }
+
+  const latMid = (stationA.lat + stationB.lat) / 2;
+  const latRad = (latMid * Math.PI) / 180;
+  const metersPerLngDegree = 111320 * Math.cos(latRad);
+  const metersPerLatDegree = 110574;
+
+  // Segment vector: A -> B
+  const dx = (stationB.lng - stationA.lng) * metersPerLngDegree;
+  const dy = (stationB.lat - stationA.lat) * metersPerLatDegree;
+  const segLength = Math.sqrt(dx * dx + dy * dy);
+  if (segLength === 0) return null;
+
+  // Movement vector: prev -> curr
+  const mx = (currentCoords.longitude - previousCoords.longitude) * metersPerLngDegree;
+  const my = (currentCoords.latitude - previousCoords.latitude) * metersPerLatDegree;
+  const moveLength = Math.sqrt(mx * mx + my * my);
+  if (moveLength === 0) return null;
+
+  // Cosine similarity
+  const dot = mx * dx + my * dy;
+  const alignment = dot / (segLength * moveLength);
+
+  // Require reasonable directional alignment along the railway tracks (abs >= 0.25)
+  if (Math.abs(alignment) < 0.25) {
+    return null;
+  }
+
+  if (alignment > 0) {
+    // Heading from Station A towards Station B
+    return {
+      headingStation: stationB,
+      originStation: stationA,
+      alignment,
+    };
+  }
+
+  // Heading from Station B towards Station A
+  return {
+    headingStation: stationA,
+    originStation: stationB,
+    alignment,
   };
 }
 
@@ -346,6 +428,21 @@ export function findTransitSuggestion(
     );
     const bestSegment = candidateSegments[0];
 
+    let headingStation: StationData | undefined;
+    if (options?.previousCoords) {
+      const headingResult = inferSegmentHeading(
+        coords,
+        options.previousCoords,
+        bestSegment.stationA,
+        bestSegment.stationB,
+        options.minHeadingMoveMeters,
+      );
+      if (headingResult) {
+        headingStation = headingResult.headingStation;
+        bestSegment.headingStation = headingStation;
+      }
+    }
+
     return {
       type: 'SEGMENT',
       proximity: 'IN_TRANSIT',
@@ -355,8 +452,10 @@ export function findTransitSuggestion(
         bestSegment.lineName,
         bestSegment.stationA,
         bestSegment.stationB,
+        headingStation,
       ),
       formattedDistance: `線路から${formatDistanceMeters(bestSegment.crossTrackDistanceMeters)}`,
+      headingStation,
     };
   }
 
