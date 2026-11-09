@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml)
 ![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Cross--Doc%20Verified-success)
-![Tests](https://img.shields.io/badge/Tests-221%20Unit%20%7C%2018%20Rules%20%7C%202%20Integration-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-222%20Unit%20%7C%2018%20Rules%20%7C%202%20Integration-brightgreen)
 ![100-Pattern Matrix](https://img.shields.io/badge/100--Pattern%20Matrix-100%25%20Verified-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue)
 ![Biome](https://img.shields.io/badge/Lint-Biome%20A11y%20Strict-purple)
