@@ -80,11 +80,20 @@ export default defineConfig({
     chunkSizeWarningLimit: 2500,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-firebase-auth': ['firebase/app', 'firebase/auth'],
-          'vendor-firestore': ['firebase/firestore'],
-          'vendor-leaflet': ['leaflet'],
+        manualChunks(id) {
+          if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
+            return 'vendor-firebase';
+          }
+          if (
+            id.includes('node_modules/react') ||
+            id.includes('node_modules/react-dom') ||
+            id.includes('node_modules/react-router-dom')
+          ) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/leaflet')) {
+            return 'vendor-leaflet';
+          }
         },
       },
     },
