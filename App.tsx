@@ -105,7 +105,7 @@ const App: React.FC = () => {
   const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
   const [safetyActionBusy, setSafetyActionBusy] = useState(false);
   const safetyActionBusyRef = useRef(false);
-  const isAdminPath = window.location.hash.includes('admin-tk-2026-secret');
+  const isAdminPath = window.location.hash.includes('admin-tk-2026-secret') || window.location.hash.includes('/admin');
 
   // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
   const isAdmin = useMemo(
@@ -466,7 +466,11 @@ const App: React.FC = () => {
                   path="/admin-tk-2026-secret"
                   element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
                 />
-                <Route path="*" element={<Navigate to="/admin-tk-2026-secret" replace />} />
+                <Route
+                  path="/admin"
+                  element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
+                />
+                <Route path="*" element={<Navigate to="/admin" replace />} />
               </Routes>
             </Suspense>
           </div>
@@ -707,6 +711,16 @@ const App: React.FC = () => {
                     />
                   }
                 />
+                <Route
+                  path="/admin"
+                  element={
+                    <AdminView
+                      config={gameConfig}
+                      users={allUsers}
+                      missions={missions}
+                    />
+                  }
+                />
                 <Route path="*" element={<Navigate to="/map" replace />} />
               </Routes>
             </Suspense>
@@ -714,7 +728,7 @@ const App: React.FC = () => {
 
           {isAdmin && (
             <Link
-              to="/admin-tk-2026-secret"
+              to="/admin"
               className="fixed right-6 bottom-24 w-14 h-14 bg-slate-900 text-white rounded-full flex items-center justify-center shadow-2xl z-[1000] border-4 border-white active:scale-90 transition-transform"
             >
               <Settings size={24} />

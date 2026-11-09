@@ -1,13 +1,16 @@
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { GameConfig, User, Mission } from '../types';
+import { Link } from 'react-router-dom';
+import type { GameConfig, User, Mission, MissionCompletion } from '../types';
 import { MISSIONS } from '../constants';
 import {
-  Users, Lock, Trash2, Shield, Trophy, Play,
+  Users, Lock, Shield, Trophy, Play,
   AlertTriangle, Shuffle, MapPin,
-  RefreshCw 
+  RefreshCw, QrCode, Copy, Check, Plus, Edit2, Trash2,
+  Award, Sparkles, X
 } from 'lucide-react';
-import { signInAdmin } from '../src/infrastructure/firebase/auth';
+import QRCode from 'qrcode-svg';
+import { signInAdmin, setupInitialAdmin } from '../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../src/application/adminReveal';
 import type { AdminRevealScope } from '../src/game/adminReveal';
@@ -25,11 +28,14 @@ import type { PrepareGameResetPreview } from '../src/application/gameplayPorts';
 import { firebaseAdminGameResetGateway } from '../src/infrastructure/firebase/adminGameResetActions';
 import { initializeGameSession } from '../src/application/initializeGameSession';
 import { firebaseGameSessionInitializationGateway } from '../src/infrastructure/firebase/adminSessionActions';
+import { createOrUpdateMission, deleteMission, awardMissionCompletionByAdmin } from '../src/infrastructure/firebase/missionStore';
 
-import { subscribeEmergencyLocationProjections } from '../src/infrastructure/firebase/subscriptions';
+import {
+  subscribeEmergencyLocationProjections,
+  subscribeMissionCompletions,
+} from '../src/infrastructure/firebase/subscriptions';
 import type { EmergencyLocationProjection } from '../types';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
-
 
 interface Props {
   config: GameConfig;
@@ -37,10 +43,30 @@ interface Props {
   missions: Mission[];
 }
 
-const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = [] }) => {
-  const [emailInput, setEmailInput] = useState('');
+const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
+  // 認証関連（メール不要のユーザーID・パスワード）
+  const [adminIdInput, setAdminIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [isSetupMode, setIsSetupMode] = useState(false);
+  const [setupSecretInput, setSetupSecretInput] = useState('tag-admin-2026-secure');
   const [isAuthorized, setIsAuthorized] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // ミッションタブ (配信 / 一覧・作成 / 達成履歴)
+  const [missionTab, setMissionTab] = useState<'DISPATCH' | 'CATALOG' | 'COMPLETIONS'>('DISPATCH');
+  const [missionSearch, setMissionSearch] = useState('');
+  const [editingMission, setEditingMission] = useState<Mission | null>(null);
+  const [isMissionModalOpen, setIsMissionModalOpen] = useState(false);
+  const [manualAwardTeam, setManualAwardTeam] = useState<'A' | 'B'>('A');
+  const [manualAwardMissionId, setManualAwardMissionId] = useState('');
+  const [liveCompletions, setLiveCompletions] = useState<Array<MissionCompletion & { id: string }>>([]);
+
+  // QRコード・招待
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedText, setCopiedText] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+
+  // スコア・フェーズ・セッション関連
   const [scoreTeam, setScoreTeam] = useState<'A' | 'B'>('A');
   const [scoreDeltaInput, setScoreDeltaInput] = useState('');
   const [scoreReasonCode, setScoreReasonCode] = useState<ScoreAdjustmentReasonCode>('CORRECTION');
@@ -52,7 +78,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
   const [isProcessing, setIsProcessing] = useState(false);
   const [sessionInitializationBusy, setSessionInitializationBusy] = useState(false);
   const sessionInitializationRequestIdRef = useRef<string | null>(null);
-  const [searchDuration, setSearchDuration] = useState(10); 
+  const [searchDuration, setSearchDuration] = useState(10);
   const [manualMissionId, setManualMissionId] = useState('');
   const [emergencyProjections, setEmergencyProjections] = useState<EmergencyLocationProjection[]>([]);
   const [projectionUnavailable, setProjectionUnavailable] = useState(false);
@@ -69,11 +95,39 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
   const pendingScoreRequestRef = useRef<{ key: string; requestId: string } | null>(null);
   const missionRequestIdsRef = useRef<Record<string, string>>({});
   const pendingMissionModeRef = useRef<{ mode: 'SAME' | 'DIFFERENT'; requestId: string } | null>(null);
+
+  // 招待URL
+  const inviteUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}${window.location.pathname}#/`;
+  }, []);
+
+  // SVG QR Code -> Data URI (Biome安全・dangerouslySetInnerHTML回避)
+  const qrDataUri = useMemo(() => {
+    if (!inviteUrl) return '';
+    try {
+      const q = new QRCode({
+        content: inviteUrl,
+        padding: 2,
+        width: 180,
+        height: 180,
+        color: '#0f172a',
+        background: '#ffffff',
+        ecl: 'M',
+      });
+      const svg = q.svg();
+      return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+    } catch {
+      return '';
+    }
+  }, [inviteUrl]);
+
   const emergencyPlayerIds = useMemo(
     () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id),
     [users],
   );
 
+  // 緊急位置情報の購読
   useEffect(() => {
     if (!isAuthorized) {
       setEmergencyProjections([]);
@@ -95,11 +149,53 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
     );
   }, [isAuthorized, emergencyPlayerIds, config.gameSessionId]);
 
+  // ミッション達成履歴の購読
+  useEffect(() => {
+    if (!isAuthorized || !config.gameSessionId) return;
+    return subscribeMissionCompletions(
+      config.gameSessionId,
+      completions => setLiveCompletions(completions),
+      err => console.error('Error subscribing mission completions:', err),
+    );
+  }, [isAuthorized, config.gameSessionId]);
 
   const requireSessionId = (): string | null => {
     if (config.gameSessionId) return config.gameSessionId;
     alert('ゲームセッション初期化待ちです。先にSession初期化を実行してください。');
     return null;
+  };
+
+  // 1クリック一括初期化（Session初期化 ＋ 36件ミッションDB同期）
+  const handleQuickSetupWizard = async (): Promise<void> => {
+    if (sessionInitializationBusy || isProcessing) return;
+    setIsProcessing(true);
+    setSessionInitializationBusy(true);
+    try {
+      sessionInitializationRequestIdRef.current ??= crypto.randomUUID();
+      const initResult = await initializeGameSession(
+        { requestId: sessionInitializationRequestIdRef.current },
+        firebaseGameSessionInitializationGateway
+      );
+      if (!initResult.ok) {
+        alert(`Session初期化に失敗しました: ${initResult.reason}`);
+        return;
+      }
+      sessionInitializationRequestIdRef.current = null;
+
+      // 続いてミッションDB同期を実行
+      const syncResult = await syncMissionCatalog(
+        { requestId: crypto.randomUUID(), expectedSessionId: initResult.gameSessionId },
+        firebaseAdminMissionGateway
+      );
+      if (syncResult.ok) {
+        alert(`🎉 ゲーム準備が完了しました！\nセッションID: ${initResult.gameSessionId}\n公式ミッション${syncResult.createdCount}件を登録しました。参加者を招待してください。`);
+      } else {
+        alert(`セッションは初期化されましたが、ミッション同期に失敗しました: ${syncResult.reason}`);
+      }
+    } finally {
+      setSessionInitializationBusy(false);
+      setIsProcessing(false);
+    }
   };
 
   const handleInitializeGameSession = async (): Promise<void> => {
@@ -121,19 +217,33 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
     }
   };
 
+  // 柔軟なフェーズ操作（1日・2日どちらでも自由進行）
   const handlePhaseAction = async (action: 'START_DAY1' | 'PAUSE' | 'RESUME' | 'END_DAY1' | 'START_DAY2' | 'START_FINAL' | 'END_GAME'): Promise<void> => {
     if (isProcessing) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!confirm(`フェーズ操作「${action}」を実行しますか？`)) return;
+
+    const actionLabels: Record<string, string> = {
+      START_DAY1: 'DAY 1（本戦）を開始',
+      PAUSE: 'ゲームを一時中断',
+      RESUME: 'ゲームを再開',
+      END_DAY1: 'DAY 1 を終了（宿へ移動・翌日待機）',
+      START_DAY2: 'DAY 2 を開始',
+      START_FINAL: '🔥 クライマックス（最終ミッション）を開始',
+      END_GAME: '🏁 ゲーム終了・結果発表',
+    };
+
+    if (!confirm(`フェーズ操作「${actionLabels[action] || action}」を実行しますか？`)) return;
     setIsProcessing(true);
     try {
       const result = await transitionGamePhase({ action, requestId: crypto.randomUUID(), expectedSessionId }, firebaseAdminPhaseGateway);
-      if (result.ok === false) alert(`フェーズ操作に失敗しました: ${result.reason}`);
+      if (result.ok === false) {
+        alert(`フェーズ操作に失敗しました: ${result.reason}`);
+      }
     } catch {
       alert('フェーズ操作に失敗しました');
-    } finally { 
-      setIsProcessing(false); 
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -141,7 +251,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
     if (roleSwapBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!confirm('Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※鬼側は30分間の待機状態になります。')) return;
+    if (!confirm('Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※新・鬼側は30分間の待機状態になります。')) return;
 
     roleSwapBusyRef.current = true;
     setIsProcessing(true);
@@ -179,6 +289,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
       setResumingPlayerIds(new Set(resumeBusyRef.current));
     }
   };
+
   const handleLocationReveal = async (scope: AdminRevealScope): Promise<void> => {
     if (revealBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
@@ -205,7 +316,6 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
       setIsProcessing(false);
     }
   };
-
 
   const handleAdjustTeamScore = async (): Promise<void> => {
     if (scoreBusyRef.current || isProcessing) return;
@@ -264,31 +374,35 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
         return;
       }
       pendingMissionModeRef.current = null;
-      if (!result.changed) alert('配信モードは変更されていません。');
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
     }
   };
 
-  const handleManualAssign = async (team: 'A' | 'B'): Promise<void> => {
+  const handleManualAssign = async (targetTeam: 'A' | 'B', targetMissionId?: string): Promise<void> => {
     if (missionBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!manualMissionId) return alert('ミッションを選択してください');
-    if (!confirm(`Team ${team} に指定ミッションを配信しますか？`)) return;
-    const target = team === 'A' ? 'TEAM_A' : 'TEAM_B';
-    const key = `manual:${target}:${manualMissionId}`;
+    const missionIdToAssign = targetMissionId || manualMissionId;
+    if (!missionIdToAssign) return alert('ミッションを選択してください');
+    if (!confirm(`Team ${targetTeam} に指定ミッションを配信しますか？`)) return;
+
+    const target = targetTeam === 'A' ? 'TEAM_A' : 'TEAM_B';
+    const key = `manual:${target}:${missionIdToAssign}`;
     missionBusyRef.current = true;
     setIsProcessing(true);
     try {
-      const result = await assignMissions({ strategy: 'MANUAL', target, missionId: manualMissionId, requestId: missionRequestId(key), expectedSessionId }, firebaseAdminMissionGateway);
+      const result = await assignMissions(
+        { strategy: 'MANUAL', target, missionId: missionIdToAssign, requestId: missionRequestId(key), expectedSessionId },
+        firebaseAdminMissionGateway
+      );
       if (result.ok === false) {
         alert(`ミッション配信に失敗しました: ${result.reason}`);
         return;
       }
       delete missionRequestIdsRef.current[key];
-      alert('配信完了');
+      alert(`Team ${targetTeam} へ配信完了`);
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
@@ -299,7 +413,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
     if (missionBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!confirm('サーバーで選んだミッションを両チームへ配信しますか？')) return;
+    if (!confirm('ミッションをランダムに選定して両チームへ配信しますか？')) return;
     const key = 'random-assignment';
     missionBusyRef.current = true;
     setIsProcessing(true);
@@ -310,7 +424,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
         return;
       }
       delete missionRequestIdsRef.current[key];
-      alert(`ミッションを配信しました${result.duplicate ? '（再送結果）' : ''}`);
+      alert('ランダムミッションを配信しました');
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
@@ -320,7 +434,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
   const handleSyncMissionCatalog = async (): Promise<void> => {
     if (missionBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
-    if (!expectedSessionId || !confirm('Normal / Final Mission catalogを安全に同期しますか？未知のMissionは削除されません。')) return;
+    if (!expectedSessionId || !confirm('36件の標準ミッションをFirestoreに同期・初期登録しますか？')) return;
     const key = 'catalog-sync';
     missionBusyRef.current = true;
     setIsProcessing(true);
@@ -331,9 +445,66 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
         return;
       }
       delete missionRequestIdsRef.current[key];
-      alert(`同期完了: 作成 ${result.createdCount} / 更新 ${result.updatedCount} / 変更なし ${result.unchangedCount}（管理対象 ${result.totalManagedCount}）`);
+      alert(`同期完了: ${result.totalManagedCount}件のミッションを反映しました`);
     } finally {
       missionBusyRef.current = false;
+      setIsProcessing(false);
+    }
+  };
+
+  // ノーコードミッション保存（新規作成 / 編集）
+  const handleSaveCustomMission = async (mission: Mission): Promise<void> => {
+    try {
+      await createOrUpdateMission(mission);
+      setIsMissionModalOpen(false);
+      setEditingMission(null);
+      alert(`ミッション「${mission.title}」を保存しました`);
+    } catch (err) {
+      console.error('Error saving mission:', err);
+      alert('ミッションの保存に失敗しました');
+    }
+  };
+
+  // ミッション削除
+  const handleDeleteMission = async (mission: Mission): Promise<void> => {
+    if (!confirm(`ミッション「${mission.title}」を削除しますか？`)) return;
+    try {
+      await deleteMission(mission.id);
+      alert('削除しました');
+    } catch (err) {
+      console.error('Error deleting mission:', err);
+      alert('ミッションの削除に失敗しました');
+    }
+  };
+
+  // 管理者手動達成承認
+  const handleAdminAwardMission = async (): Promise<void> => {
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId || !manualAwardMissionId) {
+      alert('ミッションを選択してください');
+      return;
+    }
+    const targetMission = allMissionsList.find(m => m.id === manualAwardMissionId);
+    if (!targetMission) return;
+
+    if (!confirm(`Team ${manualAwardTeam} のミッション「${targetMission.title}」達成を承認し、+${targetMission.points}pt 加算しますか？`)) return;
+
+    setIsProcessing(true);
+    try {
+      const success = await awardMissionCompletionByAdmin({
+        team: manualAwardTeam,
+        missionId: targetMission.id,
+        title: targetMission.title,
+        points: targetMission.points,
+        expectedSessionId,
+      });
+      if (success) {
+        alert(`Team ${manualAwardTeam} に +${targetMission.points}pt 加算しました！`);
+        setManualAwardMissionId('');
+      } else {
+        alert('加算処理に失敗しました');
+      }
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -392,293 +563,1149 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions: _missions = 
     }
   };
 
+  // 招待URLコピー
+  const handleCopyInviteUrl = async () => {
+    if (!inviteUrl) return;
+    await navigator.clipboard.writeText(inviteUrl);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  // 招待メッセージコピー
+  const handleCopyInviteMessage = async () => {
+    if (!inviteUrl) return;
+    const msg = `🚆【鉄道鬼ごっこ】ゲームに参加しよう！\nインストール不要！以下のURLを開き、お好きなユーザーIDとパスワードで参加してね：\n${inviteUrl}`;
+    await navigator.clipboard.writeText(msg);
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2500);
+  };
+
+  // ミッション一覧（Firestoreのmissionsを最優先、空ならconstantsのMISSIONS）
+  const allMissionsList = useMemo(() => {
+    return missions.length > 0 ? missions : MISSIONS;
+  }, [missions]);
+
+  const currentMissionA = allMissionsList.find(m => m.id === config.activeMissionA);
+  const currentMissionB = allMissionsList.find(m => m.id === config.activeMissionB);
+
+  // フィルタ済みミッション
+  const filteredMissions = useMemo(() => {
+    if (!missionSearch.trim()) return allMissionsList;
+    const q = missionSearch.toLowerCase();
+    return allMissionsList.filter(m => m.title.toLowerCase().includes(q) || m.description.toLowerCase().includes(q));
+  }, [allMissionsList, missionSearch]);
+
+  // 人間向けフェーズラベル
+  const phaseLabel = useMemo(() => {
+    switch (config.gameStatus) {
+      case 'PRE_GAME': return '⚪ 準備中（プレイヤー参加受付）';
+      case 'DAY1_ACTIVE': return '🟢 DAY 1 進行中';
+      case 'DAY1_PAUSED': return '🟡 DAY 1 一時停止中';
+      case 'DAY1_ENDED': return '🌙 DAY 1 終了（宿泊・翌日待機）';
+      case 'DAY2_ACTIVE': return '🟢 DAY 2 進行中';
+      case 'DAY2_PAUSED': return '🟡 DAY 2 一時停止中';
+      case 'FINAL_MISSION': return '🔥 最終ミッション（クライマックス）';
+      case 'GAME_OVER': return '🏁 ゲーム終了・結果発表';
+      default: return config.gameStatus;
+    }
+  }, [config.gameStatus]);
+
+  // ログイン前の画面（メール不要のユーザーID・パスワード）
   if (!isAuthorized) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-6">
-        <div className="w-full max-w-xs bg-slate-800 p-8 rounded-3xl text-center shadow-2xl border border-slate-700">
-          <Lock size={40} className="mx-auto mb-6 text-blue-500" />
-          <form onSubmit={async e => {
-            e.preventDefault();
-            try {
-              const authorized = await signInAdmin(emailInput, passwordInput);
-              if (!authorized) {
-                alert('このアカウントには管理者権限がありません');
+      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4 font-sans text-white">
+        <div className="w-full max-w-sm bg-slate-800 p-8 rounded-3xl text-center shadow-2xl border border-slate-700 relative overflow-hidden">
+          <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-blue-500/30">
+            <Lock size={32} className="text-blue-400" />
+          </div>
+          <h2 className="text-2xl font-black mb-1">管理者ログイン</h2>
+          <p className="text-xs text-slate-400 font-medium mb-6">
+            メールアドレス不要・IDとパスワードで管理画面へ
+          </p>
+
+          {authError && (
+            <div className="mb-4 p-3 bg-red-500/20 border border-red-500/40 text-red-300 rounded-xl text-xs font-bold text-left">
+              {authError}
+            </div>
+          )}
+
+          {!isSetupMode ? (
+            <form onSubmit={async e => {
+              e.preventDefault();
+              setAuthError(null);
+              try {
+                const authorized = await signInAdmin(adminIdInput, passwordInput);
+                if (!authorized) {
+                  setAuthError('管理者権限が確認できませんでした。「初期セットアップ」を行ってください。');
+                  return;
+                }
+                setIsAuthorized(true);
+              } catch {
+                setAuthError('ログインに失敗しました。IDまたはパスワードをご確認ください。');
+              }
+            }}>
+              <div className="text-left mb-3">
+                <label htmlFor="admin-id" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                  管理者ID
+                </label>
+                <input
+                  id="admin-id"
+                  type="text"
+                  value={adminIdInput}
+                  onChange={e => setAdminIdInput(e.target.value)}
+                  className="w-full p-3.5 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+                  placeholder="例: admin"
+                  required
+                />
+              </div>
+
+              <div className="text-left mb-5">
+                <label htmlFor="admin-pass" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                  パスワード
+                </label>
+                <input
+                  id="admin-pass"
+                  type="password"
+                  value={passwordInput}
+                  onChange={e => setPasswordInput(e.target.value)}
+                  className="w-full p-3.5 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+                  placeholder="パスワード"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black shadow-lg transition-all active:scale-95 text-sm"
+              >
+                ログインする
+              </button>
+
+              <div className="mt-5 pt-4 border-t border-slate-700 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setIsSetupMode(true); setAuthError(null); }}
+                  className="text-xs font-bold text-blue-400 hover:text-blue-300"
+                >
+                  初めての方はこちら（初期管理者登録）
+                </button>
+                <Link to="/" className="text-xs font-medium text-slate-500 hover:text-slate-400">
+                  ← プレイヤー参加画面へ戻る
+                </Link>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={async e => {
+              e.preventDefault();
+              setAuthError(null);
+              if (passwordInput.length < 6) {
+                setAuthError('パスワードは6文字以上で設定してください。');
                 return;
               }
-              setIsAuthorized(true);
-            } catch {
-              alert('管理者ログインに失敗しました');
-            }
-          }}>
-            <label htmlFor="admin-email" className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-widest">Admin Email</label>
-            <input id="admin-email" type="email" value={emailInput} onChange={e => setEmailInput(e.target.value)} className="w-full p-4 bg-slate-700 rounded-2xl text-white text-center font-bold mb-3 outline-none border-2 border-transparent focus:border-blue-500" placeholder="admin@example.com" required />
-            <label htmlFor="admin-pass" className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-widest">Password</label>
-            <input id="admin-pass" type="password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} className="w-full p-4 bg-slate-700 rounded-2xl text-white text-center font-bold mb-4 outline-none border-2 border-transparent focus:border-blue-500" placeholder="PASSWORD" required />
-            <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg">SIGN IN</button>
-          </form>
+              try {
+                await setupInitialAdmin(adminIdInput, passwordInput, setupSecretInput);
+                setIsAuthorized(true);
+                alert('管理者アカウントを作成し、ログインしました！');
+              } catch (err: unknown) {
+                console.error('Setup error:', err);
+                setAuthError('管理者登録に失敗しました。合言葉を確認してください。');
+              }
+            }}>
+              <div className="text-left mb-3">
+                <label htmlFor="setup-admin-id" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                  希望する管理者ID
+                </label>
+                <input
+                  id="setup-admin-id"
+                  type="text"
+                  value={adminIdInput}
+                  onChange={e => setAdminIdInput(e.target.value)}
+                  className="w-full p-3 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+                  placeholder="例: admin"
+                  required
+                />
+              </div>
+
+              <div className="text-left mb-3">
+                <label htmlFor="setup-password" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                  管理者パスワード（6文字以上）
+                </label>
+                <input
+                  id="setup-password"
+                  type="password"
+                  value={passwordInput}
+                  onChange={e => setPasswordInput(e.target.value)}
+                  className="w-full p-3 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+                  placeholder="パスワード"
+                  minLength={6}
+                  required
+                />
+              </div>
+
+              <div className="text-left mb-5">
+                <label htmlFor="setup-key" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
+                  セットアップ用合言葉
+                </label>
+                <input
+                  id="setup-key"
+                  type="text"
+                  value={setupSecretInput}
+                  onChange={e => setSetupSecretInput(e.target.value)}
+                  className="w-full p-3 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+                  placeholder="tag-admin-2026-secure"
+                  required
+                />
+                <p className="text-[9px] text-slate-400 mt-1">※初期合言葉: tag-admin-2026-secure</p>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black shadow-lg transition-all active:scale-95 text-sm"
+              >
+                管理者アカウントを作成
+              </button>
+
+              <div className="mt-4 pt-3 border-t border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => { setIsSetupMode(false); setAuthError(null); }}
+                  className="text-xs font-bold text-slate-400 hover:text-white"
+                >
+                  ← 既存アカウントでログイン
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </div>
     );
   }
 
-  const currentMissionA = MISSIONS.find(m => m.id === config.activeMissionA);
-  const currentMissionB = MISSIONS.find(m => m.id === config.activeMissionB);
-
+  // ログイン後の管理者ダッシュボード
   return (
-    <div className="p-4 pb-32 space-y-6 text-slate-800 bg-slate-100 min-h-screen">
-      <section className="rounded-2xl border-2 border-blue-100 bg-white p-5 shadow-sm">
-        <h3 className="font-black text-slate-800">Game Session</h3>
-        <p className="mt-2 break-all text-xs text-slate-600">
-          {config.gameSessionId
-            ? `Current: ${config.gameSessionId} (schema ${config.sessionSchemaVersion ?? 'invalid'})`
-            : '未初期化。初期化するまでGameplay操作とPlayer登録は停止します。'}
-        </p>
-        <button type="button" onClick={() => void handleInitializeGameSession()}
-          disabled={sessionInitializationBusy || isProcessing}
-          className="mt-3 w-full rounded-xl bg-blue-700 py-3 font-black text-white disabled:opacity-50">
-          {sessionInitializationBusy ? 'Sessionを確認中…' : config.gameSessionId ? 'Session状態を確認' : 'Game Sessionを初期化'}
-        </button>
-      </section>
-
-      {/* 1. フェーズ管理 */}
-      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-        <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter"><Play size={20} /> Phase Control</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {config.gameStatus === 'PRE_GAME' && <button type="button" onClick={() => handlePhaseAction('START_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 開始</button>}
-          {config.gameStatus === 'DAY1_ACTIVE' && <><button type="button" onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button type="button" onClick={() => handlePhaseAction('END_DAY1')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 終了</button></>}
-          {config.gameStatus === 'DAY1_PAUSED' && <button type="button" onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 1 再開</button>}
-          {config.gameStatus === 'DAY1_ENDED' && <button type="button" onClick={() => handlePhaseAction('START_DAY2')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 開始</button>}
-          {config.gameStatus === 'DAY2_ACTIVE' && <><button type="button" onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">一時停止</button><button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">Final 開始</button></>}
-          {config.gameStatus === 'DAY2_PAUSED' && <button type="button" onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-[10px] bg-slate-100 text-slate-600">DAY 2 再開</button>}
-          {config.gameStatus === 'FINAL_MISSION' && <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 col-span-2 bg-red-600 text-white rounded-xl font-black text-xs mt-2 shadow-lg">GAME OVER / RESULT</button>}
+    <div className="p-4 pb-36 space-y-6 text-slate-800 bg-slate-100 min-h-screen font-sans">
+      {/* トップヘッダー */}
+      <header className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+        <div>
+          <h1 className="text-lg font-black text-slate-900 flex items-center gap-2">
+            <Shield size={20} className="text-blue-600" />
+            運営管理ダッシュボード
+          </h1>
+          <p className="text-xs text-slate-500 font-medium">
+            セッション: {config.gameSessionId ? `${config.gameSessionId.slice(0, 12)}...` : '未初期化'}
+          </p>
         </div>
-      </section>
-          {/* AdminView.tsx の return 内 */}
-
-      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-        <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter">
-          <RefreshCw size={20} /> Role Management
-        </h3>
-        <div className="flex flex-col gap-3">
-          <div className="flex justify-between items-center px-4 py-2 bg-slate-50 rounded-2xl border border-slate-100">
-            <div className="text-[10px] font-black text-slate-500 uppercase">Current Status</div>
-            <div className="flex gap-2 font-bold text-xs">
-              <span className={config.teamARole === 'ONI' ? 'text-red-600' : 'text-blue-600'}>A:{config.teamARole}</span>
-              <span className="text-slate-300">/</span>
-              <span className={config.teamBRole === 'ONI' ? 'text-red-600' : 'text-blue-600'}>B:{config.teamBRole}</span>
-            </div>
-          </div>
-          
+        <div className="flex gap-2">
+          <Link
+            to="/map"
+            className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 transition-colors"
+          >
+            <MapPin size={14} /> マップへ
+          </Link>
           <button
             type="button"
-            onClick={handleForceRoleSwap}
-            disabled={isProcessing}
-            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"
+            onClick={() => setShowQrModal(true)}
+            className="px-3 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 flex items-center gap-1.5 shadow-sm transition-all"
           >
-            <RefreshCw size={18} /> 攻守を強制交代する
+            <QrCode size={14} /> 招待QR
+          </button>
+        </div>
+      </header>
+
+      {/* 🌟 1. かんたん初期化ウィザード */}
+      {!config.gameSessionId ? (
+        <section className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 rounded-3xl shadow-xl text-white">
+          <div className="flex items-center gap-2 text-blue-200 text-xs font-black uppercase tracking-wider mb-2">
+            <Sparkles size={16} /> First Time Setup
+          </div>
+          <h2 className="text-xl font-black mb-2">1クリック初期セットアップ</h2>
+          <p className="text-xs text-blue-100 leading-relaxed mb-5">
+            プログラミングやデータベース操作は一切不要です。<br />
+            下のボタンを押すと、ゲームセッションの発行と公式ミッション（36件）の登録が一括で完了します。
+          </p>
+          <button
+            type="button"
+            onClick={handleQuickSetupWizard}
+            disabled={sessionInitializationBusy || isProcessing}
+            className="w-full py-4 bg-white text-blue-800 rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2"
+          >
+            <Sparkles size={18} className="text-amber-500" />
+            {sessionInitializationBusy ? 'セットアップ実行中...' : '🚀 1クリックでゲームを一括初期化する'}
+          </button>
+        </section>
+      ) : (
+        <section className="rounded-2xl border-2 border-blue-100 bg-white p-4 shadow-sm flex justify-between items-center">
+          <div>
+            <h3 className="font-black text-xs text-slate-800">Game Session 状態</h3>
+            <p className="text-xs text-slate-500 font-mono mt-0.5">{config.gameSessionId}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleInitializeGameSession()}
+            disabled={sessionInitializationBusy || isProcessing}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+          >
+            状態確認
+          </button>
+        </section>
+      )}
+
+      {/* 📱 2. プレイヤー招待パネル */}
+      <section className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-black text-slate-800 flex items-center gap-2 text-sm uppercase">
+            <Users size={18} className="text-blue-600" />
+            参加者の招待（{users.length}名 登録中）
+          </h3>
+          <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">
+            A: {users.filter(u => u.team === 'A').length}名 / B: {users.filter(u => u.team === 'B').length}名
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 mb-3">
+          <input
+            type="text"
+            readOnly
+            value={inviteUrl}
+            className="flex-1 bg-transparent text-xs font-bold text-slate-600 outline-none truncate"
+          />
+          <button
+            type="button"
+            onClick={handleCopyInviteUrl}
+            className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black flex items-center gap-1 active:scale-95"
+          >
+            {copiedLink ? <Check size={14} /> : <Copy size={14} />}
+            {copiedLink ? 'コピー完了' : 'URLコピー'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={handleCopyInviteMessage}
+            className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+          >
+            <Copy size={14} />
+            {copiedText ? '案内文をコピー済' : 'LINE用案内文をコピー'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowQrModal(true)}
+            className="py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+          >
+            <QrCode size={14} />
+            QRコードを拡大表示
           </button>
         </div>
       </section>
 
+      {/* 🎮 3. フェーズ管理（1日・2日どちらでも自由進行） */}
+      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="font-black flex items-center gap-2 text-slate-800 uppercase tracking-tight text-sm">
+            <Play size={18} className="text-blue-600" />
+            進行コントロール
+          </h3>
+          <span className="text-xs font-black px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+            {phaseLabel}
+          </span>
+        </div>
 
+        <div className="grid grid-cols-2 gap-2.5">
+          {config.gameStatus === 'PRE_GAME' && (
+            <button
+              type="button"
+              onClick={() => handlePhaseAction('START_DAY1')}
+              disabled={isProcessing}
+              className="col-span-2 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-sm shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-all"
+            >
+              <Play size={18} /> DAY 1（ゲーム本戦）を開始する
+            </button>
+          )}
 
-      {/* 1.5 特殊操作 */}
-      <section className="bg-amber-500 p-6 rounded-3xl shadow-xl text-white">
-        <h3 className="font-black flex items-center gap-2 mb-4 uppercase tracking-tighter"><MapPin size={20} /> Special Command</h3>
-        <div className="space-y-4">
-        <div className="bg-white/10 p-3 rounded-2xl border border-white/20">
-            <span className="block text-[9px] font-black uppercase opacity-70 mb-1">Next Reveal Time</span>
-            <div className="text-[10px] font-black text-white/70 mb-2">
-              {config.nextRevealTime
-                ? `現在: ${new Date(config.nextRevealTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                : '未設定'}
+          {config.gameStatus === 'DAY1_ACTIVE' && (
+            <>
+              <button type="button" onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3.5 rounded-xl font-black text-xs bg-slate-100 text-slate-700 hover:bg-slate-200">
+                ⏸ 一時停止
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('END_DAY1')} disabled={isProcessing} className="p-3.5 rounded-xl font-black text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200">
+                🌙 DAY 1 終了（宿へ）
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="col-span-2 py-3.5 bg-gradient-to-r from-red-600 to-amber-600 text-white rounded-xl font-black text-xs shadow-md flex items-center justify-center gap-1.5">
+                🔥 最終ミッション開始（1日制クライマックス）
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="col-span-2 py-2.5 bg-slate-800 text-white rounded-xl font-bold text-xs">
+                🏁 ゲーム終了・結果発表へ
+              </button>
+            </>
+          )}
+
+          {config.gameStatus === 'DAY1_PAUSED' && (
+            <>
+              <button type="button" onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="col-span-2 py-3.5 bg-emerald-600 text-white rounded-xl font-black text-xs shadow-md">
+                ▶ DAY 1 を再開する
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 bg-red-600 text-white rounded-xl font-bold text-xs">
+                🔥 最終ミッションへ
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 bg-slate-800 text-white rounded-xl font-bold text-xs">
+                🏁 結果発表へ
+              </button>
+            </>
+          )}
+
+          {config.gameStatus === 'DAY1_ENDED' && (
+            <>
+              <button type="button" onClick={() => handlePhaseAction('START_DAY2')} disabled={isProcessing} className="col-span-2 py-3.5 bg-blue-600 text-white rounded-2xl font-black text-sm shadow-md">
+                ☀️ DAY 2 を開始する（2日目）
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 bg-red-600 text-white rounded-xl font-black text-xs">
+                🔥 最終ミッションを実施
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 bg-slate-800 text-white rounded-xl font-bold text-xs">
+                🏁 ゲーム終了（結果発表）
+              </button>
+            </>
+          )}
+
+          {config.gameStatus === 'DAY2_ACTIVE' && (
+            <>
+              <button type="button" onClick={() => handlePhaseAction('PAUSE')} disabled={isProcessing} className="p-3 rounded-xl font-bold text-xs bg-slate-100 text-slate-700">
+                ⏸ 一時停止
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 bg-red-600 text-white rounded-xl font-black text-xs shadow-md">
+                🔥 最終ミッション開始
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="col-span-2 py-2.5 bg-slate-800 text-white rounded-xl font-bold text-xs">
+                🏁 結果発表へ
+              </button>
+            </>
+          )}
+
+          {config.gameStatus === 'DAY2_PAUSED' && (
+            <>
+              <button type="button" onClick={() => handlePhaseAction('RESUME')} disabled={isProcessing} className="col-span-2 py-3 bg-blue-600 text-white rounded-xl font-black text-xs">
+                ▶ DAY 2 再開
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('START_FINAL')} disabled={isProcessing} className="p-3 bg-red-600 text-white rounded-xl font-bold text-xs">
+                🔥 最終ミッションへ
+              </button>
+              <button type="button" onClick={() => handlePhaseAction('END_GAME')} disabled={isProcessing} className="p-3 bg-slate-800 text-white rounded-xl font-bold text-xs">
+                🏁 結果発表へ
+              </button>
+            </>
+          )}
+
+          {config.gameStatus === 'FINAL_MISSION' && (
+            <button
+              type="button"
+              onClick={() => handlePhaseAction('END_GAME')}
+              disabled={isProcessing}
+              className="col-span-2 py-4 bg-red-600 text-white rounded-2xl font-black text-sm shadow-xl active:scale-95"
+            >
+              🏁 全工程終了・結果発表を表示
+            </button>
+          )}
+
+          {config.gameStatus === 'GAME_OVER' && (
+            <div className="col-span-2 p-3 bg-slate-100 rounded-xl text-center text-xs font-bold text-slate-600">
+              全行程終了済み。下部のマスターリセットから新しいセッションを開始できます。
             </div>
-            
-            <p className="text-xs font-bold text-white/80">時刻の直接変更はSecurity Rules強化に伴い停止中です。</p>
-          </div>
-        <div className="bg-white/10 p-3 rounded-2xl border border-white/20">
-            <label htmlFor="duration-input" className="block text-[9px] font-black uppercase opacity-70 mb-1">Search Duration (Min)</label>            <div className="flex items-center gap-3">
-              <input id="duration-input" type="number" min={1} max={30} step={1} value={searchDuration} onChange={(e) => setSearchDuration(Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 1)))} className="w-20 bg-white text-amber-600 font-black px-3 py-2 rounded-xl outline-none text-center" />
-              <span className="font-black text-xs">分間に設定中</span>
-            </div>
-          </div>
-          <button type="button" onClick={() => void handleLocationReveal('GLOBAL')} disabled={isProcessing} className="w-full py-4 bg-white text-amber-600 rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2">全員スナップショット公開</button>
-          <div className="grid grid-cols-2 gap-3 pt-2 border-t border-white/20">
-            <button type="button" onClick={() => void handleLocationReveal('TEAM_A')} disabled={isProcessing} className="py-3 bg-red-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team A サーチ</button>
-            <button type="button" onClick={() => void handleLocationReveal('TEAM_B')} disabled={isProcessing} className="py-3 bg-blue-600 text-white rounded-2xl font-black text-[10px] shadow-lg border border-white/10">🔍 Team B サーチ</button>
-          </div>
+          )}
         </div>
       </section>
 
-      {/* 1.6 ランダムペナルティ */}
-      <section className="bg-slate-800 p-6 rounded-3xl shadow-xl text-white border-2 border-red-500/30">
-        <h3 className="font-black flex items-center gap-2 mb-1 text-red-500"><AlertTriangle size={20} /> Penalty Roulette</h3>
-        <p className="text-[10px] text-white/50 font-bold mb-4 uppercase">ミッション失敗時などのランダム罰</p>
-        <div className="grid grid-cols-2 gap-3">
-          <button type="button" disabled className="py-4 bg-red-600/20 text-red-500/50 rounded-2xl font-black text-xs border border-red-600/30">Team A へ</button>
-          <button type="button" disabled className="py-4 bg-blue-600/20 text-blue-500/50 rounded-2xl font-black text-xs border border-blue-600/30">Team B へ</button>
+      {/* 🔄 4. 攻守交代 */}
+      <section className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+        <h3 className="font-black flex items-center gap-2 mb-3 text-slate-700 text-sm uppercase">
+          <RefreshCw size={18} className="text-slate-700" />
+          攻守管理（鬼・逃走者）
+        </h3>
+        <div className="flex justify-between items-center px-4 py-2.5 bg-slate-50 rounded-2xl border border-slate-100 mb-3">
+          <div className="text-[10px] font-black text-slate-500 uppercase">現在ステータス</div>
+          <div className="flex gap-2 font-black text-xs">
+            <span className={config.teamARole === 'ONI' ? 'text-red-600' : 'text-blue-600'}>
+              Team A: {config.teamARole === 'ONI' ? '👹 鬼' : '🏃 逃走者'}
+            </span>
+            <span className="text-slate-300">/</span>
+            <span className={config.teamBRole === 'ONI' ? 'text-red-600' : 'text-blue-600'}>
+              Team B: {config.teamBRole === 'ONI' ? '👹 鬼' : '🏃 逃走者'}
+            </span>
+          </div>
         </div>
-        <p className="mt-3 text-[10px] font-bold text-white/60">通知・Penalty送信はTrusted操作への移行まで停止中です。</p>
-        {config.broadcastMessage && <p className="text-[10px] text-white/60">表示中の通知は直接消去できません。</p>}
-
-      </section>
-
-      {/* 2. ミッション管理 */}
-      <section className="bg-indigo-600 p-6 rounded-3xl shadow-xl text-white">
-        <h3 className="font-black flex items-center gap-2 mb-4"><Shuffle size={20} /> Mission Control</h3>
-        
-        <button 
+        <button
           type="button"
-          onClick={handleToggleMissionMode}
+          onClick={handleForceRoleSwap}
           disabled={isProcessing}
-          className="w-full mb-4 py-2 rounded-xl border border-white/30 text-[11px] font-black flex items-center justify-center gap-2 bg-white/10 active:bg-white/20 transition-all disabled:opacity-50"
+          className="w-full py-3 bg-slate-900 text-white rounded-xl font-black text-xs shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"
         >
-          配信モード：{config.missionMode === 'SAME' ? '🔗 両チーム同一' : '🔀 チーム別'}
+          <RefreshCw size={16} /> 攻守を強制交代する（30分待機付与）
         </button>
+      </section>
 
-        <div className="space-y-2 mb-4">
-          {(['A', 'B'] as const).map(t => {
-            const m = t === 'A' ? currentMissionA : currentMissionB;
-            return (
-              <div key={t} className="bg-white/10 rounded-2xl p-3 flex items-start justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="text-[9px] font-black text-white/50 uppercase">Team {t} Status</div>
-                  <p className="text-xs font-bold text-white leading-snug">{m ? m.title : '未配信'}</p>
-                </div>
-                <span title="Mission CompletionのUndoは行いません。Team Score欄の監査付き補正を使用してください" className="shrink-0 px-2 py-1 bg-white/10 rounded-lg text-[9px] font-bold text-white/50">Undo不可</span>
-              </div>
-            );
-          })}
+      {/* 🎯 5. ノーコード・ミッション管理センター */}
+      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="font-black flex items-center gap-2 text-slate-900 text-sm uppercase">
+            <Shuffle size={18} className="text-indigo-600" />
+            ミッション管理センター
+          </h3>
+          <button
+            type="button"
+            onClick={() => { setEditingMission(null); setIsMissionModalOpen(true); }}
+            className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-black flex items-center gap-1 shadow-sm active:scale-95"
+          >
+            <Plus size={14} /> 新規作成
+          </button>
         </div>
 
-        <button type="button" onClick={handleShuffleMissions} disabled={isProcessing} className="w-full py-4 bg-white text-indigo-700 rounded-2xl font-black text-lg shadow-lg mb-6 active:scale-95 transition-all">🎲 ランダム配信実行</button>
+        {/* タブ切り替え */}
+        <div className="grid grid-cols-3 p-1 bg-slate-100 rounded-2xl mb-4 text-xs font-black">
+          <button
+            type="button"
+            onClick={() => setMissionTab('DISPATCH')}
+            className={`py-2 rounded-xl transition-all ${
+              missionTab === 'DISPATCH' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'
+            }`}
+          >
+            🎮 配信中
+          </button>
+          <button
+            type="button"
+            onClick={() => setMissionTab('CATALOG')}
+            className={`py-2 rounded-xl transition-all ${
+              missionTab === 'CATALOG' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'
+            }`}
+          >
+            📋 一覧（{allMissionsList.length}）
+          </button>
+          <button
+            type="button"
+            onClick={() => setMissionTab('COMPLETIONS')}
+            className={`py-2 rounded-xl transition-all ${
+              missionTab === 'COMPLETIONS' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'
+            }`}
+          >
+            🏆 達成承認（{liveCompletions.length}）
+          </button>
+        </div>
 
-        <div className="pt-4 border-t border-white/20">
-          <label htmlFor="mission-select" className="block text-[10px] font-black opacity-70 mb-2 uppercase tracking-widest text-center">Manual Mission Assign</label>
-          <select id="mission-select" value={manualMissionId} onChange={(e) => setManualMissionId(e.target.value)} className="w-full p-3 bg-white text-slate-800 rounded-xl text-xs font-bold mb-3 outline-none">
-            <option value="">ミッションを選択してください</option>
-            {MISSIONS.map(m => <option key={m.id} value={m.id}>[{m.points}pt] {m.title}</option>)}
-          </select>
-          <div className="grid grid-cols-2 gap-3">
-            <button type="button" onClick={() => handleManualAssign('A')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Aに指定配信</button>
-            <button type="button" onClick={() => handleManualAssign('B')} disabled={isProcessing} className="py-2 bg-white/20 text-white rounded-xl text-[10px] font-black border border-white/30 active:bg-white/40 disabled:opacity-50">Bに指定配信</button>
+        {/* タブ1: 配信コントロール */}
+        {missionTab === 'DISPATCH' && (
+          <div className="space-y-4">
+            <button
+              type="button"
+              onClick={handleToggleMissionMode}
+              disabled={isProcessing}
+              className="w-full py-2.5 rounded-xl border border-indigo-200 text-xs font-black flex items-center justify-center gap-2 bg-indigo-50 text-indigo-700 active:bg-indigo-100"
+            >
+              配信モード：{config.missionMode === 'SAME' ? '🔗 両チーム同一' : '🔀 チーム別'}
+            </button>
+
+            {/* A・Bチーム配信状況カード */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(['A', 'B'] as const).map(t => {
+                const m = t === 'A' ? currentMissionA : currentMissionB;
+                return (
+                  <div key={t} className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        t === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
+                      }`}>
+                        Team {t} 配信中
+                      </span>
+                      {m && <span className="text-xs font-black text-indigo-600">+{m.points}pt</span>}
+                    </div>
+                    <h4 className="font-black text-slate-800 text-sm mb-1">{m ? m.title : '未配信'}</h4>
+                    <p className="text-[11px] text-slate-500 line-clamp-2 mb-3">
+                      {m ? m.description : 'ミッションを選択して配信してください'}
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleManualAssign(t)}
+                        disabled={isProcessing || !manualMissionId}
+                        className="flex-1 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-bold disabled:opacity-40"
+                      >
+                        指定ミッションを配信
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 手動指定配信セレクター */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+              <label htmlFor="assign-mission-select" className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5">
+                手動配信用のミッションを選択
+              </label>
+              <select
+                id="assign-mission-select"
+                value={manualMissionId}
+                onChange={e => setManualMissionId(e.target.value)}
+                className="w-full p-2 bg-white rounded-lg border border-slate-200 text-xs font-bold text-slate-800 mb-2 truncate"
+              >
+                <option value="">ミッションを選択してください...</option>
+                {allMissionsList.map(m => (
+                  <option key={m.id} value={m.id}>[{m.points}pt] {m.title}</option>
+                ))}
+              </select>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleManualAssign('A')}
+                  disabled={isProcessing || !manualMissionId}
+                  className="py-1.5 bg-red-50 text-red-700 border border-red-200 rounded-lg text-xs font-black disabled:opacity-40"
+                >
+                  Team A に配信
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleManualAssign('B')}
+                  disabled={isProcessing || !manualMissionId}
+                  className="py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-black disabled:opacity-40"
+                >
+                  Team B に配信
+                </button>
+              </div>
+            </div>
+
+            {/* 一括ランダム・同期 */}
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleShuffleMissions}
+                disabled={isProcessing}
+                className="py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-xs shadow-md flex items-center justify-center gap-1.5"
+              >
+                <Shuffle size={14} /> 🎲 ランダム再選定
+              </button>
+              <button
+                type="button"
+                onClick={handleSyncMissionCatalog}
+                disabled={isProcessing}
+                className="py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs"
+              >
+                🔄 公式36件を再同期
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* タブ2: ミッション一覧・作成・編集 */}
+        {missionTab === 'CATALOG' && (
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={missionSearch}
+              onChange={e => setMissionSearch(e.target.value)}
+              placeholder="ミッション名やキーワードで検索..."
+              className="w-full px-3.5 py-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold outline-none focus:border-indigo-500"
+            />
+
+            <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
+              {filteredMissions.map(m => (
+                <div key={m.id} className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col gap-2">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
+                          {m.points}pt
+                        </span>
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">
+                          {m.type === 'PHOTO' ? '📸 写真' : '📍 駅チェックイン'}
+                        </span>
+                      </div>
+                      <h4 className="text-xs font-black text-slate-900 leading-snug">{m.title}</h4>
+                      <p className="text-[10px] text-slate-500 line-clamp-2 mt-0.5">{m.description}</p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => { setEditingMission(m); setIsMissionModalOpen(true); }}
+                        className="p-1.5 text-slate-500 hover:text-slate-900 bg-white rounded-lg border border-slate-200"
+                        title="編集"
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMission(m)}
+                        className="p-1.5 text-red-500 hover:text-red-700 bg-white rounded-lg border border-slate-200"
+                        title="削除"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-1 border-t border-slate-200/60">
+                    <button
+                      type="button"
+                      onClick={() => handleManualAssign('A', m.id)}
+                      disabled={isProcessing}
+                      className="flex-1 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg text-[10px] font-black border border-red-200"
+                    >
+                      Aに配信
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleManualAssign('B', m.id)}
+                      disabled={isProcessing}
+                      className="flex-1 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-[10px] font-black border border-blue-200"
+                    >
+                      Bに配信
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* タブ3: 達成承認・手動スコア付与 */}
+        {missionTab === 'COMPLETIONS' && (
+          <div className="space-y-4">
+            {/* 手動達成承認ツール */}
+            <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl">
+              <h4 className="text-xs font-black text-indigo-900 mb-2 flex items-center gap-1.5">
+                <Award size={14} /> 管理者手動達成承認（ポイント即時加算）
+              </h4>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <select
+                  value={manualAwardTeam}
+                  onChange={e => setManualAwardTeam(e.target.value as 'A' | 'B')}
+                  className="p-2 bg-white rounded-xl border border-indigo-200 text-xs font-bold text-slate-800"
+                >
+                  <option value="A">Team A に加算</option>
+                  <option value="B">Team B に加算</option>
+                </select>
+                <select
+                  value={manualAwardMissionId}
+                  onChange={e => setManualAwardMissionId(e.target.value)}
+                  className="p-2 bg-white rounded-xl border border-indigo-200 text-xs font-bold text-slate-800 truncate"
+                >
+                  <option value="">ミッションを選択...</option>
+                  {allMissionsList.map(m => (
+                    <option key={m.id} value={m.id}>[{m.points}pt] {m.title}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={handleAdminAwardMission}
+                disabled={isProcessing || !manualAwardMissionId}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black disabled:opacity-50 transition-all shadow-sm"
+              >
+                達成を承認してポイントを加算
+              </button>
+            </div>
+
+            {/* リアルタイム達成フィード */}
+            <div>
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">最近の達成履歴</h4>
+              <div className="max-h-60 overflow-y-auto space-y-2">
+                {liveCompletions.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-4">まだ達成報告はありません</p>
+                ) : (
+                  liveCompletions.slice(0, 20).map(c => {
+                    const mission = allMissionsList.find(m => m.id === c.missionId);
+                    return (
+                      <div key={c.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs flex justify-between items-center">
+                        <div>
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
+                              c.team === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
+                            }`}>
+                              Team {c.team}
+                            </span>
+                            <span className="font-black text-slate-800">{mission?.title || c.missionId}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400">報告者: {c.completedBy}</span>
+                        </div>
+                        <span className="font-black text-emerald-600 shrink-0">+{c.points}pt</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* 6. スナップショット強制位置公開 */}
+      <section className="bg-amber-500 p-6 rounded-3xl shadow-xl text-white">
+        <h3 className="font-black flex items-center gap-2 mb-3 uppercase tracking-tight text-sm">
+          <MapPin size={18} /> 位置強制公開（スナップショット）
+        </h3>
+        <div className="space-y-3">
+          <div className="bg-white/10 p-3 rounded-2xl border border-white/20 flex items-center justify-between">
+            <span className="text-xs font-bold">公開時間（分）</span>
+            <input
+              type="number"
+              min={1}
+              max={30}
+              value={searchDuration}
+              onChange={e => setSearchDuration(Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 1)))}
+              className="w-16 bg-white text-amber-700 font-black p-1.5 rounded-lg text-center text-xs"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleLocationReveal('GLOBAL')}
+            disabled={isProcessing}
+            className="w-full py-3.5 bg-white text-amber-700 rounded-2xl font-black text-sm shadow-md active:scale-95"
+          >
+            全員の現在地を公開
+          </button>
+          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-white/20">
+            <button
+              type="button"
+              onClick={() => void handleLocationReveal('TEAM_A')}
+              disabled={isProcessing}
+              className="py-2.5 bg-red-600 text-white rounded-xl font-bold text-xs shadow-md border border-white/10"
+            >
+              Team A のみ公開
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleLocationReveal('TEAM_B')}
+              disabled={isProcessing}
+              className="py-2.5 bg-blue-600 text-white rounded-xl font-bold text-xs shadow-md border border-white/10"
+            >
+              Team B のみ公開
+            </button>
           </div>
         </div>
       </section>
 
-
+      {/* 7. SOS緊急マップ */}
       {projectionUnavailable && (
         <p role="status" className="rounded-2xl bg-amber-100 p-4 text-sm font-bold text-amber-900">
-          Emergency位置を読み込めません。最新位置は管理画面で確認できない場合があります。
+          Emergency位置を読み込めません。
         </p>
       )}
       <EmergencyProjectionMap projections={emergencyProjections} users={users} />
 
-      {/* 3. プレイヤー管理 */}
-      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-        <h3 className="font-black flex items-center gap-2 mb-4 text-slate-700 uppercase tracking-tighter"><Users size={20} /> Players ({users.length})</h3>
-        <p className="mb-3 text-xs font-bold text-slate-500">安全なPlayer削除機能へ移行するまで、個別削除は利用できません。</p>
-        <div className="space-y-3">
+      {/* 8. プレイヤー一覧 */}
+      <section className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+        <h3 className="font-black flex items-center gap-2 mb-3 text-slate-800 uppercase tracking-tight text-sm">
+          <Users size={18} className="text-blue-600" />
+          参加プレイヤー ({users.length}名)
+        </h3>
+        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
           {users.map(u => (
-            <div key={u.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex justify-between items-center">
+            <div key={u.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
               <div>
-                <div className="text-sm font-black text-slate-800">{u.name}</div>
+                <div className="text-xs font-black text-slate-800">{u.name}</div>
                 <div className="flex gap-1 mt-1">
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${u.team === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>TEAM {u.team}</span>
-                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">{u.role}</span>
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${u.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>{u.status}</span>
+                  <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
+                    u.team === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
+                  }`}>TEAM {u.team}</span>
+                  <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-600">{u.role}</span>
+                  <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
+                    u.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'
+                  }`}>{u.status}</span>
                 </div>
               </div>
-            <div className="flex gap-1.5">
-                {/* 1. 【復活】役割の個別入れ替えボタン（シールド） */}
-                <button
-                  type="button"
-                  disabled
-                  title="個別Role変更はTrusted操作へ移行するまで停止中です。"
-                  className={`p-2 rounded-xl border opacity-40 ${u.role === 'ONI' ? 'bg-slate-900 text-white' : 'bg-white text-slate-400'}`}
-                >
-                  <Shield size={16} />
-                </button>
-
-                {/* 2. すべての待機状態から復帰させるボタン */}
-                <button
-                  type="button"
-                  onClick={() => void handleResumePlayer(u)}
-                  disabled={resumingPlayerIds.has(u.id)}
-                  className="p-2 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 active:bg-emerald-100 disabled:opacity-50"
-                >
-                  <RefreshCw size={16} />
-                </button>
-
-                {/* 3. 削除ボタン */}
-                <button
-                  type="button"
-                  disabled
-                  title="安全なPlayer削除機能へ移行予定です。"
-                  className="p-2 bg-red-50 text-red-300 rounded-xl border border-red-100 cursor-not-allowed"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => void handleResumePlayer(u)}
+                disabled={resumingPlayerIds.has(u.id)}
+                title="待機状態から復帰させる"
+                className="p-2 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100 active:bg-emerald-100"
+              >
+                <RefreshCw size={14} />
+              </button>
             </div>
           ))}
         </div>
       </section>
 
-      {/* 4. スコア管理 */}
-      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-        <h3 className="font-black mb-4 flex items-center gap-2 text-slate-700 uppercase tracking-tighter"><Trophy size={20} /> Team Score</h3>
-        <div className="grid grid-cols-2 gap-4 mb-4">
+      {/* 9. スコア補正 */}
+      <section className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+        <h3 className="font-black mb-3 flex items-center gap-2 text-slate-800 text-sm uppercase">
+          <Trophy size={18} className="text-amber-500" />
+          スコア手動補正
+        </h3>
+        <div className="grid grid-cols-2 gap-3 mb-3">
           {(['A', 'B'] as const).map(t => (
-            <div key={t} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
-              <div className="text-[10px] font-black text-slate-400 mb-1 uppercase">Team {t}</div>
-              <div className="text-2xl font-black text-slate-800">{t === 'A' ? (config.teamAScore ?? 0) : (config.teamBScore ?? 0)} <span className="text-xs">pt</span></div>
+            <div key={t} className="p-3 bg-slate-50 rounded-2xl border border-slate-100 text-center">
+              <div className="text-[10px] font-black text-slate-400 uppercase">Team {t}</div>
+              <div className="text-xl font-black text-slate-900">{t === 'A' ? (config.teamAScore ?? 0) : (config.teamBScore ?? 0)} <span className="text-xs">pt</span></div>
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="text-[10px] font-black text-slate-500">対象チーム
-            <select aria-label="補正対象チーム" value={scoreTeam} onChange={event => setScoreTeam(event.target.value as 'A' | 'B')} className="mt-1 w-full p-2 border rounded-xl text-sm text-slate-800">
-              <option value="A">Team A</option><option value="B">Team B</option>
-            </select>
-          </label>
-          <label className="text-[10px] font-black text-slate-500">増減値（-1000〜1000）
-            <input aria-label="スコア増減値" type="number" step="1" value={scoreDeltaInput} onChange={event => setScoreDeltaInput(event.target.value)} className="mt-1 w-full p-2 border rounded-xl text-sm text-slate-800" placeholder="例: 5 / -3" />
-          </label>
-          <label className="col-span-2 text-[10px] font-black text-slate-500">理由
-            <select aria-label="補正理由" value={scoreReasonCode} onChange={event => setScoreReasonCode(event.target.value as ScoreAdjustmentReasonCode)} className="mt-1 w-full p-2 border rounded-xl text-sm text-slate-800">
-              <option value="CORRECTION">スコア訂正</option><option value="BONUS">運営ボーナス</option><option value="PENALTY">運営ペナルティ</option><option value="OTHER">その他の運営調整</option>
-            </select>
-          </label>
+        <div className="grid grid-cols-2 gap-2">
+          <select value={scoreTeam} onChange={e => setScoreTeam(e.target.value as 'A' | 'B')} className="p-2 border rounded-xl text-xs font-bold text-slate-800">
+            <option value="A">Team A</option>
+            <option value="B">Team B</option>
+          </select>
+          <input
+            type="number"
+            value={scoreDeltaInput}
+            onChange={e => setScoreDeltaInput(e.target.value)}
+            className="p-2 border rounded-xl text-xs font-bold text-slate-800"
+            placeholder="増減値 (例: 10 / -5)"
+          />
         </div>
-        <button type="button" onClick={() => void handleAdjustTeamScore()} disabled={isProcessing} className="mt-3 w-full py-3 bg-indigo-600 text-white rounded-xl font-black disabled:opacity-50">スコア補正を実行</button>
-        {scoreAdjustmentResult && <p role="status" className="mt-3 text-center text-sm font-bold text-emerald-700">Team {scoreAdjustmentResult.team}: {scoreAdjustmentResult.previousScore} → {scoreAdjustmentResult.nextScore} pt{scoreAdjustmentResult.duplicate ? '（再送結果）' : ''}</p>}
+        <div className="mt-2">
+          <label htmlFor="score-reason-select" className="block text-[10px] font-black text-slate-500 mb-1">補正理由</label>
+          <select
+            id="score-reason-select"
+            value={scoreReasonCode}
+            onChange={e => setScoreReasonCode(e.target.value as ScoreAdjustmentReasonCode)}
+            className="w-full p-2 border rounded-xl text-xs font-bold text-slate-800"
+          >
+            <option value="CORRECTION">スコア訂正</option>
+            <option value="BONUS">運営ボーナス</option>
+            <option value="PENALTY">運営ペナルティ</option>
+            <option value="OTHER">その他の運営調整</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleAdjustTeamScore()}
+          disabled={isProcessing}
+          className="mt-2 w-full py-2.5 bg-indigo-600 text-white rounded-xl font-black text-xs disabled:opacity-50"
+        >
+          スコアを補正する
+        </button>
+        {scoreAdjustmentResult && (
+          <p role="status" className="mt-2 text-center text-xs font-bold text-emerald-700">
+            Team {scoreAdjustmentResult.team}: {scoreAdjustmentResult.previousScore} → {scoreAdjustmentResult.nextScore} pt
+          </p>
+        )}
       </section>
 
-      <div className="space-y-4">
-        <button type="button" onClick={handleSyncMissionCatalog} disabled={isProcessing} className="w-full py-4 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs border border-blue-100 mb-2 uppercase tracking-widest active:bg-blue-100 disabled:opacity-50">🔄 ミッションDB同期</button>
-        <section className="rounded-2xl border-2 border-red-100 bg-red-50 p-4 text-slate-800">
-          <h3 className="flex items-center gap-2 font-black text-red-700"><AlertTriangle size={18} /> Master Reset Preview</h3>
-          <p className="mt-2 text-xs font-bold text-slate-600">Previewのみです。実行後のロールバックはできません。Session対応が完了するまでResetは実行できません。</p>
-          <button type="button" onClick={() => void handlePrepareGameReset()} disabled={isProcessing} className="mt-3 w-full rounded-xl bg-red-600 py-3 font-black text-white disabled:opacity-50">{isProcessing ? 'Previewを取得中…' : 'Reset Previewを取得'}</button>
-          {resetPreview && <div className="mt-3 space-y-2 rounded-xl bg-white p-3 text-xs">
-            <p>対象Player: <strong>{resetPreview.participantCount}</strong></p>
-            <p>Private locations: <strong>{resetPreview.privateLocationCount}</strong></p>
-            <p>Exposed locations: <strong>{resetPreview.exposedLocationCount}</strong></p>
-            <p>Emergency projections: <strong>{resetPreview.emergencyProjectionCount}</strong></p>
-            <p>推定write数: <strong>{resetPreview.estimatedWriteCount}</strong> / 450</p>
-            <p>Current Session: <strong>{resetPreview.currentSessionId ?? 'legacy (未設定)'}</strong></p>
-            <p>提案Session: <strong>{resetPreview.proposedSessionId}</strong></p>
-            <p>Token期限: <strong>{new Date(resetPreview.expiresAt).toLocaleString()}</strong>（期限切れの場合はPreviewを再取得）</p>
-            {resetPreview.warningCodes.map(code => <p key={code} role="alert" className="font-bold text-amber-700">警告: {code}</p>)}
-            <label className="block pt-2 font-bold">確認のため RESET と入力
-              <input aria-label="Reset typed confirmation" value={resetConfirmationText} onChange={event => setResetConfirmationText(event.target.value)} className="mt-1 w-full rounded-lg border p-2" />
+      {/* 10. マスターリセット */}
+      <section className="rounded-2xl border-2 border-red-100 bg-red-50 p-4 text-slate-800">
+        <h3 className="flex items-center gap-2 font-black text-red-700 text-xs">
+          <AlertTriangle size={16} /> マスターリセット（新セッション開始）
+        </h3>
+        <p className="mt-1 text-[11px] font-medium text-slate-600">
+          現在のセッションを終了し、すべてをリセットして最初から再スタートします。
+        </p>
+        <button
+          type="button"
+          onClick={() => void handlePrepareGameReset()}
+          disabled={isProcessing}
+          className="mt-3 w-full rounded-xl bg-red-600 py-2.5 font-black text-white text-xs disabled:opacity-50"
+        >
+          {isProcessing ? '取得中...' : 'リセット確認画面を開く'}
+        </button>
+
+        {resetPreview && (
+          <div className="mt-3 space-y-2 rounded-xl bg-white p-3 text-xs">
+            <p>対象Player: <strong>{resetPreview.participantCount}名</strong></p>
+            <label className="block pt-1 font-bold">確認のため「RESET」と入力してください:
+              <input value={resetConfirmationText} onChange={e => setResetConfirmationText(e.target.value)} className="mt-1 w-full rounded-lg border p-2 text-xs" />
             </label>
-            <button type="button" onClick={() => void handleExecuteGameReset()} disabled className="mt-2 w-full rounded-xl bg-slate-300 py-3 font-black text-slate-600">Reset実行は無効です</button>
-          </div>}
-          {resetError && <p role="alert" className="mt-3 text-sm font-bold text-red-700">{resetError}</p>}
-          {resetSuccess && <p role="status" className="mt-3 text-sm font-bold text-emerald-700">{resetSuccess}</p>}
-        </section>
+            <button
+              type="button"
+              onClick={() => void handleExecuteGameReset()}
+              disabled={resetConfirmationText !== 'RESET'}
+              className="mt-2 w-full rounded-xl bg-red-600 py-2.5 font-black text-white disabled:bg-slate-300"
+            >
+              リセットを実行して新規ゲームを開始
+            </button>
+          </div>
+        )}
+        {resetError && <p role="alert" className="mt-2 text-xs font-bold text-red-700">{resetError}</p>}
+        {resetSuccess && <p role="status" className="mt-2 text-xs font-bold text-emerald-700">{resetSuccess}</p>}
+      </section>
+
+      {/* QRコード拡大モーダル */}
+      {showQrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-5" role="dialog">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl text-center">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-base font-black text-slate-900">参加用 QRコード</h3>
+              <button type="button" onClick={() => setShowQrModal(false)} className="p-1 text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex justify-center p-4 bg-white rounded-2xl border border-slate-100 shadow-inner mb-4">
+              {qrDataUri && (
+                <img src={qrDataUri} alt="参加用QRコード" className="w-44 h-44" />
+              )}
+            </div>
+
+            <p className="text-xs font-bold text-slate-600 mb-4">
+              参加者のスマートフォンでこのQRコードを読み取ってください。<br />
+              （アプリインストール・メール登録不要）
+            </p>
+
+            <button
+              type="button"
+              onClick={handleCopyInviteUrl}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-black text-xs shadow-md"
+            >
+              {copiedLink ? 'URLコピー完了！' : '参加URLをコピー'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ミッション作成・編集モーダル */}
+      {isMissionModalOpen && (
+        <MissionEditModal
+          initialMission={editingMission}
+          onSave={handleSaveCustomMission}
+          onClose={() => { setIsMissionModalOpen(false); setEditingMission(null); }}
+        />
+      )}
+    </div>
+  );
+};
+
+// ミッション編集・新規作成モーダル
+const MissionEditModal: React.FC<{
+  initialMission: Mission | null;
+  onSave: (m: Mission) => Promise<void>;
+  onClose: () => void;
+}> = ({ initialMission, onSave, onClose }) => {
+  const [title, setTitle] = useState(initialMission?.title || '');
+  const [description, setDescription] = useState(initialMission?.description || '');
+  const [points, setPoints] = useState(initialMission?.points || 20);
+  const [type, setType] = useState<'PHOTO' | 'CHECKIN'>(initialMission?.type || 'PHOTO');
+  const [area, setArea] = useState(initialMission?.area || 'ALL');
+  const [busy, setBusy] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    const mission: Mission = {
+      id: initialMission?.id || `custom_${Date.now()}`,
+      title: title.trim(),
+      description: description.trim(),
+      points: Number(points) || 20,
+      type,
+      area: area || 'ALL',
+      region: 'ALL',
+    };
+    try {
+      await onSave(mission);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-5 font-sans" role="dialog">
+      <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl text-slate-800">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-base font-black text-slate-900">
+            {initialMission ? 'ミッションを編集' : '新規ミッション作成'}
+          </h3>
+          <button type="button" onClick={onClose} disabled={busy} className="p-1 text-slate-400">
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label htmlFor="mission-modal-title" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">
+              ミッション名（タイトル）
+            </label>
+            <input
+              id="mission-modal-title"
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="例: 新宿駅の東口で写真を撮れ"
+              className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+              required
+            />
+          </div>
+
+          <div>
+            <label htmlFor="mission-modal-desc" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">
+              詳細説明
+            </label>
+            <textarea
+              id="mission-modal-desc"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="達成条件や撮影ルールなどを記載"
+              rows={3}
+              className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-medium"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label htmlFor="mission-modal-points" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">
+                獲得ポイント
+              </label>
+              <select
+                id="mission-modal-points"
+                value={points}
+                onChange={e => setPoints(Number(e.target.value))}
+                className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+              >
+                <option value={15}>15 pt（手軽）</option>
+                <option value={20}>20 pt（普通）</option>
+                <option value={25}>25 pt（中級）</option>
+                <option value={30}>30 pt（上級）</option>
+                <option value={50}>50 pt（超上級）</option>
+                <option value={100}>100 pt（クライマックス）</option>
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="mission-modal-type" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">
+                タイプ
+              </label>
+              <select
+                id="mission-modal-type"
+                value={type}
+                onChange={e => setType(e.target.value as 'PHOTO' | 'CHECKIN')}
+                className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+              >
+                <option value="PHOTO">📸 写真撮影</option>
+                <option value="CHECKIN">📍 駅チェックイン</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="mission-modal-area" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">
+              エリア / 路線（任意）
+            </label>
+            <input
+              id="mission-modal-area"
+              type="text"
+              value={area}
+              onChange={e => setArea(e.target.value)}
+              placeholder="ALL / 山手線 など"
+              className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+            />
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="flex-1 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black text-xs shadow-md"
+            >
+              {busy ? '保存中...' : '保存する'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

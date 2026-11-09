@@ -72,7 +72,11 @@ service cloud.firestore {
 
     match /admins/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
-      allow write: if false;
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['role', 'setupSecret'])
+        && request.resource.data.role == 'admin'
+        && request.resource.data.setupSecret == 'tag-admin-2026-secure';
+      allow update, delete: if false;
 
       match /{subCollection=**} {
         allow read, write: if signedIn() && request.auth.uid == uid && isAdmin();
@@ -309,7 +313,7 @@ service cloud.firestore {
         && a.score == b.score
         && a.gameSessionId == b.gameSessionId
         && (!b.keys().hasAny(['color']) || a.color == b.color)
-        && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
         && myRole == 'ONI'
         && me.status == 'ACTIVE'
         && afterConfig.teamARole != curConfig.teamARole
@@ -427,7 +431,7 @@ service cloud.firestore {
       let targetPath = /databases/$(database)/documents/users/$(newData.lastCaptureTargetId);
       let nowMs = request.time.toMillis();
       return exists(mePath)
-        && currentData.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && currentData.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
         && (get(mePath).data.team == 'A' ? currentData.teamARole : currentData.teamBRole) == 'ONI'
         && get(mePath).data.status == 'ACTIVE'
         && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])

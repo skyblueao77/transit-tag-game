@@ -2,11 +2,12 @@ import {
   collection,
   doc,
   onSnapshot,
-
+  query,
+  where,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './firebaseClient';
-import type { EmergencyLocationProjection, ExposedLocation, GameConfig, Mission, PrivateLocation, User } from '../../../types';
+import type { EmergencyLocationProjection, ExposedLocation, GameConfig, Mission, MissionCompletion, PrivateLocation, User } from '../../../types';
 import {
   mapEmergencyLocationProjection,
   mapExposedLocationDocuments,
@@ -151,3 +152,22 @@ export function subscribeGameConfig(
     onValue(defaults);
   }, onError);
 }
+
+export function subscribeMissionCompletions(
+  expectedSessionId: string,
+  onValue: (completions: Array<MissionCompletion & { id: string }>) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  const q = query(
+    collection(db, 'missionCompletions'),
+    where('gameSessionId', '==', expectedSessionId),
+  );
+  return onSnapshot(q, snapshot => {
+    const completions = snapshot.docs.map(document => ({
+      id: document.id,
+      ...(document.data() as MissionCompletion),
+    }));
+    onValue(completions);
+  }, onError);
+}
+
