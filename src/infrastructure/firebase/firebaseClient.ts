@@ -21,21 +21,12 @@ const firebaseConfig = {
 
 // 2. 初期化
 const app = initializeApp(firebaseConfig);
-const dbInstance = getFirestore(app);
 
-// 3. エミュレータ接続設定（ローカル開発・テスト用: Sparkプラン対応）
+// 3. ローカル判定
 const isLocal = (typeof window !== 'undefined' && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
   || (typeof process !== 'undefined' && (process.env.FIRESTORE_EMULATOR_HOST || process.env.NODE_ENV === 'test' || process.env.ENABLE_EMULATOR === 'true'));
 
-if (isLocal) {
-  try {
-    connectFirestoreEmulator(dbInstance, '127.0.0.1', 8080);
-  } catch {
-    // already connected
-  }
-}
-
-// 4. Auth初期化（ブラウザでは本物のgetAuth、Nodeテスト環境では差し替え可能なAuthオブジェクト）
+// 4. Auth初期化（Firestoreより先に初期化してコンポーネント未登録を防ぐ）
 let authInstance: Auth = { currentUser: null } as unknown as Auth;
 if (typeof window !== 'undefined') {
   authInstance = getAuth(app);
@@ -45,6 +36,16 @@ if (typeof window !== 'undefined') {
     } catch {
       // already connected
     }
+  }
+}
+
+// 5. Firestore初期化
+const dbInstance = getFirestore(app);
+if (isLocal) {
+  try {
+    connectFirestoreEmulator(dbInstance, '127.0.0.1', 8080);
+  } catch {
+    // already connected
   }
 }
 
