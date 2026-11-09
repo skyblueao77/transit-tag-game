@@ -11,6 +11,7 @@ import {
   formatDistanceMeters,
   formatSegmentLabel,
   formatStationLabel,
+  inferSegmentHeading,
 } from '../../src/game/stationInference.ts';
 
 const mockStations = [
@@ -206,4 +207,65 @@ test('findTransitSuggestion prioritizes AT_STATION when within station threshold
   assert.equal(suggestion.proximity, 'AT_STATION');
   assert.ok(suggestion.station?.name === '東京');
 });
+
+test('inferSegmentHeading detects heading and next station accurately', () => {
+  const stationA = { id: '1', name: '渋谷', lat: 35.658871, lng: 139.701238, lines: [] };
+  const stationB = { id: '2', name: '恵比寿', lat: 35.646685, lng: 139.710070, lines: [] };
+
+  // Case 1: Moving south-east (from Shibuya towards Ebisu)
+  const prevCoords = { latitude: 35.655, longitude: 139.703 };
+  const currCoords = { latitude: 35.652, longitude: 139.706 }; // moved ~400m towards Ebisu
+  const headingResult = inferSegmentHeading(currCoords, prevCoords, stationA, stationB);
+
+  assert.ok(headingResult !== null);
+  assert.equal(headingResult.headingStation.name, '恵比寿');
+  assert.equal(headingResult.originStation.name, '渋谷');
+  assert.ok(headingResult.alignment > 0.8);
+
+  // Case 2: Moving north-west (from Ebisu towards Shibuya)
+  const reverseHeading = inferSegmentHeading(prevCoords, currCoords, stationA, stationB);
+  assert.ok(reverseHeading !== null);
+  assert.equal(reverseHeading.headingStation.name, '渋谷');
+  assert.equal(reverseHeading.originStation.name, '恵比寿');
+  assert.ok(reverseHeading.alignment < -0.8);
+
+  // Case 3: Stationary / minimal movement (< 15m)
+  const tinyMove = { latitude: 35.6520001, longitude: 139.7060001 };
+  const stationaryResult = inferSegmentHeading(currCoords, tinyMove, stationA, stationB);
+  assert.equal(stationaryResult, null);
+});
+
+test('formatSegmentLabel formats directional label with next station (Phase 3)', () => {
+  const stA = { id: '1', name: '渋谷', lat: 0, lng: 0, lines: [] };
+  const stB = { id: '2', name: '恵比寿', lat: 0, lng: 0, lines: [] };
+
+  // Heading towards Ebisu
+  const labelTowardsEbisu = formatSegmentLabel('JR山手線', stA, stB, stB);
+  assert.equal(labelTowardsEbisu, 'JR山手線 渋谷〜恵比寿間 (次は恵比寿)');
+
+  // Heading towards Shibuya
+  const labelTowardsShibuya = formatSegmentLabel('JR山手線', stA, stB, stA);
+  assert.equal(labelTowardsShibuya, 'JR山手線 恵比寿〜渋谷間 (次は渋谷)');
+});
+
+test('findTransitSuggestion integrates heading to suggest next station when moving', () => {
+  const filePath = path.resolve('src/data/stations.json');
+  const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+  // Moving towards Ebisu from Shibuya
+  const prevCoords = { latitude: 35.6540, longitude: 139.7040 };
+  const currCoords = { latitude: 35.6520, longitude: 139.7060 };
+
+  const suggestion = findTransitSuggestion(currCoords, allStations, {
+    previousCoords: prevCoords,
+  });
+
+  assert.ok(suggestion !== null);
+  assert.equal(suggestion.type, 'SEGMENT');
+  assert.equal(suggestion.proximity, 'IN_TRANSIT');
+  assert.ok(suggestion.headingStation !== undefined);
+  assert.equal(suggestion.headingStation.name, '恵比寿');
+  assert.ok(suggestion.displayText.includes('(次は恵比寿)'));
+});
+
 

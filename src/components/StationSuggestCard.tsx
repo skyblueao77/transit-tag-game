@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useState } from 'react';
-import { Train, Check, ChevronDown, X, MapPin } from 'lucide-react';
+import { Train, Check, ChevronDown, X, MapPin, Zap } from 'lucide-react';
 import type { TransitSuggestion } from '../game/stationInference';
 
 interface Props {
@@ -9,6 +9,8 @@ interface Props {
   currentLastStation?: string;
   onConfirmStation: (stationName: string) => Promise<void>;
   onDismiss?: () => void;
+  isAutoUpdateEnabled?: boolean;
+  onToggleAutoUpdate?: (enabled: boolean) => void;
 }
 
 export const StationSuggestCard: React.FC<Props> = ({
@@ -17,6 +19,8 @@ export const StationSuggestCard: React.FC<Props> = ({
   currentLastStation,
   onConfirmStation,
   onDismiss,
+  isAutoUpdateEnabled = false,
+  onToggleAutoUpdate,
 }) => {
   const [showDropdown, setShowDropdown] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -134,6 +138,30 @@ export const StationSuggestCard: React.FC<Props> = ({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {onToggleAutoUpdate && (
+        <div className="pt-1.5 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
+          <span className="text-slate-400 flex items-center gap-1">
+            <Zap size={11} className={isAutoUpdateEnabled ? 'text-amber-400' : 'text-slate-500'} />
+            <span>現在地の自動反映</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => onToggleAutoUpdate(!isAutoUpdateEnabled)}
+            className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+              isAutoUpdateEnabled
+                ? 'bg-emerald-600/90 text-white shadow-sm shadow-emerald-900/50'
+                : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isAutoUpdateEnabled ? 'bg-white animate-pulse' : 'bg-slate-500'
+              }`}
+            />
+            <span>{isAutoUpdateEnabled ? 'オート ON' : 'オート OFF'}</span>
+          </button>
         </div>
       )}
     </aside>
