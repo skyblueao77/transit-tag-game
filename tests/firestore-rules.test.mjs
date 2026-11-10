@@ -809,6 +809,91 @@ describe('Firestore Security Rules', () => {
     assert.equal((await commitBatch(legitCaptureWrites, userBToken)).status, 200);
   });
 
+  test('P1 Exploit: rejects capture against target in protectionZone and supports SURVIVAL mode capture', async () => {
+    const survivalRunner = await auth('signUp', {});
+    const sRunnerUid = survivalRunner.localId;
+
+    const survivalOni = await auth('signUp', {});
+    const sOniUid = survivalOni.localId;
+    const sOniToken = survivalOni.idToken;
+
+    // Seed runner with GREEN_CAR protection
+    await seed(`users/${sRunnerUid}`, {
+      id: sRunnerUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Protected Runner', role: 'RUNNER',
+      status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0, waitingUntil: 0, protectionZone: 'GREEN_CAR',
+    });
+    // Seed ONI
+    await seed(`users/${sOniUid}`, {
+      id: sOniUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'Survival ONI', role: 'RUNNER',
+      status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0, waitingUntil: 0,
+    });
+    // Seed config in SURVIVAL mode
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+      sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false, victoryMode: 'SURVIVAL',
+      teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 0, teamBScore: 0, logs: [],
+    });
+
+    const configDocName = `projects/${projectId}/databases/(default)/documents/game_config/current`;
+    const runnerDocName = `projects/${projectId}/databases/(default)/documents/users/${sRunnerUid}`;
+    const now = Date.now();
+
+    // 1. Attempt to capture protected runner -> MUST FAIL (403)!
+    const protectedCaptureWrites = [
+      {
+        update: {
+          name: configDocName,
+          fields: fields({
+            gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+            sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false, victoryMode: 'SURVIVAL',
+            teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 0, teamBScore: 50, nextRevealTime: now,
+            lastCaptureTargetId: sRunnerUid, logs: [],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: runnerDocName,
+          fields: fields({
+            id: sRunnerUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'Protected Runner',
+            status: 'CAPTURED', score: 0, invincibleCards: 0, waitingUntil: 0, invincibleUntil: 0,
+          }).fields,
+        },
+      },
+    ];
+    assert.equal((await commitBatch(protectedCaptureWrites, sOniToken)).status, 403);
+
+    // 2. Clear protectionZone and re-attempt in SURVIVAL mode -> MUST SUCCEED (200)!
+    await seed(`users/${sRunnerUid}`, {
+      id: sRunnerUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Protected Runner', role: 'RUNNER',
+      status: 'ACTIVE', score: 0, invincibleCards: 0, invincibleUntil: 0, waitingUntil: 0, protectionZone: 'NONE',
+    });
+
+    const survivalCaptureWrites = [
+      {
+        update: {
+          name: configDocName,
+          fields: fields({
+            gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+            sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false, victoryMode: 'SURVIVAL',
+            teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 0, teamBScore: 50, nextRevealTime: now,
+            lastCaptureTargetId: sRunnerUid, logs: [],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: runnerDocName,
+          fields: fields({
+            id: sRunnerUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'Protected Runner',
+            status: 'CAPTURED', score: 0, invincibleCards: 0, waitingUntil: 0, invincibleUntil: 0, protectionZone: 'NONE',
+          }).fields,
+        },
+      },
+    ];
+    assert.equal((await commitBatch(survivalCaptureWrites, sOniToken)).status, 200);
+  });
+
   test('P0-SEC-01: one-time admin bootstrap succeeds for initial user and blocks subsequent escalations', async () => {
     // 1. Initial admin bootstrap: User creates system/admin_bootstrap and admins/{uid} in atomic batch
     const initialAdmin = await auth('signUp', { email: 'initial-admin@test.local', password: 'bootstrapPassword123' });

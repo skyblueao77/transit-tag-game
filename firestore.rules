@@ -338,6 +338,7 @@ service cloud.firestore {
       let me = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
       let myRole = me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
       let nowMs = request.time.toMillis();
+      let isSurvival = curConfig.keys().hasAny(['victoryMode']) && curConfig.victoryMode == 'SURVIVAL';
       return signedIn()
         && isCurrentParticipant(request.auth.uid)
         && hasNoCoordinates(a)
@@ -351,22 +352,31 @@ service cloud.firestore {
         && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
         && myRole == 'ONI'
         && me.status == 'ACTIVE'
-        && afterConfig.teamARole != curConfig.teamARole
+        && (!isSurvival ? afterConfig.teamARole != curConfig.teamARole : afterConfig.teamARole == curConfig.teamARole)
         && b.status != 'EMERGENCY'
         && b.status != 'RETIRED'
         && (
+          // Survival mode: only captured target becomes CAPTURED without waiting
+          (isSurvival
+           && b.team != me.team
+           && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
+           && a.status == 'CAPTURED'
+           && a.waitingUntil == 0
+           && a.invincibleUntil == 0)
           // Branch A: Captured side (opposing team b.team != me.team)
           // All players transition to WAITING (capped at 30 min + 60s) with invincibility cleared
-          (b.team != me.team
-           && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
-           && a.status == 'WAITING'
-           && a.waitingUntil is int
-           && a.waitingUntil > nowMs
-           && a.waitingUntil <= nowMs + 1860000
-           && a.invincibleUntil == 0)
+          || (!isSurvival
+              && b.team != me.team
+              && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
+              && a.status == 'WAITING'
+              && a.waitingUntil is int
+              && a.waitingUntil > nowMs
+              && a.waitingUntil <= nowMs + 1860000
+              && a.invincibleUntil == 0)
           // Branch B: Capturing side (own team b.team == me.team, including captor)
           // All players transition to ACTIVE, clear waiting, and receive exactly +1 invincibleCard
-          || (b.team == me.team
+          || (!isSurvival
+              && b.team == me.team
               && diff.hasOnly(['status', 'waitingUntil', 'invincibleCards'])
               && a.status == 'ACTIVE'
               && a.waitingUntil == 0
@@ -494,14 +504,13 @@ service cloud.firestore {
       let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
       let targetPath = /databases/$(database)/documents/users/$(newData.lastCaptureTargetId);
       let nowMs = request.time.toMillis();
+      let isSurvival = currentData.keys().hasAny(['victoryMode']) && currentData.victoryMode == 'SURVIVAL';
       return exists(mePath)
         && currentData.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
         && (get(mePath).data.team == 'A' ? currentData.teamARole : currentData.teamBRole) == 'ONI'
         && get(mePath).data.status == 'ACTIVE'
         && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])
-        && newData.nextRevealTime is int
-        && newData.nextRevealTime > nowMs
-        && newData.nextRevealTime <= nowMs + 1860000
+        && (!isSurvival ? (newData.nextRevealTime is int && newData.nextRevealTime > nowMs && newData.nextRevealTime <= nowMs + 1860000) : (newData.nextRevealTime is int))
         && (!currentData.keys().hasAny(['startTime']) || !(currentData.startTime is int) || nowMs >= currentData.startTime + 1800000)
         && newData.lastCaptureTargetId is string
         && exists(targetPath)
@@ -509,23 +518,32 @@ service cloud.firestore {
         && get(targetPath).data.team != get(mePath).data.team
         && get(targetPath).data.status == 'ACTIVE'
         && (!get(targetPath).data.keys().hasAny(['invincibleUntil']) || get(targetPath).data.invincibleUntil <= nowMs)
-        && getAfter(targetPath).data.status == 'WAITING'
-        && getAfter(targetPath).data.waitingUntil is int
-        && getAfter(targetPath).data.waitingUntil > nowMs
-        && getAfter(targetPath).data.waitingUntil <= nowMs + 1860000
+        && (!get(targetPath).data.keys().hasAny(['protectionZone']) || get(targetPath).data.protectionZone == 'NONE')
+        && (isSurvival
+            ? (getAfter(targetPath).data.status == 'CAPTURED'
+               && getAfter(targetPath).data.waitingUntil == 0
+               && newData.teamARole == currentData.teamARole
+               && newData.teamBRole == currentData.teamBRole
+               && (get(mePath).data.team == 'A'
+                   ? (newData.teamAScore == currentData.teamAScore + 50 && newData.teamBScore == currentData.teamBScore)
+                   : (newData.teamBScore == currentData.teamBScore + 50 && newData.teamAScore == currentData.teamAScore)))
+            : (getAfter(targetPath).data.status == 'WAITING'
+               && getAfter(targetPath).data.waitingUntil is int
+               && getAfter(targetPath).data.waitingUntil > nowMs
+               && getAfter(targetPath).data.waitingUntil <= nowMs + 1860000
+               && (get(mePath).data.team == 'A'
+                   ? (currentData.teamARole == 'ONI'
+                      && newData.teamARole == 'RUNNER'
+                      && newData.teamBRole == 'ONI'
+                      && newData.teamAScore == currentData.teamAScore + 50
+                      && newData.teamBScore == currentData.teamBScore)
+                   : (currentData.teamBRole == 'ONI'
+                      && newData.teamBRole == 'RUNNER'
+                      && newData.teamARole == 'ONI'
+                      && newData.teamBScore == currentData.teamBScore + 50
+                      && newData.teamAScore == currentData.teamAScore))))
         && newData.logs is list
-        && newData.logs.size() <= 200
-        && (get(mePath).data.team == 'A'
-            ? (currentData.teamARole == 'ONI'
-               && newData.teamARole == 'RUNNER'
-               && newData.teamBRole == 'ONI'
-               && newData.teamAScore == currentData.teamAScore + 50
-               && newData.teamBScore == currentData.teamBScore)
-            : (currentData.teamBRole == 'ONI'
-               && newData.teamBRole == 'RUNNER'
-               && newData.teamARole == 'ONI'
-               && newData.teamBScore == currentData.teamBScore + 50
-               && newData.teamAScore == currentData.teamAScore));
+        && newData.logs.size() <= 200;
     }
 
     function validParticipantConfigUpdate(configId) {
@@ -545,7 +563,7 @@ service cloud.firestore {
         && newData.isGameOver == currentData.isGameOver
         && (
           (diff.hasOnly(['logs']) && validLogOnlyConfigUpdate(currentData, newData, diff))
-          || (diff.hasAny(['teamARole', 'teamBRole']) && validCaptureConfigUpdate(currentData, newData, diff))
+          || (diff.hasAny(['teamARole', 'teamBRole', 'lastCaptureTargetId']) && validCaptureConfigUpdate(currentData, newData, diff))
           || (diff.hasAny(['teamAScore', 'teamBScore']) && validMissionScoreConfigUpdate(currentData, newData, diff))
         );
     }
