@@ -108,7 +108,7 @@ export function mapExposedLocationDocuments(
     const revealScope = data.revealScope;
     if (revealScope !== undefined
       && revealScope !== 'GLOBAL' && revealScope !== 'TEAM_A'
-      && revealScope !== 'TEAM_B') continue;
+      && revealScope !== 'TEAM_B' && revealScope !== 'PENALTY') continue;
     mapped[document.id] = {
       gameSessionId: data.gameSessionId,
       latitude: data.latitude,

@@ -42,6 +42,7 @@ export async function exposeLocation(
     longitude: privateLocation.longitude,
     capturedAt: input.now,
     expiresAt: input.now + input.duration,
+    ...(input.revealScope ? { revealScope: input.revealScope } : {}),
   };
 
   try {

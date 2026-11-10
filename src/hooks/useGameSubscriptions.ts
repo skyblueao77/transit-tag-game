@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import type { GameConfig, User, Mission, PrivateLocation, ExposedLocation } from '../../types';
 import { INITIAL_GAME_CONFIG } from '../../constants';
 import {
@@ -29,7 +29,7 @@ export function useGameSubscriptions(
   const [gameConfig, setGameConfig] = useState<GameConfig>(INITIAL_GAME_CONFIG);
   const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
   const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
-  const [lastBroadcastTime, setLastBroadcastTime] = useState(0);
+  const lastBroadcastTimeRef = useRef<number | null>(null);
 
   const exposedPlayerIdsJson = useMemo(
     () => JSON.stringify(allUsers.filter(user => user.team === 'A' || user.team === 'B').map(user => user.id)),
@@ -89,8 +89,13 @@ export function useGameSubscriptions(
       INITIAL_GAME_CONFIG,
       config => {
         setGameConfig(config);
-        if (config.broadcastTime > lastBroadcastTime && config.broadcastMessage) {
-          setLastBroadcastTime(config.broadcastTime);
+        const broadcastTs = config.broadcastTime ?? 0;
+        if (lastBroadcastTimeRef.current === null) {
+          lastBroadcastTimeRef.current = broadcastTs;
+          return;
+        }
+        if (config.broadcastMessage && broadcastTs > lastBroadcastTimeRef.current) {
+          lastBroadcastTimeRef.current = broadcastTs;
           onBroadcast?.(config.broadcastMessage);
         }
       },
@@ -99,7 +104,7 @@ export function useGameSubscriptions(
         onConfigError?.(error as Error);
       },
     );
-  }, [authUserId, lastBroadcastTime, onBroadcast, onConfigError]);
+  }, [authUserId, onBroadcast, onConfigError]);
 
   return {
     allUsers,

@@ -658,6 +658,21 @@ describe('Firestore Security Rules', () => {
     // 3. Replay attack: repeating the exact same completion -> MUST FAIL (403 or 409) because completion already exists!
     const replayResponse = await commitBatch(legitWrites, userAToken);
     assert.ok([403, 409].includes(replayResponse.status), `Replay status ${replayResponse.status} should be rejected`);
+
+    // 4. Config-only replay: attacker attempts to update game_config/current using existing lastCompletionId without new completion -> MUST FAIL (403)!
+    const configOnlyReplayWrites = [
+      {
+        update: {
+          name: configDocName,
+          fields: fields({
+            gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+            sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+            teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 180, teamBScore: 50, logs: [],
+          }).fields,
+        },
+      },
+    ];
+    assert.equal((await commitBatch(configOnlyReplayWrites, userAToken)).status, 403);
   });
 
   test('P1 Exploit: capture transaction only allowed by active ONI team with score +50 and role flip', async () => {
@@ -863,6 +878,20 @@ describe('Firestore Security Rules', () => {
     ];
     assert.equal((await commitBatch(protectedCaptureWrites, sOniToken)).status, 403);
 
+    // 1b. Exploit: ONI attempting direct runner elimination without updating game_config/current -> MUST FAIL (403)!
+    const runnerOnlyWrites = [
+      {
+        update: {
+          name: runnerDocName,
+          fields: fields({
+            id: sRunnerUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', role: 'RUNNER', name: 'Protected Runner',
+            status: 'CAPTURED', score: 0, invincibleCards: 0, waitingUntil: 0, invincibleUntil: 0, protectionZone: 'NONE',
+          }).fields,
+        },
+      },
+    ];
+    assert.equal((await commitBatch(runnerOnlyWrites, sOniToken)).status, 403);
+
     // 2. Clear protectionZone and re-attempt in SURVIVAL mode -> MUST SUCCEED (200)!
     await seed(`users/${sRunnerUid}`, {
       id: sRunnerUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Protected Runner', role: 'RUNNER',
@@ -988,6 +1017,14 @@ describe('Firestore Security Rules', () => {
       }),
     });
     assert.equal(wipeRes.status, 403);
+  });
+
+  test('P2-SEC-12: blocks participant from deleting their own user document', async () => {
+    const deleteRes = await firestore(`users/${userAUid}`, {
+      token: userAToken,
+      method: 'DELETE',
+    });
+    assert.equal(deleteRes.status, 403);
   });
 });
 

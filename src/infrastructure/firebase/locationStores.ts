@@ -47,6 +47,7 @@ export const firebaseExposedLocationStore: ExposedLocationStore = {
       longitude: snapshot.longitude,
       capturedAt: serverTimestamp(),
       expiresAt: Timestamp.fromMillis(snapshot.expiresAt),
+      ...(snapshot.revealScope ? { revealScope: snapshot.revealScope, playerId } : {}),
     });
   },
 };
