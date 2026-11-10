@@ -1,5 +1,8 @@
 
-export type { DynamicRuleSettings, GameStatus, ProtectionZoneType, Role, VictoryMode } from './src/game/types';
+import type { DynamicRuleSettings, GameStatus, ProtectionZoneType, Role, VictoryMode } from './src/game/types';
+
+export type { DynamicRuleSettings, GameStatus, ProtectionZoneType, Role, VictoryMode };
+
 
 
 export interface GameLog {
