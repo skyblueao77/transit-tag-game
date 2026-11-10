@@ -142,4 +142,34 @@ describe('Waiting lifecycle Core', () => {
       allowed: false, reason: 'INVALID_WAITING_STATE',
     });
   });
+
+  test('supports custom dynamic waiting duration and shinkansen segment limit', () => {
+    // Custom wait duration: 30 minutes (1,800,000 ms) instead of default 60 minutes
+    const customWaitMs = 30 * 60 * 1000;
+    const manualResult = startManualWaiting(input({ shinkansenWaitDurationMs: customWaitMs }));
+    assert.equal(manualResult.allowed, true);
+    assert.equal(manualResult.duration, customWaitMs);
+    assert.equal(manualResult.waitingUntil, now + customWaitMs);
+
+    // Shinkansen segment limit reached (e.g. limit 3 segments, player at 3 segments)
+    const segmentResult = startShinkansenLimitWaiting(input({
+      shinkansenStartTime: now - 1000, // Not yet reached time limit (only 1s elapsed)
+      shinkansenSegmentCount: 3,
+      shinkansenMaxSegments: 3,
+      shinkansenWaitDurationMs: customWaitMs,
+    }));
+    assert.equal(segmentResult.allowed, true);
+    assert.equal(segmentResult.action, 'SHINKANSEN_LIMIT');
+    assert.equal(segmentResult.duration, customWaitMs);
+    assert.equal(segmentResult.waitingUntil, now + customWaitMs);
+
+    // Shinkansen segment limit not reached (limit 3, player at 2) and time not reached
+    const notReachedResult = startShinkansenLimitWaiting(input({
+      shinkansenStartTime: now - 1000,
+      shinkansenSegmentCount: 2,
+      shinkansenMaxSegments: 3,
+    }));
+    assert.deepEqual(notReachedResult, { allowed: false, reason: 'SHINKANSEN_LIMIT_NOT_REACHED' });
+  });
 });
+

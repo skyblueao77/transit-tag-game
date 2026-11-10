@@ -1,4 +1,4 @@
-export type { GameStatus, PlayerTeam, Role, Team, TeamRoles } from './types';
+export type { DynamicRuleSettings, GameStatus, PlayerTeam, ProtectionZoneType, Role, Team, TeamRoles, VictoryMode } from './types';
 export {
   GAME_SESSION_SCHEMA_VERSION,
   isValidGameSessionId,
@@ -70,8 +70,11 @@ export {
 } from './missions';
 export {
   calculateMissionScore,
+  determineGameWinner,
   LUCKY_REWARD_THRESHOLD,
 } from './scoring';
+export type { DetermineWinnerInput } from './scoring';
+
 export {
   gameElapsedSince,
   gameTimeAt,

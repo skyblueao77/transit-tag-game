@@ -15,7 +15,12 @@ export interface WaitingLifecycleInput {
   waitingUntil?: unknown;
   shinkansenStartTime?: unknown;
   now: number;
+  shinkansenWaitDurationMs?: number;
+  shinkansenLimitDurationMs?: number;
+  shinkansenSegmentCount?: number;
+  shinkansenMaxSegments?: number;
 }
+
 
 export type WaitingRejectionReason =
   | 'INVALID_STATUS'
@@ -82,19 +87,27 @@ function validActivePhase(phase: unknown): phase is GameStatus {
 function waitingResult(
   action: 'MANUAL' | 'SHINKANSEN_LIMIT',
   now: number,
+  durationMs?: number,
 ): Extract<WaitingLifecycleResult, { allowed: true; changed: true }> {
+  const duration = typeof durationMs === 'number' && durationMs > 0
+    ? durationMs
+    : SHINKANSEN_WAIT_DURATION_MS;
+
   return {
     allowed: true,
     changed: true,
     action,
     status: 'WAITING',
-    waitingUntil: now + SHINKANSEN_WAIT_DURATION_MS,
+    waitingUntil: now + duration,
     shinkansenStartTime: null,
-    duration: SHINKANSEN_WAIT_DURATION_MS,
+    duration,
   };
 }
 
-export function startManualWaiting(input: WaitingLifecycleInput): WaitingLifecycleResult {
+export function startManualWaiting(
+  input: WaitingLifecycleInput,
+  customDurationMs?: number,
+): WaitingLifecycleResult {
   if (!Number.isFinite(input.now) || input.now < 0) {
     return { allowed: false, reason: 'INVALID_TIME' };
   }
@@ -113,12 +126,17 @@ export function startManualWaiting(input: WaitingLifecycleInput): WaitingLifecyc
   }
   if (!validActivePhase(input.phase)) return { allowed: false, reason: 'PHASE' };
 
-  const result = waitingResult('MANUAL', input.now);
+  const durationMs = customDurationMs ?? input.shinkansenWaitDurationMs;
+  const result = waitingResult('MANUAL', input.now, durationMs);
   if (!Number.isFinite(result.waitingUntil)) return { allowed: false, reason: 'INVALID_TIME' };
   return result;
 }
 
-export function startShinkansenLimitWaiting(input: WaitingLifecycleInput): WaitingLifecycleResult {
+export function startShinkansenLimitWaiting(
+  input: WaitingLifecycleInput,
+  customLimitDurationMs?: number,
+  customWaitDurationMs?: number,
+): WaitingLifecycleResult {
   if (!Number.isFinite(input.now) || input.now < 0) {
     return { allowed: false, reason: 'INVALID_TIME' };
   }
@@ -140,14 +158,25 @@ export function startShinkansenLimitWaiting(input: WaitingLifecycleInput): Waiti
     || input.shinkansenStartTime <= 0) {
     return { allowed: false, reason: 'INVALID_SHINKANSEN_START' };
   }
-  if (input.now - input.shinkansenStartTime <= SHINKANSEN_LIMIT_DURATION_MS) {
+
+  const limitMs = customLimitDurationMs ?? input.shinkansenLimitDurationMs ?? SHINKANSEN_LIMIT_DURATION_MS;
+  const timeLimitReached = input.now - input.shinkansenStartTime > limitMs;
+
+  const segmentLimitReached = typeof input.shinkansenMaxSegments === 'number'
+    && input.shinkansenMaxSegments > 0
+    && typeof input.shinkansenSegmentCount === 'number'
+    && input.shinkansenSegmentCount >= input.shinkansenMaxSegments;
+
+  if (!timeLimitReached && !segmentLimitReached) {
     return { allowed: false, reason: 'SHINKANSEN_LIMIT_NOT_REACHED' };
   }
 
-  const result = waitingResult('SHINKANSEN_LIMIT', input.now);
+  const waitDurationMs = customWaitDurationMs ?? input.shinkansenWaitDurationMs;
+  const result = waitingResult('SHINKANSEN_LIMIT', input.now, waitDurationMs);
   if (!Number.isFinite(result.waitingUntil)) return { allowed: false, reason: 'INVALID_TIME' };
   return result;
 }
+
 
 export function resumeExpiredWaiting(input: WaitingLifecycleInput): WaitingLifecycleResult {
   if (!Number.isFinite(input.now) || input.now < 0) {

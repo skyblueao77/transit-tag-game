@@ -2,6 +2,21 @@ export type Role = 'ONI' | 'RUNNER';
 
 export type Team = 'A' | 'B' | 'ADMIN';
 
+export type VictoryMode = 'SCORE_SWAP' | 'SURVIVAL';
+
+export type ProtectionZoneType = 'NONE' | 'GREEN_CAR' | 'SAFE_ZONE';
+
+export interface DynamicRuleSettings {
+  victoryMode: VictoryMode;
+  shinkansenMaxMinutes: number;
+  shinkansenMaxSegments: number;
+  postShinkansenWaitMinutes: number;
+  periodicRevealIntervalMinutes: number;
+  periodicRevealDurationMinutes: number;
+  captureWaitMinutes: number;
+  missionPenaltyRevealMinutes: number;
+}
+
 export type GameStatus =
   | 'PRE_GAME'
   | 'DAY1_ACTIVE'
@@ -20,3 +35,4 @@ export interface TeamRoles {
 export interface PlayerTeam {
   team: string;
 }
+
