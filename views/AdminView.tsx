@@ -2,12 +2,12 @@ import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { GameConfig, User, Mission, MissionCompletion } from '../types';
-import { MISSIONS } from '../constants';
+import { MISSIONS, DEFAULT_DYNAMIC_RULE_SETTINGS } from '../constants';
 import {
   Users, Lock, Shield, Trophy, Play,
   AlertTriangle, Shuffle, MapPin,
   RefreshCw, QrCode, Copy, Check, Plus, Edit2, Trash2,
-  Award, Sparkles, X, Send, Megaphone, ArrowLeftRight
+  Award, Sparkles, X, Send, Megaphone, ArrowLeftRight, Sliders
 } from 'lucide-react';
 import { toast } from 'sonner';
 import QRCode from 'qrcode-svg';
@@ -31,8 +31,13 @@ import { initializeGameSession } from '../src/application/initializeGameSession'
 import { firebaseGameSessionInitializationGateway } from '../src/infrastructure/firebase/adminSessionActions';
 import { createOrUpdateMission, deleteMission, awardMissionCompletionByAdmin } from '../src/infrastructure/firebase/missionStore';
 import { isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
-import { sendAdminBroadcast } from '../src/infrastructure/firebase/clientFirestoreGateways';
+import {
+  sendAdminBroadcast,
+  updateAdminRuleSettings,
+  applyAdminPenaltyReveal,
+} from '../src/infrastructure/firebase/clientFirestoreGateways';
 import { adminChangePlayerTeam, adminDeletePlayer } from '../src/infrastructure/firebase/playerStore';
+import type { VictoryMode } from '../src/game/types';
 
 import {
   subscribeEmergencyLocationProjections,
@@ -59,6 +64,22 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   // 全体一斉通知
   const [broadcastInput, setBroadcastInput] = useState('');
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
+
+  // 汎用ルール可変設定
+  const [ruleVictoryMode, setRuleVictoryMode] = useState<VictoryMode>(config.victoryMode ?? DEFAULT_DYNAMIC_RULE_SETTINGS.victoryMode);
+  const [ruleShinkansenMaxMinutes, setRuleShinkansenMaxMinutes] = useState<number>(config.shinkansenMaxMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxMinutes);
+  const [ruleShinkansenMaxSegments, setRuleShinkansenMaxSegments] = useState<number>(config.shinkansenMaxSegments ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxSegments);
+  const [rulePostShinkansenWaitMinutes, setRulePostShinkansenWaitMinutes] = useState<number>(config.postShinkansenWaitMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.postShinkansenWaitMinutes);
+  const [rulePeriodicRevealIntervalMinutes, setRulePeriodicRevealIntervalMinutes] = useState<number>(config.periodicRevealIntervalMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes);
+  const [rulePeriodicRevealDurationMinutes, setRulePeriodicRevealDurationMinutes] = useState<number>(config.periodicRevealDurationMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealDurationMinutes);
+  const [ruleCaptureWaitMinutes, setRuleCaptureWaitMinutes] = useState<number>(config.captureWaitMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.captureWaitMinutes);
+  const [ruleMissionPenaltyRevealMinutes, setRuleMissionPenaltyRevealMinutes] = useState<number>(config.missionPenaltyRevealMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.missionPenaltyRevealMinutes);
+  const [isSavingRules, setIsSavingRules] = useState(false);
+
+  // ペナルティ発動関連
+  const [penaltyTargetPlayerId, setPenaltyTargetPlayerId] = useState<string>('');
+  const [penaltyDurationMinutes, setPenaltyDurationMinutes] = useState<number>(10);
+  const [isApplyingPenalty, setIsApplyingPenalty] = useState(false);
 
   // プレイヤー管理
   const [modifyingPlayerIds, setModifyingPlayerIds] = useState<Set<string>>(new Set());
@@ -180,6 +201,26 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       })
       .catch(err => console.error('Error checking bootstrap completion:', err));
   }, []);
+
+  useEffect(() => {
+    if (config.victoryMode) setRuleVictoryMode(config.victoryMode);
+    if (config.shinkansenMaxMinutes !== undefined) setRuleShinkansenMaxMinutes(config.shinkansenMaxMinutes);
+    if (config.shinkansenMaxSegments !== undefined) setRuleShinkansenMaxSegments(config.shinkansenMaxSegments);
+    if (config.postShinkansenWaitMinutes !== undefined) setRulePostShinkansenWaitMinutes(config.postShinkansenWaitMinutes);
+    if (config.periodicRevealIntervalMinutes !== undefined) setRulePeriodicRevealIntervalMinutes(config.periodicRevealIntervalMinutes);
+    if (config.periodicRevealDurationMinutes !== undefined) setRulePeriodicRevealDurationMinutes(config.periodicRevealDurationMinutes);
+    if (config.captureWaitMinutes !== undefined) setRuleCaptureWaitMinutes(config.captureWaitMinutes);
+    if (config.missionPenaltyRevealMinutes !== undefined) setRuleMissionPenaltyRevealMinutes(config.missionPenaltyRevealMinutes);
+  }, [
+    config.victoryMode,
+    config.shinkansenMaxMinutes,
+    config.shinkansenMaxSegments,
+    config.postShinkansenWaitMinutes,
+    config.periodicRevealIntervalMinutes,
+    config.periodicRevealDurationMinutes,
+    config.captureWaitMinutes,
+    config.missionPenaltyRevealMinutes,
+  ]);
 
   const requireSessionId = (): string | null => {
     if (config.gameSessionId) return config.gameSessionId;
@@ -565,6 +606,76 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       toast.error('全体一斉通知の送信中にエラーが発生しました');
     } finally {
       setIsSendingBroadcast(false);
+    }
+  };
+
+  // 汎用ルール可変設定の保存
+  const handleSaveRuleSettings = async (): Promise<void> => {
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId || isSavingRules) return;
+
+    setIsSavingRules(true);
+    try {
+      const result = await updateAdminRuleSettings(
+        {
+          victoryMode: ruleVictoryMode,
+          shinkansenMaxMinutes: ruleShinkansenMaxMinutes,
+          shinkansenMaxSegments: ruleShinkansenMaxSegments,
+          postShinkansenWaitMinutes: rulePostShinkansenWaitMinutes,
+          periodicRevealIntervalMinutes: rulePeriodicRevealIntervalMinutes,
+          periodicRevealDurationMinutes: rulePeriodicRevealDurationMinutes,
+          captureWaitMinutes: ruleCaptureWaitMinutes,
+          missionPenaltyRevealMinutes: ruleMissionPenaltyRevealMinutes,
+        },
+        expectedSessionId,
+      );
+
+      if (result.ok) {
+        toast.success('ルール設定を更新しました！参加者にリアルタイム反映されます。');
+      } else {
+        toast.error(`ルール設定の更新に失敗しました: ${result.reason}`);
+      }
+    } catch (error) {
+      console.error('Error saving rule settings:', error);
+      toast.error('ルール設定の更新中にエラーが発生しました');
+    } finally {
+      setIsSavingRules(false);
+    }
+  };
+
+  // ミッション違反・ルール違反ペナルティ位置開示の発動
+  const handleApplyPenalty = async (): Promise<void> => {
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId || !penaltyTargetPlayerId || isApplyingPenalty) return;
+
+    const targetUser = users.find(u => u.id === penaltyTargetPlayerId);
+    if (!targetUser) {
+      toast.error('対象プレイヤーが見つかりません');
+      return;
+    }
+
+    if (!confirm(`プレイヤー「${targetUser.name}」に${penaltyDurationMinutes}分間のペナルティ（位置常時開示）を発動しますか？`)) {
+      return;
+    }
+
+    setIsApplyingPenalty(true);
+    try {
+      const result = await applyAdminPenaltyReveal(
+        penaltyTargetPlayerId,
+        penaltyDurationMinutes,
+        expectedSessionId,
+      );
+
+      if (result.ok) {
+        toast.success(`🚨 ${targetUser.name} に${penaltyDurationMinutes}分間のペナルティ位置開示を発動しました！`);
+      } else {
+        toast.error(`ペナルティ発動に失敗しました: ${result.reason}`);
+      }
+    } catch (error) {
+      console.error('Error applying penalty:', error);
+      toast.error('ペナルティ発動中にエラーが発生しました');
+    } finally {
+      setIsApplyingPenalty(false);
     }
   };
 
@@ -1138,6 +1249,190 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         </div>
       </section>
 
+      {/* ⚙️ 4. 広域交通鬼ごっこ ルール規定設定（リアルタイム可変） */}
+      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+          <div>
+            <h3 className="font-black flex items-center gap-2 text-slate-800 uppercase tracking-tight text-sm">
+              <Sliders size={18} className="text-indigo-600" />
+              広域交通鬼ごっこ ルール規定設定（リアルタイム可変）
+            </h3>
+            <p className="text-xs text-slate-500 font-medium mt-1">
+              各「◯」の数値はゲーム進行中も即座に変更・全体配信可能です。
+            </p>
+          </div>
+          <span className={`text-xs font-black px-3 py-1 rounded-full self-start sm:self-auto ${
+            ruleVictoryMode === 'SURVIVAL' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-purple-50 text-purple-700 border border-purple-200'
+          }`}>
+            {ruleVictoryMode === 'SURVIVAL' ? '🏃‍♂️ サバイバル制' : '🏆 ポイント交代制'}
+          </span>
+        </div>
+
+        <div className="space-y-4">
+          {/* 勝敗条件セレクター */}
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+            <div className="text-xs font-black text-slate-700 block mb-2">
+              1. 勝敗条件（ゲームモード）
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setRuleVictoryMode('SURVIVAL')}
+                className={`p-3 rounded-xl text-left border transition-all ${
+                  ruleVictoryMode === 'SURVIVAL'
+                    ? 'bg-emerald-500 text-white border-emerald-600 shadow-md font-black'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 font-bold'
+                }`}
+              >
+                <div className="text-xs">🏃‍♂️ サバイバル制</div>
+                <div className={`text-[10px] mt-0.5 ${ruleVictoryMode === 'SURVIVAL' ? 'text-emerald-100' : 'text-slate-500'}`}>
+                  逃走者: タイムアップ生存で勝利<br />鬼: 全逃走者確保で即勝利
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRuleVictoryMode('SCORE_SWAP')}
+                className={`p-3 rounded-xl text-left border transition-all ${
+                  ruleVictoryMode === 'SCORE_SWAP'
+                    ? 'bg-purple-600 text-white border-purple-700 shadow-md font-black'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 font-bold'
+                }`}
+              >
+                <div className="text-xs">🏆 ポイント交代制</div>
+                <div className={`text-[10px] mt-0.5 ${ruleVictoryMode === 'SCORE_SWAP' ? 'text-purple-100' : 'text-slate-500'}`}>
+                  攻守交代しながら獲得スコアと確保ボーナスで勝敗を競う
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* 新幹線・特急等利用制限 */}
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+            <h4 className="text-xs font-black text-slate-700">
+              🚄 2. 新幹線・特急利用制限（バランス調整）
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>最長連続乗車（分） <span className="text-[10px] text-slate-400 ml-1">0=無制限</span></span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={360}
+                    step={10}
+                    value={ruleShinkansenMaxMinutes}
+                    onChange={e => setRuleShinkansenMaxMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>最長連続区間（区間） <span className="text-[10px] text-slate-400 ml-1">0=無制限</span></span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={ruleShinkansenMaxSegments}
+                    onChange={e => setRuleShinkansenMaxSegments(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>下車後待機義務（分）</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={180}
+                    step={5}
+                    value={rulePostShinkansenWaitMinutes}
+                    onChange={e => setRulePostShinkansenWaitMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* 位置情報開示＆ペナルティ設定 */}
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
+            <h4 className="text-xs font-black text-slate-700">
+              📍 3. 位置開示・確保・ペナルティ設定
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>定期開示 間隔（分ごと）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    step={5}
+                    value={rulePeriodicRevealIntervalMinutes}
+                    onChange={e => setRulePeriodicRevealIntervalMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>定期開示 継続時間（分間）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={rulePeriodicRevealDurationMinutes}
+                    onChange={e => setRulePeriodicRevealDurationMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>確保後 待機時間（分間）</span>
+                  <input
+                    type="number"
+                    min={5}
+                    max={120}
+                    step={5}
+                    value={ruleCaptureWaitMinutes}
+                    onChange={e => setRuleCaptureWaitMinutes(Math.max(5, parseInt(e.target.value, 10) || 5))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                  <span>ペナルティ常時開示（分間）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={180}
+                    step={5}
+                    value={ruleMissionPenaltyRevealMinutes}
+                    onChange={e => setRuleMissionPenaltyRevealMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* 保存ボタン */}
+          <button
+            type="button"
+            onClick={handleSaveRuleSettings}
+            disabled={isSavingRules}
+            className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-sm shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+          >
+            <Sliders size={16} />
+            {isSavingRules ? 'ルール設定を保存中...' : '⚙️ ルール規定設定を保存・全参加者へ即時反映'}
+          </button>
+        </div>
+      </section>
+
       {/* 📢 参加者全員へ一斉通知（ブロードキャスト） */}
       <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h3 className="font-black flex items-center gap-2 mb-2 text-slate-800 uppercase tracking-tight text-sm">
@@ -1530,6 +1825,50 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               Team B のみ公開
             </button>
           </div>
+
+          {/* 特定プレイヤーへのミッション違反・ルール違反ペナルティ発動 */}
+          <div className="pt-3 border-t border-white/20">
+            <h4 className="text-xs font-black flex items-center gap-1.5 mb-1 text-white">
+              <AlertTriangle size={14} className="text-yellow-300" />
+              ミッション違反・個別ペナルティ発動（位置常時公開）
+            </h4>
+            <p className="text-[10px] text-amber-100 mb-2 leading-relaxed">
+              ミッション不参加や禁止交通機関利用などの違反者に対して、指定時間位置情報を常時開示します。
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={penaltyTargetPlayerId}
+                onChange={e => setPenaltyTargetPlayerId(e.target.value)}
+                className="flex-1 bg-white text-slate-800 text-xs font-bold p-2.5 rounded-xl border border-amber-300"
+              >
+                <option value="">対象プレイヤーを選択...</option>
+                {users.map(u => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} (Team {u.team} - {u.role})
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center gap-1.5 bg-white/10 px-3 py-1.5 rounded-xl border border-white/20">
+                <span className="text-[11px] font-bold text-white whitespace-nowrap">時間(分):</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={180}
+                  value={penaltyDurationMinutes}
+                  onChange={e => setPenaltyDurationMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-16 bg-white text-amber-800 text-xs font-black p-1.5 rounded-lg text-center"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleApplyPenalty}
+                disabled={isApplyingPenalty || !penaltyTargetPlayerId}
+                className="py-2.5 px-4 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-black shadow-md active:scale-95 transition-all disabled:opacity-50 whitespace-nowrap"
+              >
+                {isApplyingPenalty ? '発動中...' : '🚨 ペナルティ発動'}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -1552,7 +1891,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             <div key={u.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
               <div>
                 <div className="text-xs font-black text-slate-800">{u.name}</div>
-                <div className="flex gap-1 mt-1">
+                <div className="flex flex-wrap gap-1 mt-1">
                   <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
                     u.team === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
                   }`}>TEAM {u.team}</span>
@@ -1560,6 +1899,16 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
                   <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
                     u.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'
                   }`}>{u.status}</span>
+                  {Boolean(u.penaltyRevealUntil && u.penaltyRevealUntil > Date.now()) && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-rose-500 text-white animate-pulse">
+                      🚨 ペナルティ開示中
+                    </span>
+                  )}
+                  {Boolean(u.protectionZone && u.protectionZone !== 'NONE') && (
+                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-700">
+                      🛡️ {u.protectionZone === 'GREEN_CAR' ? 'グリーン車' : '特例保護'}
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
