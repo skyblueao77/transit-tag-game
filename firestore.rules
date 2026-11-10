@@ -39,9 +39,13 @@ service cloud.firestore {
         && hasCurrentGameSession()
         && data.keys().hasOnly([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards', 'lastCompletionId', 'lastStation'
+          'gameSessionId', 'invincibleCards', 'lastCompletionId', 'lastStation',
+          'protectionZone', 'shinkansenSegmentCount', 'penaltyRevealUntil'
         ])
         && (!data.keys().hasAny(['lastStation']) || (data.lastStation is string && data.lastStation.size() <= 100))
+        && (!data.keys().hasAny(['protectionZone']) || data.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE'])
+        && (!data.keys().hasAny(['shinkansenSegmentCount']) || (data.shinkansenSegmentCount is int && data.shinkansenSegmentCount >= 0))
+        && (!data.keys().hasAny(['penaltyRevealUntil']) || (data.penaltyRevealUntil is int && data.penaltyRevealUntil >= 0))
         && data.keys().hasAll([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
           'gameSessionId', 'invincibleCards'
@@ -283,13 +287,28 @@ service cloud.firestore {
           || (diff.hasOnly(['name', 'lastStation'])
               && a.name is string && a.name.size() > 0 && a.name.size() <= 80
               && a.lastStation is string && a.lastStation.size() <= 100)
+          // 1b. Protection Zone declaration (NONE, GREEN_CAR, SAFE_ZONE)
+          || (diff.hasOnly(['protectionZone'])
+              && a.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE'])
+          // 1c. Shinkansen tracker updates
+          || (diff.hasOnly(['shinkansenStartTime', 'shinkansenSegmentCount'])
+              && (a.shinkansenStartTime is int || a.shinkansenStartTime == 0 || a.shinkansenStartTime == null)
+              && a.shinkansenSegmentCount is int
+              && a.shinkansenSegmentCount >= 0)
+          || (diff.hasOnly(['shinkansenSegmentCount'])
+              && a.shinkansenSegmentCount is int
+              && a.shinkansenSegmentCount >= 0)
+          || (diff.hasOnly(['shinkansenStartTime'])
+              && (a.shinkansenStartTime is int || a.shinkansenStartTime == 0 || a.shinkansenStartTime == null))
           // 2. Waiting resume upon expiry
-          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+          || ((diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+               || diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'shinkansenSegmentCount']))
               && b.status == 'WAITING' && a.status == 'ACTIVE'
               && b.waitingUntil is int && b.waitingUntil <= nowMs
               && a.waitingUntil == 0)
           // 3. Manual waiting start (60 min max duration + 60s tolerance)
-          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+          || ((diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+               || diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'shinkansenSegmentCount']))
               && b.status == 'ACTIVE' && a.status == 'WAITING'
               && a.waitingUntil is int && a.waitingUntil > nowMs
               && a.waitingUntil <= nowMs + 3660000)

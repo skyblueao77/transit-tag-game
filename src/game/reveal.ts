@@ -8,6 +8,7 @@ export type LocationVisibilityMode =
   | 'TEAM_SNAPSHOT'
   | 'GLOBAL_SNAPSHOT'
   | 'INDIVIDUAL_SNAPSHOT'
+  | 'PENALTY_SNAPSHOT'
   | 'HIDDEN';
 
 export interface LocationVisibilityPlayer {
@@ -16,11 +17,12 @@ export interface LocationVisibilityPlayer {
   status: string;
   privateLatitude?: number | null;
   privateLongitude?: number | null;
+  penaltyRevealUntil?: number;
   exposedLocation?: {
     latitude: number | null;
     longitude: number | null;
     expiresAt?: number;
-    revealScope?: 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL';
+    revealScope?: 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL' | 'PENALTY';
   };
 }
 
@@ -62,7 +64,7 @@ function visibleRealtime(
 }
 
 function visibleSnapshot(
-  mode: 'TEAM_SNAPSHOT' | 'GLOBAL_SNAPSHOT' | 'INDIVIDUAL_SNAPSHOT',
+  mode: 'TEAM_SNAPSHOT' | 'GLOBAL_SNAPSHOT' | 'INDIVIDUAL_SNAPSHOT' | 'PENALTY_SNAPSHOT',
   player: LocationVisibilityPlayer,
   now: number,
   deadline?: number,
@@ -110,6 +112,11 @@ export function resolveLocationVisibility(
 
   if (!canRevealLocation(input.phase)) {
     return { mode: 'HIDDEN' };
+  }
+
+  if (isActiveUntil(player.penaltyRevealUntil, now)
+    && (player.exposedLocation?.revealScope === 'PENALTY' || player.exposedLocation?.revealScope === 'INDIVIDUAL' || !player.exposedLocation?.revealScope)) {
+    return visibleSnapshot('PENALTY_SNAPSHOT', player, now, player.penaltyRevealUntil);
   }
 
   const teamRevealUntil = player.team === 'A'

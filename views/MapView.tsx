@@ -1,9 +1,11 @@
 import type React from 'react';
-import { useEffect, useRef, useState, useCallback } from 'react';
-import type { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role } from '../types';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import type { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role, ProtectionZoneType } from '../types';
 import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
 import {
   canUpdatePrivateLocation,
+  calculateHaversineDistanceMeters,
+  formatDistanceMeters,
   getPlayerRole,
   isActiveUntil,
   isGameActive,
@@ -12,10 +14,9 @@ import {
   isWaitingActive,
   ONI_INITIAL_LOCK_DURATION_MS,
   remainingSeconds,
-  SHINKANSEN_LIMIT_DURATION_MS,
   shouldThrottleLocationUpdate,
 } from '../src/game';
-import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff } from 'lucide-react';
+import { Clock, Train, MapPin, AlertCircle, Lock, WifiOff, Shield } from 'lucide-react';
 import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
 import useWakeLock from '../src/hooks/useWakeLock';
@@ -50,16 +51,20 @@ interface Props {
   onStartShinkansenWait: () => Promise<void>;
   onResumeWaiting: () => Promise<void>;
   onUpdateLastStation?: (stationName: string) => Promise<void>;
+  onUpdateProtectionZone?: (zone: ProtectionZoneType) => Promise<void>;
+  onStartShinkansen?: () => Promise<void>;
+  onIncrementShinkansenSegment?: () => Promise<void>;
+  onResetShinkansen?: () => Promise<void>;
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting, onUpdateLastStation
+  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting, onUpdateLastStation, onUpdateProtectionZone, onStartShinkansen, onIncrementShinkansenSegment, onResetShinkansen
 }) => {
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<Record<string, L.CircleMarker>>({});
   const [timeLeft, setTimeLeft] = useState({
-    waiting: 0, invincible: 0, nextReveal: 0, final: 0, oniLock: 0, shinkansenRemaining: 0, forceReveal: 0, teamSearchRemaining: 0 // ← これを追加
+    waiting: 0, invincible: 0, nextReveal: 0, final: 0, oniLock: 0, shinkansenRemaining: 0, forceReveal: 0, teamSearchRemaining: 0, penaltyRemaining: 0
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
@@ -308,15 +313,42 @@ const MapView: React.FC<Props> = ({
       const oniLock = currentRole === 'ONI' ? remainingSeconds(oniLockTime, now) : 0;
       const nextReveal = remainingSeconds(gameConfig.nextRevealTime, now);
 
+      const shinkansenLimitMinutes = gameConfig.shinkansenMaxMinutes ?? 120;
+      const shinkansenLimitMs = shinkansenLimitMinutes * 60 * 1000;
       const shinkansenUntil = currentUser.shinkansenStartTime
-        ? currentUser.shinkansenStartTime + SHINKANSEN_LIMIT_DURATION_MS
+        ? currentUser.shinkansenStartTime + shinkansenLimitMs
         : undefined;
       const shinkansenRemaining = remainingSeconds(shinkansenUntil, now);
-      
-      setTimeLeft({ waiting, invincible, nextReveal, final, oniLock, shinkansenRemaining, forceReveal,teamSearchRemaining });
+      const penaltyRemaining = remainingSeconds(currentUser.penaltyRevealUntil, now);
+
+      setTimeLeft({ waiting, invincible, nextReveal, final, oniLock, shinkansenRemaining, forceReveal, teamSearchRemaining, penaltyRemaining });
     }, 1000);
     return () => clearInterval(timer);
   }, [currentUser, gameConfig, currentRole]);
+
+  // チーム同一行動の距離判定（規定: チームメンバーと1.5km以上離れた場合は警告）
+  const teammateDistances = useMemo(() => {
+    if (!privateLocation || !currentUser.team) return [];
+    const myCoords: Coordinates = { latitude: privateLocation.latitude, longitude: privateLocation.longitude };
+
+    return users
+      .filter(u => u.id !== currentUser.id && u.team === currentUser.team && u.status === 'ACTIVE')
+      .map(teammate => {
+        const exp = exposedLocations[teammate.id];
+        if (exp && typeof exp.latitude === 'number' && typeof exp.longitude === 'number') {
+          const dist = calculateHaversineDistanceMeters(myCoords, { latitude: exp.latitude, longitude: exp.longitude });
+          return { teammate, distanceMeters: dist };
+        }
+        return null;
+      })
+      .filter((item): item is { teammate: User; distanceMeters: number } => item !== null);
+  }, [privateLocation, currentUser.id, currentUser.team, users, exposedLocations]);
+
+  const maxTeammateDistance = teammateDistances.length > 0
+    ? Math.max(...teammateDistances.map(d => d.distanceMeters))
+    : 0;
+
+  const isTeamSplitAlert = maxTeammateDistance > 1500;
 
   useEffect(() => {
     const deadline = currentUser.waitingUntil;
@@ -372,6 +404,7 @@ const MapView: React.FC<Props> = ({
         viewerId: currentUser.id,
         player: {
           ...user,
+          penaltyRevealUntil: user.penaltyRevealUntil,
           ...(user.id === currentUser.id && privateLocation
             ? { privateLatitude: privateLocation.latitude, privateLongitude: privateLocation.longitude }
             : {}),
@@ -391,25 +424,32 @@ const MapView: React.FC<Props> = ({
       const isSelf = visibility.mode === 'SELF_PRIVATE';
       const isTeamSearchActive = visibility.mode === 'TEAM_SNAPSHOT';
       const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
+      const isPenaltyActive = visibility.mode === 'PENALTY_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
       const marker = L.circleMarker([visibility.latitude, visibility.longitude], {
         radius: isSelf ? 10 : 8,
-        fillColor: isTeamSearchActive
-          ? '#ef4444'
-          : isGlobalForceReveal
-            ? '#f59e0b'
-            : user.color,
-        color: isInvincible ? '#fbbf24' : '#fff',
-        weight: isInvincible ? 4 : 3,
+        fillColor: isPenaltyActive
+          ? '#dc2626'
+          : isTeamSearchActive
+            ? '#ef4444'
+            : isGlobalForceReveal
+              ? '#f59e0b'
+              : user.color,
+        color: isPenaltyActive ? '#7f1d1d' : isInvincible ? '#fbbf24' : '#fff',
+        weight: isPenaltyActive || isInvincible ? 4 : 3,
         opacity: 1,
-        fillOpacity: isSelf ? 0.95 : isTeamSearchActive ? 0.9 : 0.7,
+        fillOpacity: isSelf ? 0.95 : isTeamSearchActive || isPenaltyActive ? 0.95 : 0.7,
       }).addTo(currentMap);
 
       let popupVariant: PlayerMapPopupVariant;
       let remainingTime: string | undefined;
       if (isSelf) {
         popupVariant = 'SELF';
+      } else if (isPenaltyActive) {
+        popupVariant = 'PENALTY';
+        const remainSec = remainingSeconds(visibility.expiresAt, now);
+        remainingTime = formatTime(remainSec);
       } else if (isTeamSearchActive) {
         popupVariant = 'TEAM_SEARCH';
       } else if (isGlobalForceReveal) {
@@ -463,7 +503,12 @@ const MapView: React.FC<Props> = ({
 
 
   {/* ゲームステータスヘッダー */}
-  {timeLeft.teamSearchRemaining > 0 ? (
+  {timeLeft.penaltyRemaining > 0 ? (
+    /* 🚨 ペナルティ開示の表示：最優先・濃赤色 */
+    <div className="z-[1001] px-4 py-2 bg-red-700 text-white text-center text-xs font-black animate-pulse flex items-center justify-center gap-2">
+      <AlertCircle size={14} /> 🚨 【ペナルティ】位置情報常時公開中！ 残り {formatTime(timeLeft.penaltyRemaining)}
+    </div>
+  ) : timeLeft.teamSearchRemaining > 0 ? (
     /* 🚨 チーム別サーチ中（ペナルティ等）の表示：最優先・赤色 */
     <div className="z-[1001] px-4 py-2 bg-red-600 text-white text-center text-xs font-black animate-pulse flex items-center justify-center gap-2">
       <AlertCircle size={14} /> 【警告】チーム位置スナップショット公開中！ 残り {formatTime(timeLeft.teamSearchRemaining)}
@@ -476,7 +521,7 @@ const MapView: React.FC<Props> = ({
 
   ) : timeLeft.nextReveal > 0 ? (
     <div className="z-[1001] px-4 py-2 bg-indigo-600 text-white text-center text-xs font-black flex items-center justify-center gap-2">
-      <Clock size={14} /> 次の位置公開まで {formatTime(timeLeft.nextReveal)}
+      <Clock size={14} /> 次の位置公開まで {formatTime(timeLeft.nextReveal)}（開示: {gameConfig.periodicRevealDurationMinutes ?? 5}分間 / 間隔: {gameConfig.periodicRevealIntervalMinutes ?? 15}分）
     </div>
 
   ) : gameConfig.isFinalMissionActive ? (
@@ -485,6 +530,14 @@ const MapView: React.FC<Props> = ({
       <AlertCircle size={14} /> 最終ミッション：東京駅を目指せ！ {Math.floor(timeLeft.final / 60)}分
     </div>
   ) : null}
+
+  {/* チーム同一行動違反警告バナー */}
+  {isTeamSplitAlert && (
+    <div className="z-[1001] px-4 py-1.5 bg-amber-600 text-white text-center text-xs font-black flex items-center justify-center gap-2">
+      <AlertCircle size={14} /> 【同一行動規定】チームメンバーと離れすぎています（約{formatDistanceMeters(maxTeammateDistance)}）。単独行動・挟み撃ちは禁止です。
+    </div>
+  )}
+
       <div ref={containerRef} style={{ flex: 1, width: '100%', zIndex: 0 }} />
 
       {/* 最寄り駅・路線の自動提案カード */}
@@ -514,6 +567,11 @@ const MapView: React.FC<Props> = ({
             <span className="text-slate-200 truncate max-w-[140px]">{currentUser.lastStation}</span>
           </div>
         )}
+        {currentUser.protectionZone && currentUser.protectionZone !== 'NONE' && (
+          <div className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl text-[10px] font-black shadow-lg flex items-center gap-1">
+            <Shield size={12} /> {currentUser.protectionZone === 'GREEN_CAR' ? 'グリーン席保護中' : 'セーフゾーン中'}
+          </div>
+        )}
         {timeLeft.invincible > 0 && (
           <div className="bg-amber-500 text-white px-3 py-1.5 rounded-xl text-[10px] font-black shadow-lg">
             無敵中: {formatTime(timeLeft.invincible)}
@@ -532,78 +590,233 @@ const MapView: React.FC<Props> = ({
       </div>
 
       <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[1000] w-full px-6 flex flex-col items-center gap-3">
-        {currentRole === 'ONI' && (
-          <div className="w-full max-w-sm flex flex-col gap-2">
-            <label className="text-xs font-bold text-slate-600 text-center" htmlFor="capture-target">
-              捕獲対象
-            </label>
-            <select
-              id="capture-target"
-              value={selectedTargetId}
-              onChange={event => setSelectedTargetId(event.target.value)}
-              disabled={isProcessing || captureCandidates.length === 0}
-              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold shadow-xl disabled:bg-slate-100"
-            >
-              {captureCandidates.length === 0 ? (
-                <option value="">捕獲可能な逃走者はいません</option>
-              ) : (
-                captureCandidates.map(user => (
-                  <option key={user.id} value={user.id}>{user.name}</option>
-                ))
-              )}
-            </select>
-            <button
-              type="button"
-              onClick={async () => {
-                setIsProcessing(true);
-                try { await onCapture(selectedTargetId); }
-                finally { setIsProcessing(false); }
-              }}
-              disabled={
-                isProcessing || !selectedTargetId || captureCandidates.length === 0 ||
-                currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED')
-              }
-              className={`px-10 py-4 rounded-full font-black text-lg shadow-2xl transition-all ${
-                isProcessing || !selectedTargetId || captureCandidates.length === 0 ||
-                currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED')
-                  ? 'bg-slate-400 text-white'
-                  : 'bg-slate-900 text-white active:scale-95'
-              }`}
-            >
-              捕獲ボタン
-            </button>
-          </div>
-        )}
+        {currentRole === 'ONI' && (() => {
+          const selectedTarget = users.find(user => user.id === selectedTargetId);
+          const isSelectedTargetProtected = Boolean(
+            selectedTarget?.protectionZone &&
+            selectedTarget.protectionZone !== 'NONE'
+          );
+
+          return (
+            <div className="w-full max-w-sm flex flex-col gap-2">
+              <label className="text-xs font-bold text-slate-600 text-center" htmlFor="capture-target">
+                捕獲対象
+              </label>
+              <select
+                id="capture-target"
+                value={selectedTargetId}
+                onChange={event => setSelectedTargetId(event.target.value)}
+                disabled={isProcessing || captureCandidates.length === 0}
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold shadow-xl disabled:bg-slate-100"
+              >
+                {captureCandidates.length === 0 ? (
+                  <option value="">捕獲可能な逃走者はいません</option>
+                ) : (
+                  captureCandidates.map(user => {
+                    const isProtected = user.protectionZone && user.protectionZone !== 'NONE';
+                    const tag = isProtected
+                      ? ` [🛡️ ${user.protectionZone === 'GREEN_CAR' ? 'グリーン席保護' : 'セーフゾーン'}]`
+                      : '';
+                    return (
+                      <option key={user.id} value={user.id}>
+                        {user.name}{tag}
+                      </option>
+                    );
+                  })
+                )}
+              </select>
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsProcessing(true);
+                  try { await onCapture(selectedTargetId); }
+                  finally { setIsProcessing(false); }
+                }}
+                disabled={
+                  isProcessing || !selectedTargetId || captureCandidates.length === 0 ||
+                  currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED') ||
+                  isSelectedTargetProtected
+                }
+                className={`px-10 py-4 rounded-full font-black text-lg shadow-2xl transition-all ${
+                  isProcessing || !selectedTargetId || captureCandidates.length === 0 ||
+                  currentUser.status === 'WAITING' || gameConfig.gameStatus.includes('_PAUSED') ||
+                  isSelectedTargetProtected
+                    ? 'bg-slate-400 text-white cursor-not-allowed'
+                    : 'bg-slate-900 text-white active:scale-95'
+                }`}
+              >
+                {isSelectedTargetProtected ? '🛡️ 特例保護エリア宣言中のため捕獲不可' : '捕獲ボタン'}
+              </button>
+            </div>
+          );
+        })()}
         {currentRole === 'RUNNER' && (
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={async () => {
-                setIsProcessing(true);
-                try { await onActivateInvincibility(); }
-                catch { toast.error('失敗しました'); }
-                finally { setIsProcessing(false); }
-              }}
-              disabled={
-                isProcessing || (currentUser.invincibleCards ?? 0) <= 0 || timeLeft.invincible > 0 || gameConfig.gameStatus.includes('_PAUSED')
-              }
-              className="px-4 py-3 bg-amber-500 text-white rounded-2xl font-bold text-sm shadow-xl disabled:bg-slate-100 disabled:text-slate-400 active:scale-95 transition-all"
-            >
-              無敵カード ({currentUser.invincibleCards ?? 0})
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                setIsProcessing(true);
-                try { await onStartShinkansenWait(); }
-                catch { toast.error('失敗しました'); }
-                finally { setIsProcessing(false); }
-              }}
-              disabled={isProcessing || currentUser.status !== 'ACTIVE' || !isGameActive(gameConfig.gameStatus) || timeLeft.shinkansenRemaining > 0}
-              className="px-4 py-3 bg-white text-slate-700 rounded-2xl font-bold text-sm shadow-xl border border-slate-200 disabled:bg-slate-50 active:scale-95 transition-all"
-            >
-              新幹線待機
-            </button>
+          <div className="w-full max-w-sm flex flex-col items-center gap-2">
+            {/* 特例保護エリア切り替えセレクター */}
+            <div className="w-full flex items-center justify-between gap-1.5 bg-white/95 backdrop-blur-md px-3 py-2 rounded-2xl border border-slate-200 shadow-xl">
+              <span className="text-[10px] font-black text-slate-500 shrink-0">特例保護:</span>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  onClick={() => onUpdateProtectionZone?.('NONE')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                    (!currentUser.protectionZone || currentUser.protectionZone === 'NONE')
+                      ? 'bg-slate-800 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  通常
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateProtectionZone?.('GREEN_CAR')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                    currentUser.protectionZone === 'GREEN_CAR'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  🛡️ グリーン席
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateProtectionZone?.('SAFE_ZONE')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
+                    currentUser.protectionZone === 'SAFE_ZONE'
+                      ? 'bg-teal-600 text-white shadow-sm'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  🛡️ セーフゾーン
+                </button>
+              </div>
+            </div>
+
+            {/* 新幹線乗車中 HUD 兼 アクション */}
+            {currentUser.shinkansenStartTime ? (
+              <div className="flex flex-col gap-2 w-full">
+                {(timeLeft.shinkansenRemaining <= 0 || (currentUser.shinkansenSegmentCount ?? 0) >= (gameConfig.shinkansenMaxSegments ?? 2)) && (
+                  <div className="bg-red-600 text-white text-[11px] font-bold p-2.5 rounded-2xl text-center shadow-lg animate-pulse">
+                    ⚠️ 新幹線利用上限（最長{gameConfig.shinkansenMaxMinutes ?? 120}分 / 最大{gameConfig.shinkansenMaxSegments ?? 2}区間）に達しました！速やかに下車してください。
+                  </div>
+                )}
+                <div className="bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl flex items-center justify-between shadow-xl border border-slate-700">
+                  <div className="flex items-center gap-2">
+                    <Train size={20} className="text-blue-400 animate-pulse" />
+                    <div>
+                      <div className="text-[10px] font-bold text-slate-400">🚄 新幹線乗車中</div>
+                      <div className="text-xs font-black">
+                        残り: <span className="font-mono text-amber-400">{formatTime(timeLeft.shinkansenRemaining)}</span>
+                        {' / '}
+                        <span>{currentUser.shinkansenSegmentCount ?? 0} / {gameConfig.shinkansenMaxSegments ?? 2} 区間</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsProcessing(true);
+                        try { await onIncrementShinkansenSegment?.(); }
+                        finally { setIsProcessing(false); }
+                      }}
+                      disabled={isProcessing}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl active:scale-95 shadow transition-all"
+                    >
+                      +1区間
+                    </button>
+                    {onResetShinkansen && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setIsProcessing(true);
+                          try { await onResetShinkansen(); }
+                          finally { setIsProcessing(false); }
+                        }}
+                        disabled={isProcessing}
+                        className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold rounded-xl active:scale-95 shadow transition-all"
+                        title="新幹線乗車をリセット"
+                      >
+                        取消
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsProcessing(true);
+                      try { await onActivateInvincibility(); }
+                      catch { toast.error('失敗しました'); }
+                      finally { setIsProcessing(false); }
+                    }}
+                    disabled={
+                      isProcessing || (currentUser.invincibleCards ?? 0) <= 0 || timeLeft.invincible > 0 || gameConfig.gameStatus.includes('_PAUSED')
+                    }
+                    className="px-4 py-3 bg-amber-500 text-white rounded-2xl font-bold text-sm shadow-xl disabled:bg-slate-100 disabled:text-slate-400 active:scale-95 transition-all"
+                  >
+                    無敵 ({currentUser.invincibleCards ?? 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsProcessing(true);
+                      try { await onStartShinkansenWait(); }
+                      catch { toast.error('失敗しました'); }
+                      finally { setIsProcessing(false); }
+                    }}
+                    disabled={isProcessing || currentUser.status !== 'ACTIVE'}
+                    className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all"
+                  >
+                    下車待機（{gameConfig.postShinkansenWaitMinutes ?? 30}分）開始
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 w-full justify-center">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsProcessing(true);
+                    try { await onActivateInvincibility(); }
+                    catch { toast.error('失敗しました'); }
+                    finally { setIsProcessing(false); }
+                  }}
+                  disabled={
+                    isProcessing || (currentUser.invincibleCards ?? 0) <= 0 || timeLeft.invincible > 0 || gameConfig.gameStatus.includes('_PAUSED')
+                  }
+                  className="px-4 py-3 bg-amber-500 text-white rounded-2xl font-bold text-sm shadow-xl disabled:bg-slate-100 disabled:text-slate-400 active:scale-95 transition-all"
+                >
+                  無敵カード ({currentUser.invincibleCards ?? 0})
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsProcessing(true);
+                    try { await onStartShinkansen?.(); }
+                    finally { setIsProcessing(false); }
+                  }}
+                  disabled={isProcessing || currentUser.status !== 'ACTIVE' || !isGameActive(gameConfig.gameStatus)}
+                  className="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-sm shadow-xl disabled:bg-slate-100 disabled:text-slate-400 active:scale-95 transition-all flex items-center gap-1.5"
+                >
+                  <Train size={16} /> 新幹線乗車開始
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsProcessing(true);
+                    try { await onStartShinkansenWait(); }
+                    catch { toast.error('失敗しました'); }
+                    finally { setIsProcessing(false); }
+                  }}
+                  disabled={isProcessing || currentUser.status !== 'ACTIVE' || !isGameActive(gameConfig.gameStatus) || timeLeft.shinkansenRemaining > 0}
+                  className="px-4 py-3 bg-white text-slate-700 rounded-2xl font-bold text-sm shadow-xl border border-slate-200 disabled:bg-slate-50 active:scale-95 transition-all"
+                >
+                  待機
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

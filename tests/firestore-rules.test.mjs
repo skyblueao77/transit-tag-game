@@ -280,6 +280,69 @@ describe('Firestore Security Rules', () => {
     })).status, 200);
   });
 
+  test('allows a user to update protectionZone (GREEN_CAR, SAFE_ZONE, NONE) and rejects invalid zones', async () => {
+    const zoneUser = await auth('signUp', {});
+    const zUid = zoneUser.localId;
+    const zToken = zoneUser.idToken;
+
+    assert.equal((await firestore(`users/${zUid}`, {
+      token: zToken,
+      method: 'PATCH',
+      body: fields({
+        id: zUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Zone Player', role: 'RUNNER',
+        color: '#ef4444', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      }),
+    })).status, 200);
+
+    for (const zone of ['GREEN_CAR', 'SAFE_ZONE', 'NONE']) {
+      assert.equal((await firestore(`users/${zUid}?updateMask.fieldPaths=protectionZone`, {
+        token: zToken,
+        method: 'PATCH',
+        body: fields({ protectionZone: zone }),
+      })).status, 200);
+    }
+
+    assert.equal((await firestore(`users/${zUid}?updateMask.fieldPaths=protectionZone`, {
+      token: zToken,
+      method: 'PATCH',
+      body: fields({ protectionZone: 'UNAUTHORIZED_ZONE' }),
+    })).status, 403);
+  });
+
+  test('allows a user to start, increment, and reset shinkansen tracking', async () => {
+    const shinkansenUser = await auth('signUp', {});
+    const sUid = shinkansenUser.localId;
+    const sToken = shinkansenUser.idToken;
+
+    assert.equal((await firestore(`users/${sUid}`, {
+      token: sToken,
+      method: 'PATCH',
+      body: fields({
+        id: sUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Shinkansen Player', role: 'RUNNER',
+        color: '#ef4444', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      }),
+    })).status, 200);
+
+    const now = Date.now();
+    assert.equal((await firestore(`users/${sUid}?updateMask.fieldPaths=shinkansenStartTime&updateMask.fieldPaths=shinkansenSegmentCount`, {
+      token: sToken,
+      method: 'PATCH',
+      body: fields({ shinkansenStartTime: now, shinkansenSegmentCount: 0 }),
+    })).status, 200);
+
+    assert.equal((await firestore(`users/${sUid}?updateMask.fieldPaths=shinkansenSegmentCount`, {
+      token: sToken,
+      method: 'PATCH',
+      body: fields({ shinkansenSegmentCount: 1 }),
+    })).status, 200);
+
+    assert.equal((await firestore(`users/${sUid}?updateMask.fieldPaths=shinkansenSegmentCount`, {
+      token: sToken,
+      method: 'PATCH',
+      body: fields({ shinkansenSegmentCount: -1 }),
+    })).status, 403);
+  });
+
   test('allows only strict current-Session Setup create and rejects Admin creating Player doc', async () => {
     const validPlayer = {
       id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Setup Player',

@@ -18,7 +18,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
-import type { LocationLog, Role } from './types';
+import type { LocationLog, Role, ProtectionZoneType } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
@@ -50,6 +50,10 @@ import {
 } from './src/infrastructure/firebase/auth';
 import {
   updatePlayerLastStation,
+  updatePlayerProtectionZone,
+  startPlayerShinkansen,
+  incrementPlayerShinkansenSegment,
+  resetPlayerShinkansen,
 } from './src/infrastructure/firebase/playerStore';
 
 import { firebaseCaptureGateway } from './src/infrastructure/firebase/captureActions';
@@ -413,6 +417,50 @@ const App: React.FC = () => {
     if (result.ok === false) console.error('Waiting resume request was rejected:', result.reason);
   }, [gameConfig.gameSessionId]);
 
+  const handleUpdateProtectionZone = useCallback(async (zone: ProtectionZoneType): Promise<void> => {
+    if (!currentUser) return;
+    try {
+      await updatePlayerProtectionZone(currentUser.id, zone);
+      const label = zone === 'NONE' ? '通常モード' : zone === 'GREEN_CAR' ? 'グリーン席（特例保護）' : 'セーフゾーン（特例保護）';
+      toast.success(`保護エリア宣言: ${label}`);
+    } catch (err) {
+      console.error('Failed to update protection zone:', err);
+      toast.error('保護エリアの更新に失敗しました');
+    }
+  }, [currentUser]);
+
+  const handleStartShinkansen = useCallback(async (): Promise<void> => {
+    if (!currentUser) return;
+    try {
+      await startPlayerShinkansen(currentUser.id);
+      toast.success('新幹線乗車を開始しました。タイマーがスタートしました。');
+    } catch (err) {
+      console.error('Failed to start shinkansen:', err);
+      toast.error('新幹線乗車の開始に失敗しました');
+    }
+  }, [currentUser]);
+
+  const handleIncrementShinkansenSegment = useCallback(async (): Promise<void> => {
+    if (!currentUser) return;
+    try {
+      await incrementPlayerShinkansenSegment(currentUser.id);
+      toast.info(`新幹線区間数を記録しました（現在: ${(currentUser.shinkansenSegmentCount ?? 0) + 1}区間）`);
+    } catch (err) {
+      console.error('Failed to increment shinkansen segment:', err);
+      toast.error('区間数の更新に失敗しました');
+    }
+  }, [currentUser]);
+
+  const handleResetShinkansen = useCallback(async (): Promise<void> => {
+    if (!currentUser) return;
+    try {
+      await resetPlayerShinkansen(currentUser.id);
+      toast.info('新幹線乗車記録をリセットしました');
+    } catch (err) {
+      console.error('Failed to reset shinkansen:', err);
+    }
+  }, [currentUser]);
+
   // 待機モードの自動復帰（Cloud Functions Cron不要化: Sparkプラン対応）
   useEffect(() => {
     if (currentUser?.status !== 'WAITING' || !currentUser.waitingUntil) return;
@@ -702,6 +750,10 @@ const App: React.FC = () => {
                       onStartShinkansenWait={handleStartShinkansenWait}
                       onResumeWaiting={handleResumeWaiting}
                       onUpdateLastStation={handleUpdateLastStation}
+                      onUpdateProtectionZone={handleUpdateProtectionZone}
+                      onStartShinkansen={handleStartShinkansen}
+                      onIncrementShinkansenSegment={handleIncrementShinkansenSegment}
+                      onResetShinkansen={handleResetShinkansen}
                     />
                   }
                 />
