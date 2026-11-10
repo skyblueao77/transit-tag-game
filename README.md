@@ -1,8 +1,8 @@
 # Transit Tag Game / 鉄道鬼ごっこ 🚆🏃💨
 
 [![CI](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml)
-![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Cross--Doc%20Verified-success)
-![Tests](https://img.shields.io/badge/Tests-227%20Unit%20%7C%2018%20Rules%20%7C%202%20Integration-brightgreen)
+![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Hardened%20%26%20Cross--Doc%20Verified-success)
+![Tests](https://img.shields.io/badge/Tests-227%20Unit%20%7C%2021%20Rules%20%7C%202%20Integration-brightgreen)
 ![100-Pattern Matrix](https://img.shields.io/badge/100--Pattern%20Matrix-100%25%20Verified-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue)
 ![Biome](https://img.shields.io/badge/Lint-Biome%20A11y%20Strict-purple)
@@ -124,8 +124,17 @@ JR山手線 渋谷〜恵比寿間 (次は恵比寿)  [設定] [他の候補▼]
 - **手動達成承認・ポイント付与**:
   - 参加者から写真を見せてもらったり報告を受けた際、プレイヤーとミッションを選んで「承認してスコア付与」を押せば、即座にポイント加算＆無敵カード抽選が実行されます。
 
-### 5. 安全管理（緊急通報マップ）
-- プレイヤーが SOS を発信した場合、専用の赤色アラートと緊急マップが表示され、正確な緯度経度を確認できます。
+### 5. 緊急アナウンス配信（全員一斉通知）
+- ゲーム中、天候急変やトラブル、重要連絡を全参加者へリアルタイム通知できます。
+- 管理画面の「📢 全体緊急アナウンス配信」からメッセージを入力して送信するだけで、全プレイヤーの画面に即時トースト通知および最新情報として共有されます。
+
+### 6. 参加者管理・チーム編成調整 & 誤登録プレイヤー削除
+- **チーム変更**: 参加者が誤って別のチームを選んでしまった場合、プレイヤー一覧の「Team Aへ / Team Bへ」ボタンでいつでも管理者が所属チームを変更できます。
+- **安全なプレイヤー削除**: 誤って重複作成されたアカウントやテストユーザーは、確認ダイアログ付きの「削除」ボタンからユーザー情報・非公開位置情報・SOSプロジェクションをまとめて安全に一括削除できます。
+
+### 7. 安全管理（持続型SOS緊急通報マップ）
+- プレイヤーが「SOS」を発信すると、管理画面に赤色アラートと専用緊急マップが表示され、正確な緯度経度・最寄り駅を確認できます。
+- **60秒心拍同期 & 二重投影保存**: SOS発信後は60秒ごとの自動心拍および測位時に `privateLocations` と `emergencyLocationProjections` がアトミックに同時更新されるため、救護班が現場に到着するまで位置情報が消失することなくリアルタイム追跡可能です。
 
 ---
 
@@ -165,10 +174,24 @@ JR山手線 渋谷〜恵比寿間 (次は恵比寿)  [設定] [他の候補▼]
        └─ ミッション達成記録
 
 [ Cloud Firestore (無料枠: 1日5万回読み取り / 2万回書き込み) ]
-  └─ 厳格なセキュリティルール (firestore.rules)
+  └─ 堅牢化セキュリティルール (firestore.rules)
+       ├─ 初回1名限定アトミック管理者ブートストラップ（/system/admin_bootstrap）
+       ├─ 進行中フェーズ & 配信中ミッション厳格判定（未配信ミッションの不正クリア完全遮断）
+       ├─ 監査ログ改ざん・全消去（[]）・巨大文字列DoSの物理阻止
+       ├─ 捕獲トランザクションの改ざん防止（31分上限・開始30分ロック）
+       ├─ SOSプロジェクションの有効期限上限（3分以内）
+       ├─ 参加者および管理者のみに閲覧を絞ったBOLA保護（未参加アクセスの遮断）
        ├─ 同一チーム同士の捕獲を物理遮断
        ├─ スコア改ざん・無敵カード不正付与の完全遮断
        └─ プレイヤープライベート座標の秘匿 (privateLocations/{uid})
+
+[ Hosting & Web セキュリティ (firebase.json) ]
+  └─ 包括的HTTPセキュリティヘッダー
+       ├─ Content-Security-Policy (CSP) による外部スクリプトインジェクション防御
+       ├─ X-Frame-Options: DENY (クリックジャッキング対策)
+       ├─ X-Content-Type-Options: nosniff (MIMEスニッフィング抑止)
+       ├─ Referrer-Policy: strict-origin-when-cross-origin
+       └─ Permissions-Policy (カメラ・位置情報等の最小権限ポリシー)
 ```
 
 ---
@@ -193,8 +216,14 @@ npm run typecheck
 # 静的解析・Lint (Biome)
 npm run lint
 
-# 単体テストの実行 (221テスト全件)
+# 単体テストの実行 (227テスト全件)
 npm test
+
+# Firestore セキュリティルールのエミュレータ検証 (全21テスト)
+npm run test:rules
+
+# トランザクション & ペイロード結合テスト (全2テスト)
+npm run test:integration
 
 # 本番ビルドの確認 (PWA Service Worker生成)
 npm run build
