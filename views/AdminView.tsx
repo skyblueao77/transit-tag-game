@@ -7,10 +7,11 @@ import {
   Users, Lock, Shield, Trophy, Play,
   AlertTriangle, Shuffle, MapPin,
   RefreshCw, QrCode, Copy, Check, Plus, Edit2, Trash2,
-  Award, Sparkles, X
+  Award, Sparkles, X, Send, Megaphone, ArrowLeftRight
 } from 'lucide-react';
+import { toast } from 'sonner';
 import QRCode from 'qrcode-svg';
-import { signInAdmin, setupInitialAdmin } from '../src/infrastructure/firebase/auth';
+import { signInAdmin, setupInitialAdmin, isAdminBootstrapCompleted } from '../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../src/application/adminReveal';
 import type { AdminRevealScope } from '../src/game/adminReveal';
@@ -29,6 +30,9 @@ import { firebaseAdminGameResetGateway } from '../src/infrastructure/firebase/ad
 import { initializeGameSession } from '../src/application/initializeGameSession';
 import { firebaseGameSessionInitializationGateway } from '../src/infrastructure/firebase/adminSessionActions';
 import { createOrUpdateMission, deleteMission, awardMissionCompletionByAdmin } from '../src/infrastructure/firebase/missionStore';
+import { isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
+import { sendAdminBroadcast } from '../src/infrastructure/firebase/clientFirestoreGateways';
+import { adminChangePlayerTeam, adminDeletePlayer } from '../src/infrastructure/firebase/playerStore';
 
 import {
   subscribeEmergencyLocationProjections,
@@ -48,9 +52,16 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   const [adminIdInput, setAdminIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [isSetupMode, setIsSetupMode] = useState(false);
-  const [setupSecretInput, setSetupSecretInput] = useState('tag-admin-2026-secure');
+  const [isBootstrapCompleted, setIsBootstrapCompleted] = useState<boolean | null>(null);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // 全体一斉通知
+  const [broadcastInput, setBroadcastInput] = useState('');
+  const [isSendingBroadcast, setIsSendingBroadcast] = useState(false);
+
+  // プレイヤー管理
+  const [modifyingPlayerIds, setModifyingPlayerIds] = useState<Set<string>>(new Set());
 
   // ミッションタブ (配信 / 一覧・作成 / 達成履歴)
   const [missionTab, setMissionTab] = useState<'DISPATCH' | 'CATALOG' | 'COMPLETIONS'>('DISPATCH');
@@ -159,9 +170,20 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     );
   }, [isAuthorized, config.gameSessionId]);
 
+  useEffect(() => {
+    isAdminBootstrapCompleted()
+      .then(completed => {
+        setIsBootstrapCompleted(completed);
+        if (!completed) {
+          setIsSetupMode(true);
+        }
+      })
+      .catch(err => console.error('Error checking bootstrap completion:', err));
+  }, []);
+
   const requireSessionId = (): string | null => {
     if (config.gameSessionId) return config.gameSessionId;
-    alert('ゲームセッション初期化待ちです。先にSession初期化を実行してください。');
+    toast.error('ゲームセッション初期化待ちです。先にSession初期化を実行してください。');
     return null;
   };
 
@@ -177,7 +199,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         firebaseGameSessionInitializationGateway
       );
       if (!initResult.ok) {
-        alert(`Session初期化に失敗しました: ${initResult.reason}`);
+        toast.error(`Session初期化に失敗しました: ${initResult.reason}`);
         return;
       }
       sessionInitializationRequestIdRef.current = null;
@@ -188,9 +210,9 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         firebaseAdminMissionGateway
       );
       if (syncResult.ok) {
-        alert(`🎉 ゲーム準備が完了しました！\nセッションID: ${initResult.gameSessionId}\n公式ミッション${syncResult.createdCount}件を登録しました。参加者を招待してください。`);
+        toast.success(`🎉 ゲーム準備が完了しました！\nセッションID: ${initResult.gameSessionId}\n公式ミッション${syncResult.createdCount}件を登録しました。参加者を招待してください。`);
       } else {
-        alert(`セッションは初期化されましたが、ミッション同期に失敗しました: ${syncResult.reason}`);
+        toast.error(`セッションは初期化されましたが、ミッション同期に失敗しました: ${syncResult.reason}`);
       }
     } finally {
       setSessionInitializationBusy(false);
@@ -205,13 +227,15 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await initializeGameSession({ requestId: sessionInitializationRequestIdRef.current }, firebaseGameSessionInitializationGateway);
       if (result.ok === false) {
-        alert(`Session初期化に失敗しました: ${result.reason}`);
+        toast.error(`Session初期化に失敗しました: ${result.reason}`);
         return;
       }
       sessionInitializationRequestIdRef.current = null;
-      alert(result.alreadyInitialized
-        ? `Sessionは初期化済みです: ${result.gameSessionId}`
-        : `Sessionを初期化しました: ${result.gameSessionId}`);
+      if (result.alreadyInitialized) {
+        toast.info(`Sessionは初期化済みです: ${result.gameSessionId}`);
+      } else {
+        toast.success(`Sessionを初期化しました: ${result.gameSessionId}`);
+      }
     } finally {
       setSessionInitializationBusy(false);
     }
@@ -238,10 +262,10 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await transitionGamePhase({ action, requestId: crypto.randomUUID(), expectedSessionId }, firebaseAdminPhaseGateway);
       if (result.ok === false) {
-        alert(`フェーズ操作に失敗しました: ${result.reason}`);
+        toast.error(`フェーズ操作に失敗しました: ${result.reason}`);
       }
     } catch {
-      alert('フェーズ操作に失敗しました');
+      toast.error('フェーズ操作に失敗しました');
     } finally {
       setIsProcessing(false);
     }
@@ -260,11 +284,11 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await swapTeamRoles({ requestId, expectedSessionId }, firebaseAdminGameStateGateway);
       if (result.ok === false) {
-        alert('交代に失敗しました。通信状態を確認して再試行してください。');
+        toast.error('交代に失敗しました。通信状態を確認して再試行してください。');
         return;
       }
       roleSwapRequestIdRef.current = null;
-      alert(`交代完了。Team ${result.newOniTeam} が鬼になりました。`);
+      toast.success(`交代完了。Team ${result.newOniTeam} が鬼になりました。`);
     } finally {
       roleSwapBusyRef.current = false;
       setIsProcessing(false);
@@ -282,7 +306,9 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await resumePlayer({ targetId: user.id, expectedSessionId }, firebaseAdminGameStateGateway);
       if (result.ok === false) {
-        alert('Playerの復帰に失敗しました。権限と通信状態を確認してください。');
+        toast.error('Playerの復帰に失敗しました。権限と通信状態を確認してください。');
+      } else {
+        toast.success(`${user.name} を待機状態から復帰させました`);
       }
     } finally {
       resumeBusyRef.current.delete(user.id);
@@ -304,13 +330,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await revealPlayerLocations({ scope, durationMinutes: searchDuration, requestId, expectedSessionId }, firebaseAdminRevealGateway);
       if (result.ok === false) {
-        alert(result.reason === 'ZERO_VALID_LOCATIONS'
+        toast.error(result.reason === 'ZERO_VALID_LOCATIONS'
           ? '最新の有効な位置情報がありません。Playerの位置更新後に再試行してください。'
           : '位置公開に失敗しました。権限と通信状態を確認して再試行してください。');
         return;
       }
       delete revealRequestIdsRef.current[scope];
-      alert(`${result.duplicate ? '既に実行済みです。' : '公開しました。'}\n公開: ${result.projectedCount}名 / 除外: ${result.skippedCount}名`);
+      toast.success(`${result.duplicate ? '既に実行済みです。' : '公開しました。'}\n公開: ${result.projectedCount}名 / 除外: ${result.skippedCount}名`);
     } finally {
       revealBusyRef.current = false;
       setIsProcessing(false);
@@ -323,7 +349,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     if (!expectedSessionId) return;
     const delta = Number(scoreDeltaInput);
     if (!Number.isSafeInteger(delta) || delta === 0 || delta < -1000 || delta > 1000) {
-      alert('補正値は -1000〜1000 の0以外の整数で入力してください。');
+      toast.error('補正値は -1000〜1000 の0以外の整数で入力してください。');
       return;
     }
     const reasonLabels: Record<ScoreAdjustmentReasonCode, string> = {
@@ -340,12 +366,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await adjustTeamScore({ team: scoreTeam, delta, reasonCode: scoreReasonCode, requestId, expectedSessionId }, firebaseAdminScoreAdjustmentGateway);
       if (result.ok === false) {
-        alert(`スコア補正に失敗しました: ${result.reason}`);
+        toast.error(`スコア補正に失敗しました: ${result.reason}`);
         return;
       }
       pendingScoreRequestRef.current = null;
       setScoreAdjustmentResult(result);
       setScoreDeltaInput('');
+      toast.success(`Team ${scoreTeam} を ${delta > 0 ? '+' : ''}${delta}pt 補正しました`);
     } finally {
       scoreBusyRef.current = false;
       setIsProcessing(false);
@@ -370,10 +397,11 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await setMissionMode({ mode: next, requestId, expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
-        alert(`モード切り替えに失敗しました: ${result.reason}`);
+        toast.error(`モード切り替えに失敗しました: ${result.reason}`);
         return;
       }
       pendingMissionModeRef.current = null;
+      toast.success(`ミッションモードを ${next === 'SAME' ? '共通' : '個別'} に切り替えました`);
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
@@ -385,7 +413,10 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
     const missionIdToAssign = targetMissionId || manualMissionId;
-    if (!missionIdToAssign) return alert('ミッションを選択してください');
+    if (!missionIdToAssign) {
+      toast.error('ミッションを選択してください');
+      return;
+    }
     if (!confirm(`Team ${targetTeam} に指定ミッションを配信しますか？`)) return;
 
     const target = targetTeam === 'A' ? 'TEAM_A' : 'TEAM_B';
@@ -398,11 +429,11 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         firebaseAdminMissionGateway
       );
       if (result.ok === false) {
-        alert(`ミッション配信に失敗しました: ${result.reason}`);
+        toast.error(`ミッション配信に失敗しました: ${result.reason}`);
         return;
       }
       delete missionRequestIdsRef.current[key];
-      alert(`Team ${targetTeam} へ配信完了`);
+      toast.success(`Team ${targetTeam} へ配信完了`);
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
@@ -420,11 +451,11 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await assignMissions({ strategy: 'RANDOM', target: 'BOTH', requestId: missionRequestId(key), expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
-        alert(`ランダム配信に失敗しました: ${result.reason}`);
+        toast.error(`ランダム配信に失敗しました: ${result.reason}`);
         return;
       }
       delete missionRequestIdsRef.current[key];
-      alert('ランダムミッションを配信しました');
+      toast.success('ランダムミッションを配信しました');
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
@@ -441,11 +472,11 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     try {
       const result = await syncMissionCatalog({ requestId: missionRequestId(key), expectedSessionId }, firebaseAdminMissionGateway);
       if (result.ok === false) {
-        alert(`ミッションcatalog同期に失敗しました: ${result.reason}`);
+        toast.error(`ミッションcatalog同期に失敗しました: ${result.reason}`);
         return;
       }
       delete missionRequestIdsRef.current[key];
-      alert(`同期完了: ${result.totalManagedCount}件のミッションを反映しました`);
+      toast.success(`同期完了: ${result.totalManagedCount}件のミッションを反映しました`);
     } finally {
       missionBusyRef.current = false;
       setIsProcessing(false);
@@ -458,10 +489,10 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       await createOrUpdateMission(mission);
       setIsMissionModalOpen(false);
       setEditingMission(null);
-      alert(`ミッション「${mission.title}」を保存しました`);
+      toast.success(`ミッション「${mission.title}」を保存しました`);
     } catch (err) {
       console.error('Error saving mission:', err);
-      alert('ミッションの保存に失敗しました');
+      toast.error('ミッションの保存に失敗しました');
     }
   };
 
@@ -470,10 +501,10 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     if (!confirm(`ミッション「${mission.title}」を削除しますか？`)) return;
     try {
       await deleteMission(mission.id);
-      alert('削除しました');
+      toast.success('削除しました');
     } catch (err) {
       console.error('Error deleting mission:', err);
-      alert('ミッションの削除に失敗しました');
+      toast.error('ミッションの削除に失敗しました');
     }
   };
 
@@ -481,7 +512,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   const handleAdminAwardMission = async (): Promise<void> => {
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId || !manualAwardMissionId) {
-      alert('ミッションを選択してください');
+      toast.error('ミッションを選択してください');
       return;
     }
     const targetMission = allMissionsList.find(m => m.id === manualAwardMissionId);
@@ -499,13 +530,80 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         expectedSessionId,
       });
       if (success) {
-        alert(`Team ${manualAwardTeam} に +${targetMission.points}pt 加算しました！`);
+        toast.success(`Team ${manualAwardTeam} に +${targetMission.points}pt 加算しました！`);
         setManualAwardMissionId('');
       } else {
-        alert('加算処理に失敗しました');
+        toast.error('加算処理に失敗しました（既に達成承認済みの可能性があります）');
       }
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // 全体一斉通知（ブロードキャスト）送信
+  const handleSendBroadcast = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    const msg = broadcastInput.trim();
+    if (!msg) {
+      toast.error('メッセージを入力してください');
+      return;
+    }
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
+
+    setIsSendingBroadcast(true);
+    try {
+      const ok = await sendAdminBroadcast(msg, expectedSessionId);
+      if (ok) {
+        toast.success('全体一斉通知を送信しました');
+        setBroadcastInput('');
+      } else {
+        toast.error('全体一斉通知の送信に失敗しました');
+      }
+    } catch (err) {
+      console.error('Error sending broadcast:', err);
+      toast.error('全体一斉通知の送信中にエラーが発生しました');
+    } finally {
+      setIsSendingBroadcast(false);
+    }
+  };
+
+  // プレイヤーチーム変更
+  const handleChangePlayerTeam = async (user: User): Promise<void> => {
+    const nextTeam = user.team === 'A' ? 'B' : 'A';
+    if (!confirm(`${user.name} のチームを TEAM ${nextTeam} に変更しますか？`)) return;
+    setModifyingPlayerIds(prev => new Set(prev).add(user.id));
+    try {
+      await adminChangePlayerTeam(user.id, nextTeam);
+      toast.success(`${user.name} を TEAM ${nextTeam} に変更しました`);
+    } catch (err) {
+      console.error('Change team error:', err);
+      toast.error('チーム変更に失敗しました');
+    } finally {
+      setModifyingPlayerIds(prev => {
+        const next = new Set(prev);
+        next.delete(user.id);
+        return next;
+      });
+    }
+  };
+
+  // プレイヤー削除
+  const handleDeletePlayer = async (user: User): Promise<void> => {
+    if (!confirm(`本当にプレイヤー「${user.name}」を削除しますか？\n（位置情報や参加データも同時に削除されます）`)) return;
+    setModifyingPlayerIds(prev => new Set(prev).add(user.id));
+    try {
+      await adminDeletePlayer(user.id);
+      toast.success(`プレイヤー「${user.name}」を削除しました`);
+    } catch (err) {
+      console.error('Delete player error:', err);
+      toast.error('プレイヤー削除に失敗しました');
+    } finally {
+      setModifyingPlayerIds(prev => {
+        const next = new Set(prev);
+        next.delete(user.id);
+        return next;
+      });
     }
   };
 
@@ -613,14 +711,28 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   // ログイン前の画面（メール不要のユーザーID・パスワード）
   if (!isAuthorized) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-900 p-4 font-sans text-white">
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 p-4 font-sans text-white">
+        {isFirebaseMisconfigured && (
+          <div className="w-full max-w-sm mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
+            <AlertTriangle size={20} className="shrink-0 text-amber-300 mt-0.5" />
+            <div>
+              <div className="font-black text-amber-200 mb-0.5">Firebase環境設定エラー</div>
+              ⚠️ Firebaseの環境変数（.env）が設定されないままビルドされています。プロジェクトルートの .env ファイルに VITE_FIREBASE_API_KEY 等を設定し、再度 npm run build && npx firebase deploy を実行してください。
+            </div>
+          </div>
+        )}
+
         <div className="w-full max-w-sm bg-slate-800 p-8 rounded-3xl text-center shadow-2xl border border-slate-700 relative overflow-hidden">
           <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-blue-500/30">
             <Lock size={32} className="text-blue-400" />
           </div>
-          <h2 className="text-2xl font-black mb-1">管理者ログイン</h2>
+          <h2 className="text-2xl font-black mb-1">
+            {isSetupMode ? '初回管理者登録' : '管理者ログイン'}
+          </h2>
           <p className="text-xs text-slate-400 font-medium mb-6">
-            メールアドレス不要・IDとパスワードで管理画面へ
+            {isSetupMode
+              ? '初回1回限りの管理者アカウントを作成します'
+              : 'メールアドレス不要・IDとパスワードで管理画面へ'}
           </p>
 
           {authError && (
@@ -636,12 +748,21 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               try {
                 const authorized = await signInAdmin(adminIdInput, passwordInput);
                 if (!authorized) {
-                  setAuthError('管理者権限が確認できませんでした。「初期セットアップ」を行ってください。');
+                  setAuthError('管理者権限が確認できませんでした。IDとパスワードをご確認ください。');
                   return;
                 }
                 setIsAuthorized(true);
-              } catch {
-                setAuthError('ログインに失敗しました。IDまたはパスワードをご確認ください。');
+              } catch (err: unknown) {
+                const code = (err as { code?: string })?.code || '';
+                if (code === 'auth/operation-not-allowed') {
+                  setAuthError('⚠️ Firebase Console の「Authentication > ログイン方法」で「メール/パスワード」が有効になっていません。Firebase Console で有効化してください。');
+                } else if (code === 'auth/invalid-api-key' || code.includes('api-key-not-valid')) {
+                  setAuthError('⚠️ Firebase APIキーが正しくありません。.env の VITE_FIREBASE_API_KEY を確認してください。');
+                } else if (code === 'permission-denied') {
+                  setAuthError('⚠️ Firestore セキュリティルールによって拒否されました。npx firebase deploy --only firestore:rules を実行したか確認してください。');
+                } else {
+                  setAuthError('ログインに失敗しました。IDまたはパスワードをご確認ください。');
+                }
               }
             }}>
               <div className="text-left mb-3">
@@ -682,13 +803,15 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               </button>
 
               <div className="mt-5 pt-4 border-t border-slate-700 flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setIsSetupMode(true); setAuthError(null); }}
-                  className="text-xs font-bold text-blue-400 hover:text-blue-300"
-                >
-                  初めての方はこちら（初期管理者登録）
-                </button>
+                {isBootstrapCompleted === false && (
+                  <button
+                    type="button"
+                    onClick={() => { setIsSetupMode(true); setAuthError(null); }}
+                    className="text-xs font-bold text-emerald-400 hover:text-emerald-300"
+                  >
+                    初めての方はこちら（初期管理者登録）
+                  </button>
+                )}
                 <Link to="/" className="text-xs font-medium text-slate-500 hover:text-slate-400">
                   ← プレイヤー参加画面へ戻る
                 </Link>
@@ -698,17 +821,33 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             <form onSubmit={async e => {
               e.preventDefault();
               setAuthError(null);
-              if (passwordInput.length < 6) {
-                setAuthError('パスワードは6文字以上で設定してください。');
+              if (passwordInput.length < 8) {
+                setAuthError('管理者パスワードは8文字以上で設定してください。');
                 return;
               }
               try {
-                await setupInitialAdmin(adminIdInput, passwordInput, setupSecretInput);
+                await setupInitialAdmin(adminIdInput, passwordInput);
                 setIsAuthorized(true);
-                alert('管理者アカウントを作成し、ログインしました！');
+                setIsBootstrapCompleted(true);
+                toast.success('管理者アカウントを作成し、ログインしました！');
               } catch (err: unknown) {
                 console.error('Setup error:', err);
-                setAuthError('管理者登録に失敗しました。合言葉を確認してください。');
+                const msg = (err as Error)?.message;
+                const code = (err as { code?: string })?.code || '';
+                if (msg === 'ADMIN_ALREADY_INITIALIZED') {
+                  setAuthError('初期管理者は既に登録済みです。登録したIDとパスワードでログインしてください。');
+                  setIsSetupMode(false);
+                } else if (msg === 'ADMIN_PASSWORD_TOO_SHORT') {
+                  setAuthError('管理者パスワードは8文字以上で設定してください。');
+                } else if (code === 'auth/operation-not-allowed') {
+                  setAuthError('⚠️ Firebase Console の「Authentication > ログイン方法」で「メール/パスワード」が有効になっていません。Firebase Console で有効化してください。');
+                } else if (code === 'auth/invalid-api-key' || code.includes('api-key-not-valid')) {
+                  setAuthError('⚠️ Firebase APIキーが正しくありません。.env の VITE_FIREBASE_API_KEY を確認してください。');
+                } else if (code === 'permission-denied') {
+                  setAuthError('⚠️ Firestore セキュリティルールによって拒否されました。npx firebase deploy --only firestore:rules を実行したか確認してください。');
+                } else {
+                  setAuthError('管理者登録に失敗しました。');
+                }
               }
             }}>
               <div className="text-left mb-3">
@@ -726,9 +865,9 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
                 />
               </div>
 
-              <div className="text-left mb-3">
+              <div className="text-left mb-5">
                 <label htmlFor="setup-password" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
-                  管理者パスワード（6文字以上）
+                  管理者パスワード（8文字以上）
                 </label>
                 <input
                   id="setup-password"
@@ -736,33 +875,17 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
                   value={passwordInput}
                   onChange={e => setPasswordInput(e.target.value)}
                   className="w-full p-3 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
-                  placeholder="パスワード"
-                  minLength={6}
+                  placeholder="8文字以上の強力なパスワード"
+                  minLength={8}
                   required
                 />
-              </div>
-
-              <div className="text-left mb-5">
-                <label htmlFor="setup-key" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-widest">
-                  セットアップ用合言葉
-                </label>
-                <input
-                  id="setup-key"
-                  type="text"
-                  value={setupSecretInput}
-                  onChange={e => setSetupSecretInput(e.target.value)}
-                  className="w-full p-3 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
-                  placeholder="tag-admin-2026-secure"
-                  required
-                />
-                <p className="text-[9px] text-slate-400 mt-1">※初期合言葉: tag-admin-2026-secure</p>
               </div>
 
               <button
                 type="submit"
                 className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black shadow-lg transition-all active:scale-95 text-sm"
               >
-                管理者アカウントを作成
+                管理者アカウントを作成（初回限定）
               </button>
 
               <div className="mt-4 pt-3 border-t border-slate-700">
@@ -1013,6 +1136,35 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             </div>
           )}
         </div>
+      </section>
+
+      {/* 📢 参加者全員へ一斉通知（ブロードキャスト） */}
+      <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+        <h3 className="font-black flex items-center gap-2 mb-2 text-slate-800 uppercase tracking-tight text-sm">
+          <Megaphone size={18} className="text-amber-500" />
+          参加者全員へ一斉通知（ブロードキャスト）
+        </h3>
+        <p className="text-xs text-slate-500 font-medium mb-3">
+          全プレイヤーの画面にトースト通知を一斉表示し、タイムラインログに記録します。
+        </p>
+        <form onSubmit={handleSendBroadcast} className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="text"
+            value={broadcastInput}
+            onChange={e => setBroadcastInput(e.target.value)}
+            maxLength={200}
+            placeholder="例: 14:00から中間ボーナスミッション開始！"
+            className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-500"
+            disabled={isSendingBroadcast}
+          />
+          <button
+            type="submit"
+            disabled={isSendingBroadcast || !broadcastInput.trim()}
+            className="py-3 px-5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl font-black text-xs shadow-md flex items-center justify-center gap-1.5 shrink-0 transition-all active:scale-95"
+          >
+            <Send size={14} /> 一斉送信
+          </button>
+        </form>
       </section>
 
       {/* 🔄 4. 攻守交代 */}
@@ -1410,15 +1562,35 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
                   }`}>{u.status}</span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => void handleResumePlayer(u)}
-                disabled={resumingPlayerIds.has(u.id)}
-                title="待機状態から復帰させる"
-                className="p-2 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100 active:bg-emerald-100"
-              >
-                <RefreshCw size={14} />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void handleChangePlayerTeam(u)}
+                  disabled={modifyingPlayerIds.has(u.id)}
+                  title={`TEAM ${u.team === 'A' ? 'B' : 'A'} へ変更`}
+                  className="px-2 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-black rounded-lg border border-slate-300 flex items-center gap-1 active:scale-95"
+                >
+                  <ArrowLeftRight size={12} /> {u.team === 'A' ? '→B' : '→A'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleResumePlayer(u)}
+                  disabled={resumingPlayerIds.has(u.id) || modifyingPlayerIds.has(u.id)}
+                  title="待機状態から復帰させる"
+                  className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100 hover:bg-emerald-100 active:scale-95"
+                >
+                  <RefreshCw size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeletePlayer(u)}
+                  disabled={modifyingPlayerIds.has(u.id)}
+                  title="プレイヤーを削除"
+                  className="p-1.5 bg-red-50 text-red-600 rounded-lg border border-red-100 hover:bg-red-100 active:scale-95"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))}
         </div>

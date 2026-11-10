@@ -26,6 +26,8 @@ const app = initializeApp(firebaseConfig);
 const isLocal = (typeof window !== 'undefined' && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
   || (typeof process !== 'undefined' && (process.env.FIRESTORE_EMULATOR_HOST || process.env.NODE_ENV === 'test' || process.env.ENABLE_EMULATOR === 'true'));
 
+export const isFirebaseMisconfigured = !isLocal && (firebaseConfig.apiKey === "demo-key" || firebaseConfig.projectId === "demo-no-project");
+
 // 4. Auth初期化（Firestoreより先に初期化してコンポーネント未登録を防ぐ）
 let authInstance: Auth = { currentUser: null } as unknown as Auth;
 if (typeof window !== 'undefined') {

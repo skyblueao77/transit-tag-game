@@ -2,12 +2,14 @@ import type React from 'react';
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
+import { toast } from 'sonner';
 import type { User } from '../types';
 import { TEAM_COLORS } from '../constants';
-import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck } from 'lucide-react';
+import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle } from 'lucide-react';
 import { registerWithUserId, signInWithUserId } from '../src/infrastructure/firebase/auth';
 import { createPlayerWithPrivateLocation } from '../src/infrastructure/firebase/playerStore';
-import { db } from '../src/infrastructure/firebase/firebaseClient';
+import { db, isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
+import { firebasePrivateLocationStore } from '../src/infrastructure/firebase/locationStores';
 
 interface Props {
   onComplete: (user: User) => void;
@@ -22,7 +24,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
   const [team, setTeam] = useState<'A' | 'B'>('A');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number }>({ lat: 35.6812, lng: 139.7671 });
+  const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
 
   const DEFAULT_LAT = 35.6812;
   const DEFAULT_LNG = 139.7671;
@@ -39,15 +41,38 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
     );
   }, []);
 
+  const getFriendlyAuthError = (err: unknown): string => {
+    const code = (err as { code?: string })?.code || '';
+    if (code === 'auth/operation-not-allowed') {
+      return '⚠️ Firebase Console の「Authentication > ログイン方法」で「メール/パスワード」が有効になっていません。Firebase Console で有効化してください。';
+    }
+    if (code === 'auth/invalid-api-key' || code.includes('api-key-not-valid')) {
+      return '⚠️ Firebase APIキーが正しくありません。.env の VITE_FIREBASE_API_KEY を確認してください。';
+    }
+    if (code === 'permission-denied') {
+      return '⚠️ Firestore セキュリティルールによって拒否されました。npx firebase deploy --only firestore:rules を実行したか確認してください。';
+    }
+    if (code === 'auth/email-already-in-use') {
+      return 'このユーザーIDは既に登録されています。「再開ログイン」タブからログインするか、別のIDを入力してください。';
+    }
+    if (code === 'auth/weak-password') {
+      return 'パスワードは6文字以上で入力してください。';
+    }
+    if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password') {
+      return 'ログインに失敗しました。ユーザーIDとパスワードをご確認ください。';
+    }
+    return '通信エラーまたは登録処理に失敗しました。電波環境や入力内容をご確認ください。';
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId.trim() || !password.trim() || !name.trim() || isSubmitting) return;
     if (!gameSessionId) {
-      alert('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
+      toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
       return;
     }
     if (password.length < 6) {
-      alert('パスワードは6文字以上で入力してください。');
+      toast.error('パスワードは6文字以上で入力してください。');
       return;
     }
 
@@ -68,22 +93,16 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
         invincibleCards: 0,
       };
 
+      const posToSave = currentPos ?? { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
       await createPlayerWithPrivateLocation(newUser, {
-        latitude: currentPos.lat,
-        longitude: currentPos.lng,
+        latitude: posToSave.lat,
+        longitude: posToSave.lng,
       }, gameSessionId);
 
       onComplete(newUser);
     } catch (err: unknown) {
-      const code = (err as { code?: string })?.code;
-      if (code === 'auth/email-already-in-use') {
-        alert('このユーザーIDは既に登録されています。「ログイン」タブからログインするか、別のIDを入力してください。');
-      } else if (code === 'auth/weak-password') {
-        alert('パスワードは6文字以上で入力してください。');
-      } else {
-        console.error('Registration error:', err);
-        alert('登録に失敗しました。通信環境や入力内容をご確認ください。');
-      }
+      console.error('Registration error:', err);
+      toast.error(getFriendlyAuthError(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -100,28 +119,44 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
 
       if (userSnap.exists()) {
         const existingUser = userSnap.data() as User;
-        const targetSession = gameSessionId || existingUser.gameSessionId || '';
-        await createPlayerWithPrivateLocation(existingUser, {
-          latitude: currentPos.lat,
-          longitude: currentPos.lng,
-        }, targetSession);
+        const targetSession = gameSessionId || existingUser.gameSessionId;
+        // GPS測位が完了している場合のみ現在地を更新（未測位の東京駅初期値で上書きしない）
+        if (currentPos && targetSession) {
+          try {
+            await firebasePrivateLocationStore.save(uid, {
+              latitude: currentPos.lat,
+              longitude: currentPos.lng,
+            }, targetSession);
+          } catch (locErr) {
+            console.warn('Failed to update location on resume:', locErr);
+          }
+        }
         onComplete(existingUser);
       } else {
-        alert('プレイヤー情報が見つかりません。「新規参加」タブからアカウントを作成してください。');
+        toast.error('プレイヤー情報が見つかりません。「新規エントリー」タブからアカウントを作成してください。');
       }
     } catch (err: unknown) {
       console.error('Login error:', err);
-      alert('ログインに失敗しました。ユーザーIDとパスワードをご確認ください。');
+      toast.error(getFriendlyAuthError(err));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const isLocationReady =
-    currentPos.lat !== DEFAULT_LAT || currentPos.lng !== DEFAULT_LNG;
+  const isLocationReady = currentPos !== null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-4 py-8 flex flex-col justify-center items-center text-white font-sans">
+      {isFirebaseMisconfigured && (
+        <div className="w-full max-w-sm mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
+          <AlertTriangle size={20} className="shrink-0 text-amber-300 mt-0.5" />
+          <div>
+            <div className="font-black text-amber-200 mb-0.5">Firebase環境設定エラー</div>
+            ⚠️ Firebaseの環境変数（.env）が設定されないままビルドされています。プロジェクトルートの .env ファイルに VITE_FIREBASE_API_KEY 等を設定し、再度 npm run build && npx firebase deploy を実行してください。
+          </div>
+        </div>
+      )}
+
       <div className="mb-6 text-center animate-in fade-in zoom-in duration-700">
         <div className="w-20 h-20 bg-white/5 backdrop-blur-xl rounded-[2rem] flex items-center justify-center mx-auto mb-4 shadow-2xl active:scale-90 transition-all border border-white/10">
           <Train size={40} className="text-blue-400 drop-shadow-[0_0_15px_rgba(96,165,250,0.5)]" />

@@ -1,6 +1,7 @@
-import { doc, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc, Timestamp, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { ExposedLocationStore, PrivateLocationStore } from '../../application';
+import { EMERGENCY_LOCATION_PROJECTION_TTL_MS } from '../../game/emergencyLocationProjection';
 
 export const firebasePrivateLocationStore: PrivateLocationStore = {
   save: async (playerId, location, expectedSessionId) => {
@@ -10,6 +11,31 @@ export const firebasePrivateLocationStore: PrivateLocationStore = {
       longitude: location.longitude,
       updatedAt: serverTimestamp(),
     });
+  },
+};
+
+export const firebaseEmergencyLocationStore: PrivateLocationStore = {
+  save: async (playerId, location, expectedSessionId) => {
+    const now = Date.now();
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'privateLocations', playerId), {
+      gameSessionId: expectedSessionId,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'emergencyLocationProjections', playerId), {
+      playerId,
+      gameSessionId: expectedSessionId,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      projectedAt: serverTimestamp(),
+      sourceLocationUpdatedAt: serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(now + EMERGENCY_LOCATION_PROJECTION_TTL_MS),
+      safetyStatus: 'EMERGENCY',
+      projectionKind: 'EMERGENCY',
+    });
+    await batch.commit();
   },
 };
 

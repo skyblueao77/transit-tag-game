@@ -32,6 +32,7 @@ import {
   requestSafetyAction,
 } from './src/application';
 import {
+  firebaseEmergencyLocationStore,
   firebaseExposedLocationStore,
   firebasePrivateLocationStore,
 } from './src/infrastructure/firebase/locationStores';
@@ -125,6 +126,11 @@ const App: React.FC = () => {
     [],
   );
 
+  const handleUpdateEmergencyLocation = useCallback(
+    (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebaseEmergencyLocationStore),
+    [],
+  );
+
   useEffect(() => {
     emergencyHeartbeat.current.sync({
       status: currentUser?.status,
@@ -132,11 +138,11 @@ const App: React.FC = () => {
       expectedSessionId: gameConfig.gameSessionId,
       authUserId,
       geolocation: 'geolocation' in navigator ? navigator.geolocation : null,
-      updatePrivateLocation: handleUpdatePrivateLocation,
+      updatePrivateLocation: handleUpdateEmergencyLocation,
       isCurrentPlayer: () => Boolean(currentUser?.id) && authUserIdRef.current === currentUser?.id,
       isOnline: () => navigator.onLine,
     });
-  }, [authUserId, currentUser?.id, currentUser?.status, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
+  }, [authUserId, currentUser?.id, currentUser?.status, gameConfig.gameSessionId, handleUpdateEmergencyLocation]);
 
   useEffect(() => () => emergencyHeartbeat.current.stop(), []);
 
@@ -292,7 +298,7 @@ const App: React.FC = () => {
             expectedSessionId: gameConfig.gameSessionId,
             authUserId: currentUser.id,
             geolocation: 'geolocation' in navigator ? navigator.geolocation : null,
-            updatePrivateLocation: handleUpdatePrivateLocation,
+            updatePrivateLocation: handleUpdateEmergencyLocation,
             isCurrentPlayer: () => authUserIdRef.current === currentUser.id,
             isOnline: () => navigator.onLine,
           })
@@ -316,7 +322,7 @@ const App: React.FC = () => {
       safetyActionBusyRef.current = false;
       setSafetyActionBusy(false);
     }
-  }, [confirm, currentUser, handleUpdatePrivateLocation, gameConfig.gameSessionId]);
+  }, [confirm, currentUser, handleUpdateEmergencyLocation, gameConfig.gameSessionId]);
 
   // Capture validation, state changes, reward, and logging are server-authoritative.
   const handleCapture = useCallback(async (targetId: string): Promise<void> => {

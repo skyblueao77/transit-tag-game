@@ -5,8 +5,16 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { auth, db } from './firebaseClient';
+
+/**
+ * 初回管理者が既に初期化済みかどうかを確認します。
+ */
+export async function isAdminBootstrapCompleted(): Promise<boolean> {
+  const bootstrapDoc = await getDoc(doc(db, 'system', 'admin_bootstrap'));
+  return bootstrapDoc.exists();
+}
 
 /**
  * ユーザーIDをFirebase Auth用の内部ドメインアドレスに変換します。
@@ -77,13 +85,21 @@ export async function signInAdmin(
 
 /**
  * 初回管理者アカウント作成（プログラミング・Firebase Console操作不要）。
- * セットアップキー（初期値: tag-admin-2026-secure）を使用してadminsコレクションに登録します。
+ * 最初の1回のみ system/admin_bootstrap と admins/{uid} をアトミックに作成します。
  */
 export async function setupInitialAdmin(
   identifier: string,
   password: string,
-  setupSecret: string,
 ): Promise<boolean> {
+  if (password.length < 8) {
+    throw new Error('ADMIN_PASSWORD_TOO_SHORT');
+  }
+
+  const isCompleted = await isAdminBootstrapCompleted();
+  if (isCompleted) {
+    throw new Error('ADMIN_ALREADY_INITIALIZED');
+  }
+
   const email = toSyntheticEmail(identifier);
   let uid: string;
   try {
@@ -99,12 +115,17 @@ export async function setupInitialAdmin(
     }
   }
 
-  // firestore.rules に基づき管理者ドキュメントを作成
-  await setDoc(doc(db, 'admins', uid), {
-    role: 'admin',
-    setupSecret: setupSecret.trim(),
-    createdAt: Date.now(),
+  // アトミックに初期管理者ブートストラップと管理者ドキュメントを作成
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'system', 'admin_bootstrap'), {
+    initializedBy: uid,
+    initializedAt: serverTimestamp(),
   });
+  batch.set(doc(db, 'admins', uid), {
+    role: 'admin',
+    createdAt: serverTimestamp(),
+  });
+  await batch.commit();
 
   return true;
 }

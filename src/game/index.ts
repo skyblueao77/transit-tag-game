@@ -123,6 +123,7 @@ export type {
 } from './adminReveal';
 export {
   EMERGENCY_LOCATION_FRESHNESS_MS,
+  EMERGENCY_LOCATION_PROJECTION_TTL_MS,
   resolveEmergencyLocationProjection,
 } from './emergencyLocationProjection';
 export type {

@@ -64,8 +64,9 @@ npm run build
 
 ### ステップ 5: デプロイ！
 ```bash
-firebase deploy --only hosting
+npx firebase deploy
 ```
+※ Hosting だけでなく `firestore.rules` も同時に本番環境へ安全に反映されます。
 表示された URL にアクセスすれば、世界中からあなたのアプリが利用可能になります。
 
 ---

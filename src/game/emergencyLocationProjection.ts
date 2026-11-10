@@ -1,4 +1,5 @@
 export const EMERGENCY_LOCATION_FRESHNESS_MS = 2 * 60 * 1000;
+export const EMERGENCY_LOCATION_PROJECTION_TTL_MS = EMERGENCY_LOCATION_FRESHNESS_MS;
 
 export interface EmergencyLocationProjectionInput {
   status: string;
