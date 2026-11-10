@@ -40,8 +40,8 @@ export interface PrivateLocation {
   updatedAt?: unknown;
 }
 
-export type ExposedLocationScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL';
-export type AdminRevealScope = Exclude<ExposedLocationScope, 'INDIVIDUAL'>;
+export type ExposedLocationScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL' | 'PENALTY';
+export type AdminRevealScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B';
 
 export interface ExposedLocation {
   gameSessionId: string;

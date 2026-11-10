@@ -364,7 +364,8 @@ const MapView: React.FC<Props> = ({
     });
   }, [currentUser.status, currentUser.waitingUntil, onResumeWaiting]);
 
-  // 地図初期化
+  // 地図初期化（GPS更新のたびに破棄・再生成しないよう oniLock のみに依存）
+  // biome-ignore lint/correctness/useExhaustiveDependencies: initial map coordinates only, not recreated on GPS updates
   useEffect(() => {
     if (!containerRef.current || timeLeft.oniLock > 0) return;
     if (!mapRef.current) {
@@ -373,8 +374,6 @@ const MapView: React.FC<Props> = ({
       );
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
       mapRef.current = map;
-    } else {
-      mapRef.current.setView([privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13);
     }
 
     return () => {
@@ -384,7 +383,7 @@ const MapView: React.FC<Props> = ({
         mapRef.current = null;
       }
     };
-  }, [timeLeft.oniLock, privateLocation?.latitude, privateLocation?.longitude]);
+  }, [timeLeft.oniLock]);
 
 // ── マーカー描画（強制共有・チーム別サーチ対応版） ────────────────────────
   useEffect(() => {
@@ -725,7 +724,7 @@ const MapView: React.FC<Props> = ({
                     >
                       +1区間
                     </button>
-                    {onResetShinkansen && (
+                    {onResetShinkansen && (Date.now() - currentUser.shinkansenStartTime <= 60_000 && (currentUser.shinkansenSegmentCount ?? 0) === 0) && (
                       <button
                         type="button"
                         onClick={async () => {
@@ -735,9 +734,9 @@ const MapView: React.FC<Props> = ({
                         }}
                         disabled={isProcessing}
                         className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-bold rounded-xl active:scale-95 shadow transition-all"
-                        title="新幹線乗車をリセット"
+                        title="新幹線乗車を取消（開始60秒以内のみ）"
                       >
-                        取消
+                        取消(60秒以内)
                       </button>
                     )}
                   </div>

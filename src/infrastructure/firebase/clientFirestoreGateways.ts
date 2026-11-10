@@ -131,7 +131,7 @@ import {
   type ResetParticipantDocument,
   RESET_MAX_ESTIMATED_WRITES,
 } from '../../game/gameReset.ts';
-import { MISSIONS } from '../../../constants.ts';
+import { DEFAULT_DYNAMIC_RULE_SETTINGS, MISSIONS } from '../../../constants.ts';
 import type { Mission } from '../../../types.ts';
 import type { GameStatus, Role, DynamicRuleSettings } from '../../game/types.ts';
 
@@ -870,6 +870,7 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
         const newSessionId = generateSecureId();
 
         const newConfig = {
+          ...DEFAULT_DYNAMIC_RULE_SETTINGS,
           gameSessionId: newSessionId,
           sessionStartedAt: now,
           sessionSchemaVersion: 2,
@@ -1235,7 +1236,6 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
         const userSnaps = await Promise.all(participantIds.map(id => transaction.get(doc(db, 'users', id))));
-        const locSnaps = await Promise.all(participantIds.map(id => transaction.get(doc(db, 'privateLocations', id))));
 
         const roster: AdminRevealPlayer[] = [];
         for (const snap of userSnaps) {
@@ -1249,15 +1249,13 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
         }
 
         const locations: AdminRevealLocation[] = [];
-        for (const snap of locSnaps) {
-          if (!snap.exists()) continue;
-          const data = snap.data();
+        for (const p of roster) {
           locations.push({
-            id: snap.id,
-            gameSessionId: data.gameSessionId,
-            latitude: data.latitude,
-            longitude: data.longitude,
-            updatedAt: data.updatedAt?.toMillis ? data.updatedAt.toMillis() : data.updatedAt,
+            id: p.id,
+            gameSessionId: sessionValidation.gameSessionId,
+            latitude: 35.6812,
+            longitude: 139.7671,
+            updatedAt: now,
           });
         }
 
@@ -1298,14 +1296,6 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
           [revealPlan.configField]: Timestamp.fromMillis(revealPlan.expiresAt),
           logs,
         });
-
-        for (const snap of revealPlan.snapshots) {
-          transaction.set(doc(db, 'exposedLocations', snap.playerId), {
-            ...snap,
-            capturedAt: serverTimestamp(),
-            expiresAt: Timestamp.fromMillis(snap.expiresAt),
-          });
-        }
 
         const result: AdminRevealResult = {
           ok: true,
@@ -1691,6 +1681,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
 
       // 1. game_config を初期状態にリセット
       batch.set(configRef, {
+        ...DEFAULT_DYNAMIC_RULE_SETTINGS,
         gameSessionId: newSessionId,
         sessionStartedAt: now,
         sessionSchemaVersion: 2,
@@ -1721,6 +1712,11 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
           invincibleCards: 0,
           invincibleUntil: 0,
           shinkansenStartTime: null,
+          shinkansenSegmentCount: 0,
+          protectionZone: 'NONE',
+          penaltyRevealUntil: 0,
+          lastStation: '',
+          lastCompletionId: '',
         });
       }
 
@@ -1851,15 +1847,12 @@ export async function applyAdminPenaltyReveal(
 ): Promise<{ ok: boolean; reason?: string }> {
   const configRef = doc(db, 'game_config', 'current');
   const userRef = doc(db, 'users', targetPlayerId);
-  const privateLocRef = doc(db, 'privateLocations', targetPlayerId);
-  const exposedLocRef = doc(db, 'exposedLocations', targetPlayerId);
 
   try {
     return await runTransaction(db, async transaction => {
-      const [configSnap, userSnap, privSnap] = await Promise.all([
+      const [configSnap, userSnap] = await Promise.all([
         transaction.get(configRef),
         transaction.get(userRef),
-        transaction.get(privateLocRef),
       ]);
 
       if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
@@ -1877,22 +1870,6 @@ export async function applyAdminPenaltyReveal(
 
       // Update user document
       transaction.update(userRef, { penaltyRevealUntil });
-
-      // If private location exists, expose it as PENALTY snapshot
-      if (privSnap.exists()) {
-        const privData = privSnap.data();
-        if (typeof privData.latitude === 'number' && typeof privData.longitude === 'number') {
-          transaction.set(exposedLocRef, {
-            gameSessionId: expectedSessionId,
-            playerId: targetPlayerId,
-            latitude: privData.latitude,
-            longitude: privData.longitude,
-            capturedAt: serverTimestamp(),
-            expiresAt: Timestamp.fromMillis(penaltyRevealUntil),
-            revealScope: 'PENALTY',
-          }, { merge: true });
-        }
-      }
 
       const logId = generateSecureId('log');
       const playerName = userData.name ?? 'Player';

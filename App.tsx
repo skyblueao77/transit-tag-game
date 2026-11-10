@@ -112,7 +112,30 @@ const App: React.FC = () => {
   const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
   const [safetyActionBusy, setSafetyActionBusy] = useState(false);
   const safetyActionBusyRef = useRef(false);
-  const isAdminPath = window.location.hash.includes('admin-tk-2026-secret') || window.location.hash.includes('/admin');
+  const [isAdminPath, setIsAdminPath] = useState<boolean>(() =>
+    typeof window !== 'undefined' && (
+      window.location.pathname === '/admin' ||
+      window.location.hash.includes('admin-tk-2026-secret') ||
+      window.location.hash.includes('/admin')
+    ),
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncPath = () => {
+      setIsAdminPath(
+        window.location.pathname === '/admin' ||
+        window.location.hash.includes('admin-tk-2026-secret') ||
+        window.location.hash.includes('/admin'),
+      );
+    };
+    window.addEventListener('hashchange', syncPath);
+    window.addEventListener('popstate', syncPath);
+    return () => {
+      window.removeEventListener('hashchange', syncPath);
+      window.removeEventListener('popstate', syncPath);
+    };
+  }, []);
 
   // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
   const isAdmin = useMemo(
@@ -151,6 +174,72 @@ const App: React.FC = () => {
   }, [authUserId, currentUser?.id, currentUser?.status, gameConfig.gameSessionId, handleUpdateEmergencyLocation]);
 
   useEffect(() => () => emergencyHeartbeat.current.stop(), []);
+
+  // 管理者による全体公開、チーム別公開、またはペナルティ公開を検知した場合に自己位置を自動投影
+  useEffect(() => {
+    if (!currentUser || isAdmin || !gameConfig.gameSessionId) return;
+    if (currentUser.status === 'EMERGENCY' || currentUser.status === 'RETIRED') return;
+    if (!canRevealLocation(gameConfig.gameStatus)) return;
+    if (!privateLocation || privateLocation.gameSessionId !== gameConfig.gameSessionId) return;
+
+    const now = Date.now();
+    let activeScope: 'PENALTY' | 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | null = null;
+    let targetUntil = 0;
+
+    const penaltyUntil = typeof currentUser.penaltyRevealUntil === 'number' ? currentUser.penaltyRevealUntil : 0;
+    const globalUntil = typeof gameConfig.locationRevealUntil === 'number' ? gameConfig.locationRevealUntil : 0;
+    const teamAUntil = typeof gameConfig.teamARevealUntil === 'number' ? gameConfig.teamARevealUntil : 0;
+    const teamBUntil = typeof gameConfig.teamBRevealUntil === 'number' ? gameConfig.teamBRevealUntil : 0;
+
+    if (penaltyUntil > now) {
+      activeScope = 'PENALTY';
+      targetUntil = penaltyUntil;
+    } else if (globalUntil > now) {
+      activeScope = 'GLOBAL';
+      targetUntil = globalUntil;
+    } else if (currentUser.team === 'A' && teamAUntil > now) {
+      activeScope = 'TEAM_A';
+      targetUntil = teamAUntil;
+    } else if (currentUser.team === 'B' && teamBUntil > now) {
+      activeScope = 'TEAM_B';
+      targetUntil = teamBUntil;
+    }
+
+    if (!activeScope || targetUntil <= now) return;
+
+    const existing = exposedLocations[currentUser.id];
+    if (
+      existing
+      && existing.gameSessionId === gameConfig.gameSessionId
+      && existing.revealScope === activeScope
+      && Math.abs(existing.expiresAt - targetUntil) < 5000
+    ) {
+      return;
+    }
+
+    const duration = Math.min(targetUntil - now, 60 * 60 * 1000);
+    if (duration <= 0) return;
+
+    void exposeLocation({
+      playerId: currentUser.id,
+      expectedSessionId: gameConfig.gameSessionId,
+      privateLocation,
+      phase: gameConfig.gameStatus,
+      now,
+      duration,
+      revealScope: activeScope,
+    }, firebaseExposedLocationStore);
+  }, [
+    currentUser,
+    isAdmin,
+    gameConfig.gameSessionId,
+    gameConfig.gameStatus,
+    gameConfig.locationRevealUntil,
+    gameConfig.teamARevealUntil,
+    gameConfig.teamBRevealUntil,
+    privateLocation,
+    exposedLocations,
+  ]);
 
   // 位置公開（スナップショット方式）
   // 押した瞬間のprivate locationをスナップショットとして5分間表示。
@@ -521,29 +610,27 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {!currentUser ? (
-        isAdminPath ? (
-          <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
-            <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
-              <Routes>
-                <Route
-                  path="/admin-tk-2026-secret"
-                  element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
-                />
-                <Route
-                  path="/admin"
-                  element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
-                />
-                <Route path="*" element={<Navigate to="/admin" replace />} />
-              </Routes>
-            </Suspense>
-          </div>
-        ) : (
-          <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
-            <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />
+      {isAdminPath || isAdmin ? (
+        <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
+          <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
+            <Routes>
+              <Route
+                path="/admin-tk-2026-secret"
+                element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
+              />
+              <Route
+                path="/admin"
+                element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
+              />
+              <Route path="*" element={<Navigate to="/admin" replace />} />
+            </Routes>
           </Suspense>
-        )
-      ) : (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) && !isAdminPath ? (
+        </div>
+      ) : !currentUser ? (
+        <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
+          <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />
+        </Suspense>
+      ) : (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) ? (
         <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
           <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
           <h1 className="text-4xl font-black italic mb-2">FINAL RESULT</h1>

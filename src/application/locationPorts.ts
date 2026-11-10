@@ -5,10 +5,13 @@ export interface Coordinates {
   longitude: number;
 }
 
+export type ExposedRevealScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'PENALTY';
+
 export interface ExposedLocationSnapshot extends Coordinates {
   gameSessionId: string;
   capturedAt: number;
   expiresAt: number;
+  revealScope?: ExposedRevealScope;
 }
 
 export interface PrivateLocationStore {
@@ -31,6 +34,7 @@ export interface ExposeLocationInput {
   phase: GameStatus;
   now: number;
   duration: number;
+  revealScope?: ExposedRevealScope;
 }
 
 export type LocationUseCaseFailureReason =

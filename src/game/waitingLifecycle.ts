@@ -89,7 +89,7 @@ function waitingResult(
   now: number,
   durationMs?: number,
 ): Extract<WaitingLifecycleResult, { allowed: true; changed: true }> {
-  const duration = typeof durationMs === 'number' && durationMs > 0
+  const duration = typeof durationMs === 'number' && durationMs >= 0
     ? durationMs
     : SHINKANSEN_WAIT_DURATION_MS;
 

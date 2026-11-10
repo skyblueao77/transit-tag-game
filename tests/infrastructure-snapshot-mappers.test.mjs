@@ -101,12 +101,18 @@ describe('Firebase snapshot mappers', () => {
       { id: 'uid-6', data: {
         latitude: 35, longitude: 139, capturedAt: timestamp(50), expiresAt: 100,
       } },
+      { id: 'uid-penalty', data: {
+        gameSessionId: 'session-2', latitude: 35.68, longitude: 139.76, capturedAt: timestamp(50), expiresAt: timestamp(100), revealScope: 'PENALTY',
+      } },
     ], 'session-2'), {
       'uid-1': {
         gameSessionId: 'session-2', latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'TEAM_A',
       },
       'uid-2': {
         gameSessionId: 'session-2', latitude: 35, longitude: 139, capturedAt: 50, expiresAt: 100, revealScope: 'INDIVIDUAL',
+      },
+      'uid-penalty': {
+        gameSessionId: 'session-2', latitude: 35.68, longitude: 139.76, capturedAt: 50, expiresAt: 100, revealScope: 'PENALTY',
       },
     });
   });
