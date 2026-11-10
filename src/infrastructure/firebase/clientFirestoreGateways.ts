@@ -133,7 +133,7 @@ import {
 } from '../../game/gameReset.ts';
 import { MISSIONS } from '../../../constants.ts';
 import type { Mission } from '../../../types.ts';
-import type { GameStatus, Role } from '../../game/types.ts';
+import type { GameStatus, Role, DynamicRuleSettings } from '../../game/types.ts';
 
 // ============================================================
 // ユーティリティ
@@ -1786,3 +1786,135 @@ export async function sendAdminBroadcast(message: string, expectedSessionId: str
     return false;
   }
 }
+
+export async function updateAdminRuleSettings(
+  settings: Partial<DynamicRuleSettings>,
+  expectedSessionId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const configRef = doc(db, 'game_config', 'current');
+  try {
+    return await runTransaction(db, async transaction => {
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists()) {
+        return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+      }
+      const configData = configSnap.data();
+      if (configData.gameSessionId !== expectedSessionId) {
+        return { ok: false, reason: 'SESSION_MISMATCH' };
+      }
+
+      const updates: UpdateData<DocumentData> = {};
+      if (settings.victoryMode !== undefined) updates.victoryMode = settings.victoryMode;
+      if (settings.shinkansenMaxMinutes !== undefined) updates.shinkansenMaxMinutes = settings.shinkansenMaxMinutes;
+      if (settings.shinkansenMaxSegments !== undefined) updates.shinkansenMaxSegments = settings.shinkansenMaxSegments;
+      if (settings.postShinkansenWaitMinutes !== undefined) updates.postShinkansenWaitMinutes = settings.postShinkansenWaitMinutes;
+      if (settings.periodicRevealIntervalMinutes !== undefined) updates.periodicRevealIntervalMinutes = settings.periodicRevealIntervalMinutes;
+      if (settings.periodicRevealDurationMinutes !== undefined) updates.periodicRevealDurationMinutes = settings.periodicRevealDurationMinutes;
+      if (settings.captureWaitMinutes !== undefined) updates.captureWaitMinutes = settings.captureWaitMinutes;
+      if (settings.missionPenaltyRevealMinutes !== undefined) updates.missionPenaltyRevealMinutes = settings.missionPenaltyRevealMinutes;
+
+      const now = Date.now();
+      const logId = generateSecureId('log');
+      const modeLabel = settings.victoryMode === 'SURVIVAL' ? 'サバイバル制' : settings.victoryMode === 'SCORE_SWAP' ? 'ポイント交代制' : '';
+      const detailParts: string[] = [];
+      if (modeLabel) detailParts.push(`勝敗:${modeLabel}`);
+      if (settings.shinkansenMaxMinutes !== undefined) detailParts.push(`新幹線上限:${settings.shinkansenMaxMinutes}分`);
+      if (settings.shinkansenMaxSegments !== undefined) detailParts.push(`新幹線区間:${settings.shinkansenMaxSegments}区間`);
+      if (settings.postShinkansenWaitMinutes !== undefined) detailParts.push(`下車待機:${settings.postShinkansenWaitMinutes}分`);
+      if (settings.periodicRevealIntervalMinutes !== undefined) detailParts.push(`定期開示:${settings.periodicRevealIntervalMinutes}分毎`);
+
+      const logMsg = `⚙️ 【ルール変更】管理者がルール設定を更新しました${detailParts.length > 0 ? ` (${detailParts.join(', ')})` : ''}`;
+      const logs = appendToConfigLogs(configData.logs, {
+        id: logId,
+        now,
+        message: logMsg,
+        type: 'SYSTEM',
+      });
+
+      updates.logs = logs;
+      updates.broadcastMessage = '【ルール変更】管理者がゲームルール設定を更新しました。';
+      updates.broadcastTime = now;
+
+      transaction.update(configRef, updates);
+      return { ok: true };
+    });
+  } catch (error) {
+    console.error('updateAdminRuleSettings error:', error);
+    return { ok: false, reason: 'PERSISTENCE_ERROR' };
+  }
+}
+
+export async function applyAdminPenaltyReveal(
+  targetPlayerId: string,
+  durationMinutes: number,
+  expectedSessionId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const configRef = doc(db, 'game_config', 'current');
+  const userRef = doc(db, 'users', targetPlayerId);
+  const privateLocRef = doc(db, 'privateLocations', targetPlayerId);
+  const exposedLocRef = doc(db, 'exposedLocations', targetPlayerId);
+
+  try {
+    return await runTransaction(db, async transaction => {
+      const [configSnap, userSnap, privSnap] = await Promise.all([
+        transaction.get(configRef),
+        transaction.get(userRef),
+        transaction.get(privateLocRef),
+      ]);
+
+      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+      if (!userSnap.exists()) return { ok: false, reason: 'PLAYER_NOT_FOUND' };
+
+      const configData = configSnap.data();
+      const userData = userSnap.data();
+      if (configData.gameSessionId !== expectedSessionId) {
+        return { ok: false, reason: 'SESSION_MISMATCH' };
+      }
+
+      const now = Date.now();
+      const penaltyDurationMs = Math.max(1, durationMinutes) * 60 * 1000;
+      const penaltyRevealUntil = now + penaltyDurationMs;
+
+      // Update user document
+      transaction.update(userRef, { penaltyRevealUntil });
+
+      // If private location exists, expose it as PENALTY snapshot
+      if (privSnap.exists()) {
+        const privData = privSnap.data();
+        if (typeof privData.latitude === 'number' && typeof privData.longitude === 'number') {
+          transaction.set(exposedLocRef, {
+            gameSessionId: expectedSessionId,
+            playerId: targetPlayerId,
+            latitude: privData.latitude,
+            longitude: privData.longitude,
+            capturedAt: serverTimestamp(),
+            expiresAt: Timestamp.fromMillis(penaltyRevealUntil),
+            revealScope: 'PENALTY',
+          }, { merge: true });
+        }
+      }
+
+      const logId = generateSecureId('log');
+      const playerName = userData.name ?? 'Player';
+      const logMsg = `🚨 【ペナルティ発動】${playerName}（Team ${userData.team ?? ''}）の位置情報が${durationMinutes}分間常時公開されました`;
+      const logs = appendToConfigLogs(configData.logs, {
+        id: logId,
+        now,
+        message: logMsg,
+        type: 'SYSTEM',
+      });
+
+      transaction.update(configRef, {
+        logs,
+        broadcastMessage: logMsg,
+        broadcastTime: now,
+      });
+
+      return { ok: true };
+    });
+  } catch (error) {
+    console.error('applyAdminPenaltyReveal error:', error);
+    return { ok: false, reason: 'PERSISTENCE_ERROR' };
+  }
+}
+
