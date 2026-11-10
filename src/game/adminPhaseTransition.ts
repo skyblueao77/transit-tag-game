@@ -45,7 +45,7 @@ export function resolveAdminPhaseTransition(input: AdminPhaseTransitionInput): A
     case 'START_DAY1':
       Object.assign(updates, { day: 1, startTime: input.now, isGameOver: false, isFinalMissionActive: false, activeFinalMissionId: null, finalMissionEndTime: 0 });
       break;
-    case 'START_DAY2': updates.day = 2; break;
+    case 'START_DAY2': updates.day = 2; updates.startTime = input.now; break;
     case 'START_FINAL':
       Object.assign(updates, { isFinalMissionActive: true, activeFinalMissionId: input.finalMissionId, finalMissionEndTime: input.now + FINAL_MISSION_DURATION_MS, isGameOver: false });
       break;

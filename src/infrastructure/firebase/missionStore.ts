@@ -49,12 +49,17 @@ interface AwardMissionInput {
  * 管理者が手動でミッション達成を承認し、チームスコアを加算して記録します。
  */
 export async function awardMissionCompletionByAdmin(input: AwardMissionInput): Promise<boolean> {
-  const completionId = `admin_${input.team}_${input.expectedSessionId}_${input.missionId}_${Date.now()}`;
+  const completionId = `${input.team}_${input.expectedSessionId}_${input.missionId}`;
   const completionRef = doc(db, 'missionCompletions', completionId);
   const configRef = doc(db, 'game_config', 'current');
 
   try {
     await runTransaction(db, async transaction => {
+      const completionSnap = await transaction.get(completionRef);
+      if (completionSnap.exists()) {
+        throw new Error('ALREADY_COMPLETED');
+      }
+
       const configSnap = await transaction.get(configRef);
       if (!configSnap.exists()) throw new Error('GAME_CONFIG_NOT_FOUND');
       const configData = configSnap.data();

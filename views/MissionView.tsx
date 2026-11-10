@@ -5,6 +5,7 @@ import { FINAL_MISSIONS } from '../constants';
 import type { CompleteMissionResult } from '../src/application/gameplayPorts';
 import { canCompleteMission, isSameMissionId } from '../src/game';
 import { Target, CheckCircle2, MapPin, Hourglass, Camera, Hash } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface Props {
   config: GameConfig;
@@ -84,14 +85,14 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
 
       if (isFinalMission) {
         setIsFinalReported(true);
-        alert('最終ミッション達成！おめでとうございます！\n写真をLINEで送るのを忘れずに！');
+        toast.success('最終ミッション達成！おめでとうございます！\n写真をLINEで送るのを忘れずに！');
       } else {
         setLastCompletedMissionId(mission.id);
-        alert(`ミッション完了！ +${result.reward.points}pt 加算されました。\n写真をLINEで送るのを忘れずに！`);
+        toast.success(`ミッション完了！ +${result.reward.points}pt 加算されました。\n写真をLINEで送るのを忘れずに！`);
       }
     } catch (error) {
       console.error('Mission error:', error);
-      alert('エラーが発生しました。');
+      toast.error('エラーが発生しました。');
     } finally {
       setIsSubmitting(false);
     }

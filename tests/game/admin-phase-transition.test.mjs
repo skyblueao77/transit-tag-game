@@ -40,7 +40,7 @@ describe('trusted admin phase core', () => {
   });
   test('sets server side effects and preserves unrelated config by returning field patch only', () => {
     assert.deepEqual(resolveAdminPhaseTransition({ currentPhase:'PRE_GAME', action:'START_DAY1', now }).updates, { gameStatus:'DAY1_ACTIVE', day:1, startTime:now, isGameOver:false, isFinalMissionActive:false, activeFinalMissionId:null, finalMissionEndTime:0 });
-    const day2 = resolveAdminPhaseTransition({ currentPhase:'DAY1_ENDED', action:'START_DAY2', now }); assert.deepEqual(day2.updates, { gameStatus:'DAY2_ACTIVE', day:2 });
+    const day2 = resolveAdminPhaseTransition({ currentPhase:'DAY1_ENDED', action:'START_DAY2', now }); assert.deepEqual(day2.updates, { gameStatus:'DAY2_ACTIVE', day:2, startTime:now });
     const paused = resolveAdminPhaseTransition({ currentPhase:'DAY2_ACTIVE', action:'PAUSE', now }); assert.deepEqual(paused.updates, { gameStatus:'DAY2_PAUSED' });
     const final = resolveAdminPhaseTransition({ currentPhase:'DAY2_ACTIVE', action:'START_FINAL', now, finalMissionId:'final_01' }); assert.equal(final.updates.finalMissionEndTime, now + FINAL_MISSION_DURATION_MS); assert.equal(final.updates.isFinalMissionActive, true);
     const ended = resolveAdminPhaseTransition({ currentPhase:'FINAL_MISSION', action:'END_GAME', now }); assert.equal(ended.updates.isGameOver, true); assert.equal(ended.updates.isFinalMissionActive, false);

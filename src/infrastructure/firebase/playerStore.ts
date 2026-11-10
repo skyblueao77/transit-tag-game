@@ -1,6 +1,7 @@
-import { doc, serverTimestamp, setDoc, writeBatch } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
+import { TEAM_COLORS } from '../../../constants';
 
 interface Coordinates {
   latitude: number;
@@ -29,4 +30,25 @@ export async function updatePlayerLastStation(
 ): Promise<void> {
   const userRef = doc(db, 'users', playerId);
   await setDoc(userRef, { lastStation }, { merge: true });
+}
+
+export async function adminChangePlayerTeam(
+  playerId: string,
+  newTeam: 'A' | 'B',
+): Promise<void> {
+  const userRef = doc(db, 'users', playerId);
+  const color = newTeam === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
+  await updateDoc(userRef, {
+    team: newTeam,
+    color,
+  });
+}
+
+export async function adminDeletePlayer(playerId: string): Promise<void> {
+  const batch = writeBatch(db);
+  batch.delete(doc(db, 'users', playerId));
+  batch.delete(doc(db, 'privateLocations', playerId));
+  batch.delete(doc(db, 'exposedLocations', playerId));
+  batch.delete(doc(db, 'emergencyLocationProjections', playerId));
+  await batch.commit();
 }

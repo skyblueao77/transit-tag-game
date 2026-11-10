@@ -395,7 +395,7 @@ export const clientInvincibilityGateway: InvincibilityGateway = {
         const logs = appendToConfigLogs(configData.logs, {
           id: logId,
           now,
-          message: `${userData.name ?? 'Player'} が無敵カードを発動しました（10分間無敵）`,
+          message: `${userData.name ?? 'Player'} が無敵カードを発動しました（30分間無敵）`,
           type: 'SYSTEM',
         });
 
@@ -1733,3 +1733,38 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
     }
   },
 };
+
+export async function sendAdminBroadcast(message: string, expectedSessionId: string): Promise<boolean> {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  const configRef = doc(db, 'game_config', 'current');
+  try {
+    await runTransaction(db, async transaction => {
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists()) {
+        throw new Error('CONFIG_NOT_FOUND');
+      }
+      const configData = configSnap.data();
+      if (configData.gameSessionId !== expectedSessionId) {
+        throw new Error('SESSION_MISMATCH');
+      }
+      const now = Date.now();
+      const logId = generateSecureId('log');
+      const logs = appendToConfigLogs(configData.logs, {
+        id: logId,
+        now,
+        message: `📢 【運営通知】${trimmed}`,
+        type: 'SYSTEM',
+      });
+      transaction.update(configRef, {
+        broadcastMessage: trimmed,
+        broadcastTime: now,
+        logs,
+      });
+    });
+    return true;
+  } catch (error) {
+    console.error('sendAdminBroadcast error:', error);
+    return false;
+  }
+}

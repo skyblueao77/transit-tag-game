@@ -581,7 +581,7 @@ const MapView: React.FC<Props> = ({
               onClick={async () => {
                 setIsProcessing(true);
                 try { await onActivateInvincibility(); }
-                catch { alert('失敗しました'); }
+                catch { toast.error('失敗しました'); }
                 finally { setIsProcessing(false); }
               }}
               disabled={
@@ -596,7 +596,7 @@ const MapView: React.FC<Props> = ({
               onClick={async () => {
                 setIsProcessing(true);
                 try { await onStartShinkansenWait(); }
-                catch { alert('失敗しました'); }
+                catch { toast.error('失敗しました'); }
                 finally { setIsProcessing(false); }
               }}
               disabled={isProcessing || currentUser.status !== 'ACTIVE' || !isGameActive(gameConfig.gameStatus) || timeLeft.shinkansenRemaining > 0}

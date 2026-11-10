@@ -199,8 +199,12 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore('game_config/current', { method: 'PATCH', body: fields({ status: 'RUNNING' }) })).status, 403);
   });
 
-  test('allows an anonymous user to read public game data', async () => {
-    assert.equal((await firestore(`users/${userAUid}`, { token: anonymousToken })).status, 200);
+  test('restricts user profile reads to participants/admin and allows anonymous reads for public config/missions', async () => {
+    // P2-SEC-06: Anonymous user cannot read participant user documents
+    assert.equal((await firestore(`users/${userAUid}`, { token: anonymousToken })).status, 403);
+    // Current participant CAN read participant user documents
+    assert.equal((await firestore(`users/${userAUid}`, { token: userBToken })).status, 200);
+    // Anonymous user can read public missions and game_config
     assert.equal((await firestore('missions/mission-1', { token: anonymousToken })).status, 200);
     assert.equal((await firestore('game_config/current', { token: anonymousToken })).status, 200);
   });
@@ -741,4 +745,101 @@ describe('Firestore Security Rules', () => {
     ];
     assert.equal((await commitBatch(legitCaptureWrites, userBToken)).status, 200);
   });
+
+  test('P0-SEC-01: one-time admin bootstrap succeeds for initial user and blocks subsequent escalations', async () => {
+    // 1. Initial admin bootstrap: User creates system/admin_bootstrap and admins/{uid} in atomic batch
+    const initialAdmin = await auth('signUp', { email: 'initial-admin@test.local', password: 'bootstrapPassword123' });
+    const bootstrapUid = initialAdmin.localId;
+    const bootstrapToken = initialAdmin.idToken;
+
+    const bootstrapDocName = `projects/${projectId}/databases/(default)/documents/system/admin_bootstrap`;
+    const adminDocName = `projects/${projectId}/databases/(default)/documents/admins/${bootstrapUid}`;
+
+    const bootstrapWrites = [
+      {
+        update: {
+          name: bootstrapDocName,
+          fields: fields({
+            initializedAt: new Date(),
+            initializedBy: bootstrapUid,
+          }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+      {
+        update: {
+          name: adminDocName,
+          fields: fields({
+            role: 'admin',
+            createdAt: new Date(),
+          }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+    ];
+
+    const bootstrapRes = await commitBatch(bootstrapWrites, bootstrapToken);
+    assert.equal(bootstrapRes.status, 200);
+
+    // 2. Attacker escalation blocked: A second user attempts to self-escalate to admin
+    const attacker = await auth('signUp', { email: 'attacker@test.local', password: 'attackerPassword123' });
+    const attackerUid = attacker.localId;
+    const attackerToken = attacker.idToken;
+
+    // Attacker tries to write admins/{attackerUid} directly (without existing admin token)
+    const directEscalate = await firestore(`admins/${attackerUid}`, {
+      token: attackerToken,
+      method: 'PATCH',
+      body: fields({ role: 'admin', createdAt: new Date() }),
+    });
+    assert.equal(directEscalate.status, 403);
+
+    // Attacker tries to run bootstrap batch again (must fail because system/admin_bootstrap already exists)
+    const attackerBootstrapWrites = [
+      {
+        update: {
+          name: bootstrapDocName,
+          fields: fields({
+            initializedAt: new Date(),
+            initializedBy: attackerUid,
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/admins/${attackerUid}`,
+          fields: fields({
+            role: 'admin',
+            createdAt: new Date(),
+          }).fields,
+        },
+      },
+    ];
+    const secondBootstrapRes = await commitBatch(attackerBootstrapWrites, attackerToken);
+    assert.equal(secondBootstrapRes.status, 403);
+  });
+
+  test('P1-SEC-03: blocks participants from wiping logs or injecting unauthorized log entries', async () => {
+    // Participant attempts to wipe logs: []
+    const wipeRes = await firestore('game_config/current', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        gameStatus: 'DAY1_ACTIVE',
+        gameSessionId: CURRENT_SESSION_ID,
+        sessionStartedAt: SESSION_STARTED_AT,
+        sessionSchemaVersion: 2,
+        day: 1,
+        missionMode: 'SEPARATE',
+        isGameOver: false,
+        teamARole: 'RUNNER',
+        teamBRole: 'ONI',
+        teamAScore: 100,
+        teamBScore: 50,
+        logs: [],
+      }),
+    });
+    assert.equal(wipeRes.status, 403);
+  });
 });
+

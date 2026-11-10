@@ -70,12 +70,27 @@ service cloud.firestore {
           == get(/databases/$(database)/documents/game_config/current).data.gameSessionId;
     }
 
+    match /system/admin_bootstrap {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/system/admin_bootstrap)
+        && request.resource.data.keys().hasOnly(['initializedBy', 'initializedAt'])
+        && request.resource.data.initializedBy == request.auth.uid
+        && request.resource.data.initializedAt is timestamp;
+      allow update, delete: if false;
+    }
+
     match /admins/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
-      allow create: if signedIn() && request.auth.uid == uid
-        && request.resource.data.keys().hasAll(['role', 'setupSecret'])
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if (signedIn()
+        && request.auth.uid == uid
+        && !exists(/databases/$(database)/documents/system/admin_bootstrap)
+        && existsAfter(/databases/$(database)/documents/system/admin_bootstrap)
+        && getAfter(/databases/$(database)/documents/system/admin_bootstrap).data.initializedBy == request.auth.uid
+        && request.resource.data.keys().hasOnly(['role', 'createdAt'])
         && request.resource.data.role == 'admin'
-        && request.resource.data.setupSecret == 'tag-admin-2026-secure';
+        && request.resource.data.createdAt is timestamp)
+        || (isAdmin() && request.resource.data.role == 'admin' && request.resource.data.createdAt is timestamp);
       allow update, delete: if false;
 
       match /{subCollection=**} {
@@ -219,7 +234,8 @@ service cloud.firestore {
         && request.resource.data.projectedAt is timestamp
         && request.resource.data.sourceLocationUpdatedAt is timestamp
         && request.resource.data.expiresAt is timestamp
-        && request.resource.data.expiresAt > request.time;
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(3, 'm');
     }
 
     match /emergencyLocationProjections/{uid} {
@@ -340,7 +356,8 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read: if signedIn();
+      allow get: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid) || request.auth.uid == uid);
+      allow list: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
       allow create: if validPlayerCreate(uid);
       allow update: if (isAdmin() && hasNoCoordinates(request.resource.data))
         || validSelfUserUpdate(uid)
@@ -358,6 +375,7 @@ service cloud.firestore {
       let configPath = /databases/$(database)/documents/game_config/current;
       let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
       let missionPath = /databases/$(database)/documents/missions/$(data.missionId);
+      let config = get(configPath).data;
       return signedIn()
         && isCurrentParticipant(request.auth.uid)
         && hasCurrentGameSession()
@@ -370,22 +388,35 @@ service cloud.firestore {
           'points', 'isFinalMission', 'completedAt'
         ])
         && data.completedBy == request.auth.uid
-        && data.gameSessionId == get(configPath).data.gameSessionId
+        && data.gameSessionId == config.gameSessionId
         && data.team == get(userPath).data.team
         && get(userPath).data.status == 'ACTIVE'
         && exists(missionPath)
         && data.points is int
         && data.points == get(missionPath).data.points
         && data.isFinalMission is bool
-        && (data.isFinalMission == false
-            || (get(configPath).data.keys().hasAny(['activeFinalMissionId'])
-                && get(configPath).data.activeFinalMissionId == data.missionId))
+        && config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
+        && (
+          (data.isFinalMission == true
+            && config.gameStatus == 'FINAL_MISSION'
+            && config.isFinalMissionActive == true
+            && config.keys().hasAny(['activeFinalMissionId'])
+            && config.activeFinalMissionId == data.missionId)
+          || (data.isFinalMission == false
+            && config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+            && (
+              (!config.keys().hasAny(['activeMissionA']) && !config.keys().hasAny(['activeMissionB']))
+              || (data.team == 'A' && (!config.keys().hasAny(['activeMissionA']) || config.activeMissionA == data.missionId))
+              || (data.team == 'B' && (!config.keys().hasAny(['activeMissionB']) || config.activeMissionB == data.missionId))
+            ))
+        )
+        && (!data.keys().hasAny(['luckyReward']) || data.luckyReward is bool)
         && data.completedAt is timestamp
         && completionId == data.team + '_' + data.gameSessionId + '_' + data.missionId;
     }
 
     match /missionCompletions/{completionId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
       allow create: if isAdmin() || validMissionCompletionCreate(completionId);
       allow update, delete: if isAdmin();
     }
@@ -394,6 +425,20 @@ service cloud.firestore {
       return diff.hasOnly(['logs'])
         && newData.logs is list
         && newData.logs.size() <= 200
+        && (
+          !currentData.keys().hasAny(['logs'])
+          || !(currentData.logs is list)
+          || currentData.logs.size() == 0
+          || (
+            newData.logs.size() >= 1
+            && newData.logs.size() == (currentData.logs.size() >= 200 ? 200 : currentData.logs.size() + 1)
+            && newData.logs[0] is map
+            && newData.logs[0].keys().hasOnly(['id', 'timestamp', 'message', 'type'])
+            && newData.logs[0].message is string
+            && newData.logs[0].message.size() <= 300
+            && newData.logs[0].type in ['SYSTEM', 'EMERGENCY']
+          )
+        )
         && newData.teamARole == currentData.teamARole
         && newData.teamBRole == currentData.teamBRole
         && newData.teamAScore == currentData.teamAScore
@@ -436,6 +481,9 @@ service cloud.firestore {
         && get(mePath).data.status == 'ACTIVE'
         && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])
         && newData.nextRevealTime is int
+        && newData.nextRevealTime > nowMs
+        && newData.nextRevealTime <= nowMs + 1860000
+        && (!currentData.keys().hasAny(['startTime']) || !(currentData.startTime is int) || nowMs >= currentData.startTime + 1800000)
         && newData.lastCaptureTargetId is string
         && exists(targetPath)
         && existsAfter(targetPath)
