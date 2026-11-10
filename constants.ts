@@ -63,6 +63,20 @@ export const getRandomFinalMission = (): Mission => {
 };
 
 // ============================================================
+// 汎用ルール可変初期設定
+// ============================================================
+export const DEFAULT_DYNAMIC_RULE_SETTINGS = {
+  victoryMode: 'SURVIVAL' as const,
+  shinkansenMaxMinutes: 150, // 2.5時間
+  shinkansenMaxSegments: 0,   // 0 = 無制限
+  postShinkansenWaitMinutes: 60, // 60分
+  periodicRevealIntervalMinutes: 30, // 30分
+  periodicRevealDurationMinutes: 5,  // 5分
+  captureWaitMinutes: 30, // 30分
+  missionPenaltyRevealMinutes: 60, // 60分
+};
+
+// ============================================================
 // ゲーム初期設定
 // ============================================================
 export const INITIAL_GAME_CONFIG: GameConfig = {
@@ -90,9 +104,11 @@ export const INITIAL_GAME_CONFIG: GameConfig = {
   teamARole: 'RUNNER',
   teamBRole: 'ONI',
   logs: [],
+  ...DEFAULT_DYNAMIC_RULE_SETTINGS,
 };
 
 export const TEAM_COLORS = [
   '#ef4444', // red  → Team A
   '#3b82f6', // blue → Team B
 ];
+

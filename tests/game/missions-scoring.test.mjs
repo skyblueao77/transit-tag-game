@@ -5,7 +5,7 @@ import {
   canCompleteMission,
   isSameMissionId,
 } from '../../src/game/missions.ts';
-import { calculateMissionScore } from '../../src/game/scoring.ts';
+import { calculateMissionScore, determineGameWinner } from '../../src/game/scoring.ts';
 
 const mission = (id, points) => ({ id, points });
 
@@ -54,3 +54,47 @@ describe('mission scoring', () => {
     });
   }
 });
+
+describe('determineGameWinner', () => {
+  test('SCORE_SWAP mode: higher score wins, equal score draws', () => {
+    assert.equal(determineGameWinner({
+      victoryMode: 'SCORE_SWAP',
+      teamAScore: 150, teamBScore: 100, teamARole: 'ONI', teamBRole: 'RUNNER', players: [],
+    }), 'A');
+
+    assert.equal(determineGameWinner({
+      victoryMode: 'SCORE_SWAP',
+      teamAScore: 50, teamBScore: 120, teamARole: 'RUNNER', teamBRole: 'ONI', players: [],
+    }), 'B');
+
+    assert.equal(determineGameWinner({
+      victoryMode: 'SCORE_SWAP',
+      teamAScore: 100, teamBScore: 100, teamARole: 'ONI', teamBRole: 'RUNNER', players: [],
+    }), 'DRAW');
+  });
+
+  test('SURVIVAL mode: runners win if at least one runner survived', () => {
+    // Team B is RUNNER, Team A is ONI
+    const players = [
+      { id: 'runner-1', team: 'B', status: 'ACTIVE', role: 'RUNNER' },
+      { id: 'runner-2', team: 'B', status: 'CAPTURED', role: 'RUNNER' },
+    ];
+    assert.equal(determineGameWinner({
+      victoryMode: 'SURVIVAL',
+      teamAScore: 999, teamBScore: 0, teamARole: 'ONI', teamBRole: 'RUNNER', players,
+    }), 'B'); // Team B survived!
+  });
+
+  test('SURVIVAL mode: ONI wins if all runners were captured', () => {
+    // Team B is RUNNER, Team A is ONI
+    const players = [
+      { id: 'runner-1', team: 'B', status: 'CAPTURED', role: 'RUNNER' },
+      { id: 'runner-2', team: 'B', status: 'CAPTURED', role: 'RUNNER' },
+    ];
+    assert.equal(determineGameWinner({
+      victoryMode: 'SURVIVAL',
+      teamAScore: 0, teamBScore: 999, teamARole: 'ONI', teamBRole: 'RUNNER', players,
+    }), 'A'); // Team A captured all runners!
+  });
+});
+

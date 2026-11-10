@@ -1,7 +1,7 @@
 import { canCapture } from './phases.ts';
 import { getPlayerRole } from './roles.ts';
-import { CAPTURE_WAIT_DURATION_MS, isActiveUntil } from './time.ts';
-import type { GameStatus, Role, TeamRoles } from './types';
+import { CAPTURE_WAIT_DURATION_MS, ONI_INITIAL_LOCK_DURATION_MS, isActiveUntil } from './time.ts';
+import type { GameStatus, ProtectionZoneType, Role, TeamRoles, VictoryMode } from './types';
 
 export type CapturePlayerStatus =
   | 'ACTIVE'
@@ -16,6 +16,7 @@ export interface CapturePlayer {
   status: CapturePlayerStatus;
   invincibleUntil?: number;
   invincibleCards: number;
+  protectionZone?: ProtectionZoneType;
 }
 
 export interface CaptureInput {
@@ -25,6 +26,9 @@ export interface CaptureInput {
   teamRoles: TeamRoles;
   phase: GameStatus;
   now: number;
+  startTime?: number;
+  victoryMode?: VictoryMode;
+  captureWaitDurationMs?: number;
 }
 
 export type CaptureRejectionReason =
@@ -37,15 +41,18 @@ export type CaptureRejectionReason =
   | 'TARGET_ROLE'
   | 'CAPTOR_STATUS'
   | 'TARGET_STATUS'
-  | 'TARGET_INVINCIBLE';
+  | 'TARGET_INVINCIBLE'
+  | 'ONI_INITIAL_LOCK'
+  | 'TARGET_PROTECTION_ZONE';
 
 export interface CapturePlayerChange {
   playerId: string;
-  status: 'ACTIVE' | 'WAITING';
+  status: 'ACTIVE' | 'WAITING' | 'CAPTURED';
   waitingUntil: number;
   invincibleUntil?: number;
   invincibleCardsDelta: number;
 }
+
 
 export interface CaptureSuccess {
   allowed: true;
@@ -71,6 +78,10 @@ export function validateCapture(
 ): CaptureFailure | { allowed: true; captor: CapturePlayer; target: CapturePlayer } {
   if (!canCapture(input.phase)) return { allowed: false, reason: 'PHASE' };
 
+  if (typeof input.startTime === 'number' && input.startTime > 0 && input.now < input.startTime + ONI_INITIAL_LOCK_DURATION_MS) {
+    return { allowed: false, reason: 'ONI_INITIAL_LOCK' };
+  }
+
   const captor = input.players.find(player => player.id === input.captorId);
   if (!captor) return { allowed: false, reason: 'CAPTOR_NOT_FOUND' };
 
@@ -90,6 +101,9 @@ export function validateCapture(
   if (isActiveUntil(target.invincibleUntil, input.now)) {
     return { allowed: false, reason: 'TARGET_INVINCIBLE' };
   }
+  if (target.protectionZone && target.protectionZone !== 'NONE') {
+    return { allowed: false, reason: 'TARGET_PROTECTION_ZONE' };
+  }
 
   return { allowed: true, captor, target };
 }
@@ -98,11 +112,43 @@ export function resolveCapture(input: CaptureInput): CaptureResult {
   const validation = validateCapture(input);
   if (validation.allowed === false) return validation;
 
+  const waitingDuration = typeof input.captureWaitDurationMs === 'number' && input.captureWaitDurationMs > 0
+    ? input.captureWaitDurationMs
+    : CAPTURE_WAIT_DURATION_MS;
+  const waitingUntil = input.now + waitingDuration;
+
+  // サバイバルモード: 確保された逃走者は 'CAPTURED' になり、攻守交代は発生しない
+  if (input.victoryMode === 'SURVIVAL') {
+    const playerChanges: CapturePlayerChange[] = [
+      {
+        playerId: validation.target.id,
+        status: 'CAPTURED' as const,
+        waitingUntil: 0,
+        invincibleUntil: 0,
+        invincibleCardsDelta: 0,
+      },
+    ];
+
+    return {
+      allowed: true,
+      reward: { team: validation.captor.team, scoreDelta: CAPTURE_REWARD_POINTS },
+      teamRoles: input.teamRoles,
+      playerChanges,
+      nextRevealTime: input.now,
+      waitingDuration: 0,
+      event: {
+        type: 'CAPTURE',
+        captorId: input.captorId,
+        targetId: input.targetId,
+      },
+    };
+  }
+
+  // 攻守交代モード (SCORE_SWAP または デフォルト)
   const teamARole: Role = input.teamRoles.teamARole === 'ONI' ? 'RUNNER' : 'ONI';
   const teamBRole: Role = teamARole === 'ONI' ? 'RUNNER' : 'ONI';
   const teamRoles: TeamRoles = { teamARole, teamBRole };
   const newOniTeam = teamARole === 'ONI' ? 'A' : 'B';
-  const waitingUntil = input.now + CAPTURE_WAIT_DURATION_MS;
 
   const playerChanges = input.players
     .filter(player => (player.team === 'A' || player.team === 'B')
@@ -133,7 +179,7 @@ export function resolveCapture(input: CaptureInput): CaptureResult {
     teamRoles,
     playerChanges,
     nextRevealTime: waitingUntil,
-    waitingDuration: CAPTURE_WAIT_DURATION_MS,
+    waitingDuration,
     event: {
       type: 'CAPTURE',
       captorId: input.captorId,
@@ -141,3 +187,4 @@ export function resolveCapture(input: CaptureInput): CaptureResult {
     },
   };
 }
+

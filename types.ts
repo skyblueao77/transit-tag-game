@@ -1,7 +1,6 @@
 
-import type { GameStatus, Role } from './src/game/types';
+export type { DynamicRuleSettings, GameStatus, ProtectionZoneType, Role, VictoryMode } from './src/game/types';
 
-export type { GameStatus, Role } from './src/game/types';
 
 export interface GameLog {
   id: string;
@@ -26,6 +25,9 @@ export interface User {
   lastStation?: string;
   shinkansenStartTime?: number;
   lastCompletionId?: string;
+  protectionZone?: ProtectionZoneType;
+  shinkansenSegmentCount?: number;
+  penaltyRevealUntil?: number;
 }
 
 export interface PrivateLocation {
@@ -106,6 +108,16 @@ export interface GameConfig {
   // イベントログ
   logs: GameLog[];
 
+  // 汎用ルール可変設定
+  victoryMode?: VictoryMode;
+  shinkansenMaxMinutes?: number;
+  shinkansenMaxSegments?: number;
+  postShinkansenWaitMinutes?: number;
+  periodicRevealIntervalMinutes?: number;
+  periodicRevealDurationMinutes?: number;
+  captureWaitMinutes?: number;
+  missionPenaltyRevealMinutes?: number;
+
   lastCaptureTargetId?: string;
   locationRevealUntil?: number;
   teamARevealUntil?: number;
@@ -115,6 +127,7 @@ export interface GameConfig {
   sessionStartedAt?: number;
   sessionSchemaVersion?: number;
 }
+
 
 export interface MissionCompletion {
   gameSessionId: string;

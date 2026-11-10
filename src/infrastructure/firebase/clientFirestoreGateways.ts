@@ -261,6 +261,7 @@ export const clientCaptureGateway: CaptureGateway = {
             status: (data.status ?? 'ACTIVE') as CapturePlayerStatus,
             invincibleCards: typeof data.invincibleCards === 'number' ? data.invincibleCards : 0,
             ...(typeof data.invincibleUntil === 'number' ? { invincibleUntil: data.invincibleUntil } : {}),
+            ...(data.protectionZone ? { protectionZone: data.protectionZone } : {}),
           });
         }
 
@@ -281,18 +282,29 @@ export const clientCaptureGateway: CaptureGateway = {
           },
           phase: configData.gameStatus,
           now,
+          startTime: configData.startTime,
+          victoryMode: configData.victoryMode,
+          captureWaitDurationMs: typeof configData.captureWaitMinutes === 'number'
+            ? configData.captureWaitMinutes * 60 * 1000
+            : undefined,
         });
 
         if (capture.allowed === false) {
           return { ok: false, reason: 'CAPTURE_REJECTED', domainReason: capture.reason };
         }
 
+        const isSurvival = configData.victoryMode === 'SURVIVAL';
+        const logMessage = isSurvival
+          ? `Team ${capture.reward.team} の鬼が逃走者を確保！(+${capture.reward.scoreDelta}pt)`
+          : `Team ${capture.reward.team} が捕獲成功！攻守交代 (+${capture.reward.scoreDelta}pt)`;
+
         const logs = appendToConfigLogs(configData.logs, {
           id: logId,
           now,
-          message: `Team ${capture.reward.team} が捕獲成功！攻守交代 (+${capture.reward.scoreDelta}pt)`,
+          message: logMessage,
           type: 'CAPTURE',
         });
+
         const teamScoreField = capture.reward.team === 'A' ? 'teamAScore' : 'teamBScore';
 
         transaction.update(configRef, {
@@ -564,17 +576,23 @@ export const clientWaitingGateway: WaitingGateway = {
         if (role !== 'RUNNER') return { ok: false, reason: 'WRONG_ROLE' };
         if (userData.status !== 'ACTIVE') return { ok: false, reason: 'INVALID_STATUS' };
 
+        const waitDurationMs = typeof configData.postShinkansenWaitMinutes === 'number'
+          ? configData.postShinkansenWaitMinutes * 60 * 1000
+          : undefined;
+
         const result = startManualWaiting({
           status: userData.status,
           role,
           phase: configData.gameStatus,
           waitingUntil: userData.waitingUntil ?? 0,
           now,
+          shinkansenWaitDurationMs: waitDurationMs,
         });
 
         if (result.allowed === false) {
           return { ok: false, reason: result.reason };
         }
+
 
         const logs = appendToConfigLogs(configData.logs, {
           id: logId,

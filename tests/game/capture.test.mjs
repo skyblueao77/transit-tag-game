@@ -197,4 +197,47 @@ describe('capture result', () => {
     resolveCapture(input);
     assert.deepEqual(input.players, before);
   });
+
+  test('rejects capture during initial ONI lock period (30 minutes from startTime)', () => {
+    const startTime = now - 10 * 60 * 1000; // 10 minutes elapsed (less than 30m lock)
+    const result = resolveCapture(validInput({ startTime }));
+    assert.deepEqual(result, { allowed: false, reason: 'ONI_INITIAL_LOCK' });
+
+    const postLockTime = now - 35 * 60 * 1000; // 35 minutes elapsed (lock expired)
+    const allowedResult = resolveCapture(validInput({ startTime: postLockTime }));
+    assert.equal(allowedResult.allowed, true);
+  });
+
+  test('rejects capture if target is in a protection zone (GREEN_CAR or SAFE_ZONE)', () => {
+    const protectedRunner = player('runner-1', 'B', 'ACTIVE', { protectionZone: 'GREEN_CAR' });
+    const resultGreen = resolveCapture(validInput({ players: [player('oni-1', 'A'), protectedRunner] }));
+    assert.deepEqual(resultGreen, { allowed: false, reason: 'TARGET_PROTECTION_ZONE' });
+
+    const safeZoneRunner = player('runner-1', 'B', 'ACTIVE', { protectionZone: 'SAFE_ZONE' });
+    const resultSafe = resolveCapture(validInput({ players: [player('oni-1', 'A'), safeZoneRunner] }));
+    assert.deepEqual(resultSafe, { allowed: false, reason: 'TARGET_PROTECTION_ZONE' });
+
+    const normalRunner = player('runner-1', 'B', 'ACTIVE', { protectionZone: 'NONE' });
+    const resultNone = resolveCapture(validInput({ players: [player('oni-1', 'A'), normalRunner] }));
+    assert.equal(resultNone.allowed, true);
+  });
+
+  test('resolves SURVIVAL mode capture without flipping roles and marks target as CAPTURED', () => {
+    const input = validInput({ victoryMode: 'SURVIVAL' });
+    const result = resolveCapture(input);
+
+    assert.equal(result.allowed, true);
+    assert.deepEqual(result.teamRoles, roles); // Roles remain unchanged!
+    assert.deepEqual(result.reward, { team: 'A', scoreDelta: CAPTURE_REWARD_POINTS });
+    assert.deepEqual(result.playerChanges, [
+      {
+        playerId: 'runner-1',
+        status: 'CAPTURED',
+        waitingUntil: 0,
+        invincibleUntil: 0,
+        invincibleCardsDelta: 0,
+      },
+    ]);
+  });
 });
+

@@ -39,10 +39,12 @@ import {
 
 import {
   canRevealLocation,
+  determineGameWinner,
   getPlayerRole,
   getRoleForTeam,
   isGamePaused,
 } from './src/game';
+
 import {
   signOutCurrentUser,
 } from './src/infrastructure/firebase/auth';
@@ -449,7 +451,15 @@ const App: React.FC = () => {
   const gamePaused = isGamePaused(gameConfig.gameStatus);
   const aScore = gameConfig.teamAScore ?? 0;
   const bScore = gameConfig.teamBScore ?? 0;
-  const winner = getRoleForTeam('A', gameConfig) === 'RUNNER' ? 'A' : getRoleForTeam('B', gameConfig) === 'RUNNER' ? 'B' : 'DRAW';
+  const winner = determineGameWinner({
+    victoryMode: gameConfig.victoryMode,
+    teamAScore: aScore,
+    teamBScore: bScore,
+    teamARole: gameConfig.teamARole,
+    teamBRole: gameConfig.teamBRole,
+    players: allUsers,
+  });
+
 
   return (
     <HashRouter>

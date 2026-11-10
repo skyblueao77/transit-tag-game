@@ -7,13 +7,14 @@ export function mapUserDocument(id: string, data: Record<string, unknown>): User
   for (const field of [
     'name', 'role', 'team', 'color', 'score', 'status', 'invincibleUntil',
     'waitingUntil', 'invincibleCards', 'lastStation', 'shinkansenStartTime',
-    'lastCompletionId',
+    'lastCompletionId', 'protectionZone', 'shinkansenSegmentCount', 'penaltyRevealUntil',
   ]) {
     if (Object.hasOwn(data, field)) user[field] = data[field];
   }
   if (isValidGameSessionId(data.gameSessionId)) user.gameSessionId = data.gameSessionId;
   return user as unknown as User;
 }
+
 
 export function mapPlayerDocuments(
   documents: readonly { id: string; data: Record<string, unknown> }[],
@@ -153,12 +154,24 @@ export function mapGameConfigDocument(
   if (data.teamBRole === 'ONI' || data.teamBRole === 'RUNNER') config.teamBRole = data.teamBRole;
   if (typeof data.nextRevealTime === 'number' && Number.isFinite(data.nextRevealTime)) config.nextRevealTime = data.nextRevealTime;
   if (typeof data.lastCaptureTargetId === 'string') config.lastCaptureTargetId = data.lastCaptureTargetId;
+  if (data.victoryMode === 'SURVIVAL' || data.victoryMode === 'SCORE_SWAP') config.victoryMode = data.victoryMode;
+  for (const field of [
+    'shinkansenMaxMinutes', 'shinkansenMaxSegments', 'postShinkansenWaitMinutes',
+    'periodicRevealIntervalMinutes', 'periodicRevealDurationMinutes',
+    'captureWaitMinutes', 'missionPenaltyRevealMinutes'
+  ] as const) {
+    const val = data[field];
+    if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+      config[field] = val;
+    }
+  }
   for (const field of ['locationRevealUntil', 'teamARevealUntil', 'teamBRevealUntil'] as const) {
     const value = data[field];
     if (value === undefined) continue;
     const timestamp = firestoreTimestampMillis(value);
     config[field] = timestamp ?? (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
   }
+
   const session = validateGameSession({
     ...data,
     sessionStartedAt: firestoreTimestampMillis(data.sessionStartedAt) ?? data.sessionStartedAt,
