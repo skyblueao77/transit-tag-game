@@ -1,6 +1,7 @@
-import { doc, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { doc, increment, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
+import type { ProtectionZoneType } from '../../game/types';
 import { TEAM_COLORS } from '../../../constants';
 
 interface Coordinates {
@@ -52,3 +53,35 @@ export async function adminDeletePlayer(playerId: string): Promise<void> {
   batch.delete(doc(db, 'emergencyLocationProjections', playerId));
   await batch.commit();
 }
+
+export async function updatePlayerProtectionZone(
+  playerId: string,
+  zone: ProtectionZoneType,
+): Promise<void> {
+  const userRef = doc(db, 'users', playerId);
+  await updateDoc(userRef, { protectionZone: zone });
+}
+
+export async function startPlayerShinkansen(playerId: string): Promise<void> {
+  const userRef = doc(db, 'users', playerId);
+  await updateDoc(userRef, {
+    shinkansenStartTime: Date.now(),
+    shinkansenSegmentCount: 0,
+  });
+}
+
+export async function incrementPlayerShinkansenSegment(playerId: string): Promise<void> {
+  const userRef = doc(db, 'users', playerId);
+  await updateDoc(userRef, {
+    shinkansenSegmentCount: increment(1),
+  });
+}
+
+export async function resetPlayerShinkansen(playerId: string): Promise<void> {
+  const userRef = doc(db, 'users', playerId);
+  await updateDoc(userRef, {
+    shinkansenStartTime: null,
+    shinkansenSegmentCount: 0,
+  });
+}
+

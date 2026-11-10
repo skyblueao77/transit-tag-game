@@ -5,9 +5,13 @@ export type PlayerMapPopupVariant =
   | 'EMERGENCY'
   | 'TEAM_SEARCH'
   | 'GLOBAL_REVEAL'
+  | 'PENALTY'
   | 'EXPOSED';
 
-type PopupPlayer = Pick<User, 'name' | 'team' | 'status'> & { lastStation?: string };
+type PopupPlayer = Pick<User, 'name' | 'team' | 'status'> & {
+  lastStation?: string;
+  protectionZone?: User['protectionZone'];
+};
 
 function appendText(document: Document, parent: Node, value: unknown): void {
   parent.appendChild(document.createTextNode(typeof value === 'string' ? value : ''));
@@ -67,10 +71,24 @@ export function createPlayerMapPopup(
     detail.style.color = 'orange';
     detail.style.fontWeight = 'bold';
     appendText(document, detail, '📸 全員スナップショット公開中');
+  } else if (variant === 'PENALTY') {
+    detail.style.color = '#dc2626';
+    detail.style.fontWeight = 'bold';
+    appendText(document, detail, `⚠️ ペナルティ位置強制公開中 (残り ${remainingTime ?? ''})`);
   } else {
     appendText(document, detail, `📍 公開中の位置 (残り ${remainingTime ?? ''})`);
   }
   popup.appendChild(detail);
+
+  if (user.protectionZone && user.protectionZone !== 'NONE') {
+    popup.appendChild(document.createElement('br'));
+    const prot = document.createElement('small');
+    prot.style.color = '#059669';
+    prot.style.fontWeight = 'bold';
+    const label = user.protectionZone === 'GREEN_CAR' ? 'グリーン席保護中' : 'セーフゾーン中';
+    appendText(document, prot, `🛡️ ${label}`);
+    popup.appendChild(prot);
+  }
 
   if (user.lastStation) {
     popup.appendChild(document.createElement('br'));

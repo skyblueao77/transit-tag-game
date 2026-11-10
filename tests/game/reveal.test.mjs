@@ -138,6 +138,23 @@ describe('location visibility rules', () => {
     }), { mode: 'HIDDEN' });
   });
 
+  test('penalty reveal exposes player location with PENALTY_SNAPSHOT mode', () => {
+    assert.deepEqual(resolve({
+      penaltyRevealUntil: now + 50_000,
+      exposedLocation: { latitude: 35.3, longitude: 139.3, expiresAt: now + 60_000, revealScope: 'PENALTY' },
+    }), {
+      mode: 'PENALTY_SNAPSHOT',
+      latitude: 35.3,
+      longitude: 139.3,
+      expiresAt: now + 50_000,
+    });
+
+    assert.equal(resolve({
+      penaltyRevealUntil: now,
+      exposedLocation: { latitude: 35.3, longitude: 139.3, expiresAt: now + 60_000, revealScope: 'PENALTY' },
+    }).mode, 'HIDDEN');
+  });
+
   test('input objects are not mutated', () => {
     const player = { ...basePlayer };
     const input = { viewerId: 'viewer-1', player, phase: active, now };

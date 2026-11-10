@@ -106,4 +106,23 @@ describe('Leaflet player popup text rendering', () => {
     );
     assert.match(exposedPopup.textContent, /🚉 新宿 \(JR山手線 他\)/);
   });
+
+  test('renders penalty variant and protectionZone when present', () => {
+    const penaltyPopup = createPlayerMapPopup(
+      fakeDocument,
+      player({ name: '逃走者1', protectionZone: 'GREEN_CAR' }),
+      'PENALTY',
+      '5:00',
+    );
+    assert.match(penaltyPopup.textContent, /⚠️ ペナルティ位置強制公開中 \(残り 5:00\)/);
+    assert.match(penaltyPopup.textContent, /🛡️ グリーン席保護中/);
+
+    const safeZonePopup = createPlayerMapPopup(
+      fakeDocument,
+      player({ name: '逃走者2', protectionZone: 'SAFE_ZONE' }),
+      'EXPOSED',
+      '3:00',
+    );
+    assert.match(safeZonePopup.textContent, /🛡️ セーフゾーン中/);
+  });
 });
