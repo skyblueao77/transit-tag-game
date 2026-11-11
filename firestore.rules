@@ -215,8 +215,8 @@ service cloud.firestore {
     match /exposedLocations/{uid} {
       allow get: if isRevealViewer();
       allow list: if isAdmin();
-      allow create: if validOwnerExposedLocationWrite(uid) || isAdmin();
-      allow update: if (validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot()) || isAdmin();
+      allow create: if validOwnerExposedLocationWrite(uid);
+      allow update: if validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot();
       allow delete: if isAdmin();
     }
 
