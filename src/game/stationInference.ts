@@ -1,5 +1,16 @@
 import { calculateHaversineDistanceMeters, type Coordinates } from './locationThrottling.ts';
 
+const stationMapCache = new WeakMap<readonly StationData[], Map<string, StationData>>();
+
+function getStationMap(stations: readonly StationData[]): Map<string, StationData> {
+  let map = stationMapCache.get(stations);
+  if (!map) {
+    map = new Map(stations.map(s => [s.id, s]));
+    stationMapCache.set(stations, map);
+  }
+  return map;
+}
+
 export interface StationConnection {
   line: string;
   to: string;
@@ -392,7 +403,7 @@ export function findTransitSuggestion(
       // Find station B (either from candidateStations or full stations list)
       let stationB = stationMap.get(bId);
       if (!stationB) {
-        stationB = stations.find(s => s.id === bId);
+        stationB = getStationMap(stations).get(bId);
         if (stationB) {
           stationMap.set(bId, stationB);
         }

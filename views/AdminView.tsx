@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import QRCode from 'qrcode-svg';
-import { signInAdmin, setupInitialAdmin, isAdminBootstrapCompleted } from '../src/infrastructure/firebase/auth';
+import { signInAdmin, setupInitialAdmin, isAdminBootstrapCompleted, isCurrentAuthUserAdmin } from '../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../src/application/adminReveal';
 import type { AdminRevealScope } from '../src/game/adminReveal';
@@ -154,9 +154,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     }
   }, [inviteUrl]);
 
-  const emergencyPlayerIds = useMemo(
-    () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id),
+  const emergencyPlayerIdsKey = useMemo(
+    () => users.filter(user => user.status === 'EMERGENCY' && (user.team === 'A' || user.team === 'B')).map(user => user.id).sort().join(','),
     [users],
+  );
+  const emergencyPlayerIds = useMemo(
+    () => (emergencyPlayerIdsKey ? emergencyPlayerIdsKey.split(',') : []),
+    [emergencyPlayerIdsKey],
   );
 
   // 緊急位置情報の購読
@@ -192,14 +196,28 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   }, [isAuthorized, config.gameSessionId]);
 
   useEffect(() => {
-    isAdminBootstrapCompleted()
-      .then(completed => {
-        setIsBootstrapCompleted(completed);
-        if (!completed) {
-          setIsSetupMode(true);
+    let mounted = true;
+    (async () => {
+      try {
+        const isAdminUser = await isCurrentAuthUserAdmin();
+        if (mounted && isAdminUser) {
+          setIsAuthorized(true);
+          return;
         }
-      })
-      .catch(err => console.error('Error checking bootstrap completion:', err));
+        const completed = await isAdminBootstrapCompleted();
+        if (mounted) {
+          setIsBootstrapCompleted(completed);
+          if (!completed) {
+            setIsSetupMode(true);
+          }
+        }
+      } catch (err) {
+        console.error('Error verifying admin authentication / bootstrap:', err);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {

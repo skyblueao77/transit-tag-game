@@ -74,6 +74,7 @@ export interface Mission {
   lat?: number;   // 座標不要ミッションはundefined（運営目視判定）
   lng?: number;
   type: 'CHECKIN' | 'PHOTO';
+  isFinalMission?: boolean;
 }
 
 export interface GameConfig {

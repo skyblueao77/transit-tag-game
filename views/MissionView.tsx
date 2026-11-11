@@ -36,11 +36,14 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
   const finalMission = useMemo((): Mission => {
     const id = config.activeFinalMissionId;
     if (id) {
+      const foundInCatalog = Array.isArray(missions) ? missions.find(m => m != null && m.id === id) : undefined;
+      if (foundInCatalog) return foundInCatalog;
       const found = FINAL_MISSIONS.find(m => m.id === id);
       if (found) return found;
     }
-    return FINAL_MISSIONS[0];
-  }, [config.activeFinalMissionId]);
+    const fallbackInCatalog = Array.isArray(missions) ? missions.find(m => m?.isFinalMission) : undefined;
+    return fallbackInCatalog ?? FINAL_MISSIONS[0];
+  }, [config.activeFinalMissionId, missions]);
 
   // 新しいミッションが来たら完了表示をリセット
   useEffect(() => {

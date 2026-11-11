@@ -23,8 +23,13 @@ export async function isAdminBootstrapCompleted(): Promise<boolean> {
 export function toSyntheticEmail(userId: string): string {
   const trimmed = userId.trim().toLowerCase();
   if (trimmed.includes('@')) return trimmed;
-  const sanitized = trimmed.replace(/[^a-z0-9_.-]/g, '_');
-  return `${sanitized || 'player'}@transit-tag.local`;
+  if (/^[a-z0-9_.-]+$/.test(trimmed)) {
+    return `${trimmed}@transit-tag.local`;
+  }
+  const hex = Array.from(new TextEncoder().encode(trimmed))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `u_${hex}@transit-tag.local`;
 }
 
 export function getCurrentAuthUserId(): string | null {
