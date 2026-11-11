@@ -67,10 +67,6 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId.trim() || !password.trim() || !name.trim() || isSubmitting) return;
-    if (!gameSessionId) {
-      toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
-      return;
-    }
     if (password.length < 6) {
       toast.error('パスワードは6文字以上で入力してください。');
       return;
@@ -79,6 +75,17 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
     setIsSubmitting(true);
     try {
       const id = await registerWithUserId(userId, password);
+
+      let activeSessionId = gameSessionId;
+      if (!activeSessionId) {
+        const configSnap = await getDoc(doc(db, 'game_config', 'current'));
+        activeSessionId = configSnap.data()?.gameSessionId;
+      }
+      if (!activeSessionId) {
+        toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
+        return;
+      }
+
       const color: string = team === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
 
       const newUser: User = {
@@ -89,7 +96,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
         color,
         score: 0,
         status: 'ACTIVE',
-        gameSessionId,
+        gameSessionId: activeSessionId,
         invincibleCards: 0,
       };
 
@@ -97,7 +104,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
       await createPlayerWithPrivateLocation(newUser, {
         latitude: posToSave.lat,
         longitude: posToSave.lng,
-      }, gameSessionId);
+      }, activeSessionId);
 
       onComplete(newUser);
     } catch (err: unknown) {
@@ -290,9 +297,9 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
 
             <button
               type="submit"
-              disabled={!userId.trim() || !password.trim() || !name.trim() || isSubmitting || !gameSessionId}
+              disabled={!userId.trim() || !password.trim() || !name.trim() || isSubmitting}
               className={`w-full py-4 font-black rounded-xl transition-all shadow-lg uppercase tracking-wider text-sm active:scale-95 flex items-center justify-center gap-2 ${
-                isSubmitting || !gameSessionId
+                isSubmitting
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   : 'bg-slate-900 hover:bg-black text-white'
               }`}

@@ -37,12 +37,15 @@ export function useGameSubscriptions(
   );
 
   useEffect(() => {
-    if (!authUserId) return;
+    if (!authUserId) {
+      setAllUsers([]);
+      return;
+    }
     return subscribePlayers(
       setAllUsers,
       error => console.error('Error fetching users data:', error),
     );
-  }, [authUserId]);
+  }, [authUserId, gameConfig.gameSessionId]);
 
   useEffect(() => {
     if (!authUserId || !gameConfig.gameSessionId) {

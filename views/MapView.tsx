@@ -314,11 +314,14 @@ const MapView: React.FC<Props> = ({
       const nextReveal = remainingSeconds(gameConfig.nextRevealTime, now);
 
       const shinkansenLimitMinutes = gameConfig.shinkansenMaxMinutes ?? 120;
-      const shinkansenLimitMs = shinkansenLimitMinutes * 60 * 1000;
-      const shinkansenUntil = currentUser.shinkansenStartTime
-        ? currentUser.shinkansenStartTime + shinkansenLimitMs
-        : undefined;
-      const shinkansenRemaining = remainingSeconds(shinkansenUntil, now);
+      let shinkansenRemaining = Infinity;
+      if (shinkansenLimitMinutes > 0) {
+        const shinkansenLimitMs = shinkansenLimitMinutes * 60 * 1000;
+        const shinkansenUntil = currentUser.shinkansenStartTime
+          ? currentUser.shinkansenStartTime + shinkansenLimitMs
+          : undefined;
+        shinkansenRemaining = remainingSeconds(shinkansenUntil, now);
+      }
       const penaltyRemaining = remainingSeconds(currentUser.penaltyRevealUntil, now);
 
       setTimeLeft({ waiting, invincible, nextReveal, final, oniLock, shinkansenRemaining, forceReveal, teamSearchRemaining, penaltyRemaining });
@@ -694,23 +697,35 @@ const MapView: React.FC<Props> = ({
             {/* 新幹線乗車中 HUD 兼 アクション */}
             {currentUser.shinkansenStartTime ? (
               <div className="flex flex-col gap-2 w-full">
-                {(timeLeft.shinkansenRemaining <= 0 || (currentUser.shinkansenSegmentCount ?? 0) >= (gameConfig.shinkansenMaxSegments ?? 2)) && (
-                  <div className="bg-red-600 text-white text-[11px] font-bold p-2.5 rounded-2xl text-center shadow-lg animate-pulse">
-                    ⚠️ 新幹線利用上限（最長{gameConfig.shinkansenMaxMinutes ?? 120}分 / 最大{gameConfig.shinkansenMaxSegments ?? 2}区間）に達しました！速やかに下車してください。
-                  </div>
-                )}
-                <div className="bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl flex items-center justify-between shadow-xl border border-slate-700">
-                  <div className="flex items-center gap-2">
-                    <Train size={20} className="text-blue-400 animate-pulse" />
-                    <div>
-                      <div className="text-[10px] font-bold text-slate-400">🚄 新幹線乗車中</div>
-                      <div className="text-xs font-black">
-                        残り: <span className="font-mono text-amber-400">{formatTime(timeLeft.shinkansenRemaining)}</span>
-                        {' / '}
-                        <span>{currentUser.shinkansenSegmentCount ?? 0} / {gameConfig.shinkansenMaxSegments ?? 2} 区間</span>
-                      </div>
-                    </div>
-                  </div>
+                {(() => {
+                  const maxMinutes = gameConfig.shinkansenMaxMinutes ?? 120;
+                  const maxSegments = gameConfig.shinkansenMaxSegments ?? 0;
+                  const isTimeReached = maxMinutes > 0 && timeLeft.shinkansenRemaining <= 0;
+                  const isSegmentReached = maxSegments > 0 && (currentUser.shinkansenSegmentCount ?? 0) >= maxSegments;
+                  const isLimitReached = isTimeReached || isSegmentReached;
+
+                  return (
+                    <>
+                      {isLimitReached && (
+                        <div className="bg-red-600 text-white text-[11px] font-bold p-2.5 rounded-2xl text-center shadow-lg animate-pulse">
+                          ⚠️ 新幹線利用上限（{maxMinutes > 0 ? `最長${maxMinutes}分` : '時間無制限'}{maxSegments > 0 ? ` / 最大${maxSegments}区間` : ''}）に達しました！速やかに下車してください。
+                        </div>
+                      )}
+                      <div className="bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl flex items-center justify-between shadow-xl border border-slate-700">
+                        <div className="flex items-center gap-2">
+                          <Train size={20} className="text-blue-400 animate-pulse" />
+                          <div>
+                            <div className="text-[10px] font-bold text-slate-400">🚄 新幹線乗車中</div>
+                            <div className="text-xs font-black">
+                              残り: <span className="font-mono text-amber-400">{maxMinutes > 0 ? formatTime(timeLeft.shinkansenRemaining) : '無制限'}</span>
+                              {' / '}
+                              <span>{currentUser.shinkansenSegmentCount ?? 0} / {maxSegments > 0 ? `${maxSegments} 区間` : '無制限'}</span>
+                            </div>
+                          </div>
+                        </div>
+                    </>
+                  );
+                })()}
                   <div className="flex gap-1.5">
                     <button
                       type="button"

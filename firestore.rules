@@ -75,7 +75,7 @@ service cloud.firestore {
     }
 
     match /system/admin_bootstrap {
-      allow read: if signedIn();
+      allow read: if true;
       allow create: if signedIn()
         && !exists(/databases/$(database)/documents/system/admin_bootstrap)
         && request.resource.data.keys().hasOnly(['initializedBy', 'initializedAt'])
@@ -213,12 +213,10 @@ service cloud.firestore {
     }
 
     match /exposedLocations/{uid} {
-      allow get: if isRevealViewer()
-        && (!exists(/databases/$(database)/documents/exposedLocations/$(uid))
-          || validExposedLocation(uid));
+      allow get: if isRevealViewer();
       allow list: if isAdmin();
-      allow create: if validOwnerExposedLocationWrite(uid);
-      allow update: if validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot();
+      allow create: if validOwnerExposedLocationWrite(uid) || isAdmin();
+      allow update: if (validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot()) || isAdmin();
       allow delete: if isAdmin();
     }
 
