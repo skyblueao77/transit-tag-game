@@ -49,7 +49,7 @@ interface Props {
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
-  onResumeWaiting: () => Promise<void>;
+  onResumeWaiting?: () => Promise<void>;
   onUpdateLastStation?: (stationName: string) => Promise<void>;
   onUpdateProtectionZone?: (zone: ProtectionZoneType) => Promise<void>;
   onStartShinkansen?: () => Promise<void>;
@@ -58,7 +58,7 @@ interface Props {
 }
 
 const MapView: React.FC<Props> = ({
-  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting, onUpdateLastStation, onUpdateProtectionZone, onStartShinkansen, onIncrementShinkansenSegment, onResetShinkansen
+  users, currentUser, privateLocation, exposedLocations, gameConfig, onUpdatePrivateLocation, onCapture, onActivateInvincibility, onStartShinkansenWait, onResumeWaiting: _onResumeWaiting, onUpdateLastStation, onUpdateProtectionZone, onStartShinkansen, onIncrementShinkansenSegment, onResetShinkansen
 }) => {
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -73,7 +73,6 @@ const MapView: React.FC<Props> = ({
   const watchId = useRef<number | null>(null);
   const lastUploadTime = useRef<number>(0);
   const lastUploadedCoords = useRef<Coordinates | null>(null);
-  const resumeRequestedUntil = useRef<number | null>(null);
 
   const [transitSuggestion, setTransitSuggestion] = useState<TransitSuggestion | null>(null);
   const [transitCandidates, setTransitCandidates] = useState<TransitSuggestion[]>([]);
@@ -353,19 +352,6 @@ const MapView: React.FC<Props> = ({
 
   const isTeamSplitAlert = maxTeammateDistance > 1500;
 
-  useEffect(() => {
-    const deadline = currentUser.waitingUntil;
-    if (currentUser.status !== 'WAITING'
-      || typeof deadline !== 'number'
-      || !Number.isFinite(deadline)
-      || Date.now() < deadline
-      || resumeRequestedUntil.current === deadline) return;
-
-    resumeRequestedUntil.current = deadline;
-    void onResumeWaiting().catch(error => {
-      console.error('Waiting resume request failed:', error);
-    });
-  }, [currentUser.status, currentUser.waitingUntil, onResumeWaiting]);
 
   // 地図初期化（GPS更新のたびに破棄・再生成しないよう oniLock のみに依存）
   // biome-ignore lint/correctness/useExhaustiveDependencies: initial map coordinates only, not recreated on GPS updates
@@ -529,7 +515,7 @@ const MapView: React.FC<Props> = ({
   ) : gameConfig.isFinalMissionActive ? (
     /* 🏁 最終ミッション中の表示：赤色 */
     <div className="z-[1001] px-4 py-2 bg-slate-900 text-red-500 text-center text-xs font-black animate-pulse flex items-center justify-center gap-2 border-b border-red-500/50">
-      <AlertCircle size={14} /> 最終ミッション：東京駅を目指せ！ {Math.floor(timeLeft.final / 60)}分
+      <AlertCircle size={14} /> 最終ミッション発動中！ 残り {Math.floor(timeLeft.final / 60)}分
     </div>
   ) : null}
 

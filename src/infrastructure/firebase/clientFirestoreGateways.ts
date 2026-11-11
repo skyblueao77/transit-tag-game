@@ -844,6 +844,9 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
         };
       }
 
+      const participantsSnap = await getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B'])));
+      const participantRefs = participantsSnap.docs.map(p => doc(db, 'users', p.id));
+
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
         const configSnap = await transaction.get(configRef);
@@ -893,9 +896,8 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
 
         transaction.set(configRef, newConfig, { merge: true });
 
-        const participantsSnap = await getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B'])));
-        for (const p of participantsSnap.docs) {
-          transaction.update(doc(db, 'users', p.id), { gameSessionId: newSessionId });
+        for (const pRef of participantRefs) {
+          transaction.update(pRef, { gameSessionId: newSessionId });
         }
 
         const result: InitializeGameSessionResult = {
@@ -1665,14 +1667,15 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       const now = Date.now();
       const newSessionId = conf.proposedSessionId;
 
-      const [usersSnap, privateSnap, exposedSnap, projSnap] = await Promise.all([
+      const [usersSnap, privateSnap, exposedSnap, projSnap, completionsSnap] = await Promise.all([
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
         getDocs(collection(db, 'privateLocations')),
         getDocs(collection(db, 'exposedLocations')),
         getDocs(collection(db, 'emergencyLocationProjections')),
+        getDocs(collection(db, 'missionCompletions')),
       ]);
 
-      const totalEstimatedWrites = 1 + usersSnap.docs.length + privateSnap.docs.length + exposedSnap.docs.length + projSnap.docs.length + 1;
+      const totalEstimatedWrites = 1 + usersSnap.docs.length + privateSnap.docs.length + exposedSnap.docs.length + projSnap.docs.length + completionsSnap.docs.length + 1;
       if (totalEstimatedWrites > RESET_MAX_ESTIMATED_WRITES) {
         return { ok: false, reason: 'RESET_TOO_LARGE' };
       }
@@ -1720,7 +1723,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         });
       }
 
-      // 3. プライベート位置情報、公開位置スナップショット、緊急プロジェクションを削除
+      // 3. プライベート位置情報、公開位置スナップショット、緊急プロジェクション、ミッション履歴を削除
       for (const d of privateSnap.docs) {
         batch.delete(doc(db, 'privateLocations', d.id));
       }
@@ -1729,6 +1732,9 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
       for (const d of projSnap.docs) {
         batch.delete(doc(db, 'emergencyLocationProjections', d.id));
+      }
+      for (const d of completionsSnap.docs) {
+        batch.delete(doc(db, 'missionCompletions', d.id));
       }
 
       // 4. トークンを削除

@@ -17,6 +17,9 @@ export function useConfirmDialog() {
   const resolverRef = useRef<((value: boolean) => void) | null>(null);
 
   const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
+    if (resolverRef.current) {
+      resolverRef.current(false);
+    }
     setOptions(opts);
     setIsOpen(true);
     return new Promise<boolean>(resolve => {

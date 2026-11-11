@@ -42,9 +42,9 @@ export function determineGameWinner(input: DetermineWinnerInput): 'A' | 'B' | 'D
     const oniTeam = input.teamARole === 'ONI' ? 'A' : 'B';
     const runners = input.players.filter(p => p.team === runnerTeam && p.role !== 'ONI');
     const survivingRunners = runners.filter(
-      p => p.status === 'ACTIVE' || p.status === 'WAITING' || p.status === 'EMERGENCY',
+      p => p.status === 'ACTIVE' || p.status === 'WAITING',
     );
-    if (runners.length > 0 && survivingRunners.length === 0) {
+    if (runners.length === 0 || survivingRunners.length === 0) {
       return oniTeam;
     }
     return runnerTeam;
