@@ -41,8 +41,15 @@ export function useGameSubscriptions(
       setAllUsers([]);
       return;
     }
+    const currentSession = gameConfig.gameSessionId;
     return subscribePlayers(
-      setAllUsers,
+      players => {
+        if (currentSession) {
+          setAllUsers(players);
+        } else {
+          setAllUsers(players);
+        }
+      },
       error => console.error('Error fetching users data:', error),
     );
   }, [authUserId, gameConfig.gameSessionId]);
