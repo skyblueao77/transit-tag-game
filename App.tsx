@@ -207,18 +207,29 @@ const App: React.FC = () => {
 
     if (!activeScope || targetUntil <= now) return;
 
+    const maxDurationMs = 60 * 60 * 1000;
+    const duration = Math.min(targetUntil - now, maxDurationMs);
+    if (duration <= 0) return;
+
     const existing = exposedLocations[currentUser.id];
     if (
       existing
       && existing.gameSessionId === gameConfig.gameSessionId
       && existing.revealScope === activeScope
-      && Math.abs(existing.expiresAt - targetUntil) < 5000
     ) {
-      return;
-    }
+      const remainingValidMs = existing.expiresAt - now;
+      const isExpiresAligned =
+        Math.abs(existing.expiresAt - targetUntil) < 5000 ||
+        (targetUntil - now > maxDurationMs && remainingValidMs > 30 * 60 * 1000);
 
-    const duration = Math.min(targetUntil - now, 60 * 60 * 1000);
-    if (duration <= 0) return;
+      const hasMoved =
+        Math.abs(existing.latitude - privateLocation.latitude) > 0.0001 ||
+        Math.abs(existing.longitude - privateLocation.longitude) > 0.0001;
+
+      if (isExpiresAligned && !hasMoved) {
+        return;
+      }
+    }
 
     void exposeLocation({
       playerId: currentUser.id,
