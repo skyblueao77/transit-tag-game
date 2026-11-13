@@ -306,7 +306,11 @@ service cloud.firestore {
       allow get: if isAdmin() || (signedIn() && request.auth.uid == uid);
       allow list: if isAdmin();
       allow create, update: if validEmergencyProjectionWrite(uid);
-      allow delete: if isAdmin();
+      allow delete: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == uid
+          && existsAfter(/databases/$(database)/documents/users/$(uid))
+          && getAfter(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY');
     }
 
     function validMissionRewardUpdate(uid, b, a, diff) {

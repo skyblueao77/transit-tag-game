@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { User } from '../../types';
 import {
   getCurrentAuthUserId,
+  isCurrentAuthUserAdmin,
   subscribeAuthUserId,
 } from '../infrastructure/firebase/auth';
 import {
@@ -12,6 +13,7 @@ export interface UseAuthUserResult {
   authUserId: string | null;
   authReady: boolean;
   currentUser: User | null;
+  isAuthAdmin: boolean;
   userLoading: boolean;
   setCurrentUser: React.Dispatch<React.SetStateAction<User | null>>;
 }
@@ -20,6 +22,7 @@ export function useAuthUser(): UseAuthUserResult {
   const [authUserId, setAuthUserId] = useState<string | null>(getCurrentAuthUserId);
   const [authReady, setAuthReady] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthAdmin, setIsAuthAdmin] = useState(false);
   const [userLoading, setUserLoading] = useState(true);
 
   useEffect(() => {
@@ -28,6 +31,7 @@ export function useAuthUser(): UseAuthUserResult {
       setAuthReady(true);
       if (!uid) {
         setCurrentUser(null);
+        setIsAuthAdmin(false);
         setUserLoading(false);
       } else {
         setUserLoading(true);
@@ -36,9 +40,21 @@ export function useAuthUser(): UseAuthUserResult {
   }, []);
 
   useEffect(() => {
-    if (!authUserId) return;
+    if (!authUserId) {
+      setIsAuthAdmin(false);
+      return;
+    }
 
-    return subscribeCurrentPlayer(
+    let cancelled = false;
+    void isCurrentAuthUserAdmin()
+      .then(isAdmin => {
+        if (!cancelled) setIsAuthAdmin(isAdmin);
+      })
+      .catch(() => {
+        if (!cancelled) setIsAuthAdmin(false);
+      });
+
+    const unsubscribe = subscribeCurrentPlayer(
       authUserId,
       player => {
         setCurrentUser(player);
@@ -50,12 +66,18 @@ export function useAuthUser(): UseAuthUserResult {
         setUserLoading(false);
       },
     );
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [authUserId]);
 
   return {
     authUserId,
     authReady,
     currentUser,
+    isAuthAdmin,
     userLoading,
     setCurrentUser,
   };

@@ -164,10 +164,10 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                 <input
                   type="number"
                   min={0}
-                  max={360}
+                  max={600}
                   step={10}
                   value={ruleShinkansenMaxMinutes}
-                  onChange={e => setRuleShinkansenMaxMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  onChange={e => setRuleShinkansenMaxMinutes(Math.min(600, Math.max(0, parseInt(e.target.value, 10) || 0)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>
@@ -178,9 +178,9 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                 <input
                   type="number"
                   min={0}
-                  max={10}
+                  max={50}
                   value={ruleShinkansenMaxSegments}
-                  onChange={e => setRuleShinkansenMaxSegments(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  onChange={e => setRuleShinkansenMaxSegments(Math.min(50, Math.max(0, parseInt(e.target.value, 10) || 0)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>
@@ -190,11 +190,11 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                 <span>下車後待機義務（分）</span>
                 <input
                   type="number"
-                  min={0}
+                  min={1}
                   max={180}
                   step={5}
                   value={rulePostShinkansenWaitMinutes}
-                  onChange={e => setRulePostShinkansenWaitMinutes(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  onChange={e => setRulePostShinkansenWaitMinutes(Math.min(180, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>
@@ -213,11 +213,11 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                 <span>定期開示 間隔（分ごと）</span>
                 <input
                   type="number"
-                  min={1}
+                  min={5}
                   max={120}
                   step={5}
                   value={rulePeriodicRevealIntervalMinutes}
-                  onChange={e => setRulePeriodicRevealIntervalMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={e => setRulePeriodicRevealIntervalMinutes(Math.min(120, Math.max(5, parseInt(e.target.value, 10) || 5)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>
@@ -230,7 +230,7 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                   min={1}
                   max={30}
                   value={rulePeriodicRevealDurationMinutes}
-                  onChange={e => setRulePeriodicRevealDurationMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={e => setRulePeriodicRevealDurationMinutes(Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>
@@ -244,7 +244,7 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                   max={120}
                   step={5}
                   value={ruleCaptureWaitMinutes}
-                  onChange={e => setRuleCaptureWaitMinutes(Math.max(5, parseInt(e.target.value, 10) || 5))}
+                  onChange={e => setRuleCaptureWaitMinutes(Math.min(120, Math.max(5, parseInt(e.target.value, 10) || 5)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>
@@ -258,7 +258,7 @@ const AdminRuleSettingsSection: React.FC<AdminRuleSettingsSectionProps> = ({
                   max={180}
                   step={5}
                   value={ruleMissionPenaltyRevealMinutes}
-                  onChange={e => setRuleMissionPenaltyRevealMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={e => setRuleMissionPenaltyRevealMinutes(Math.min(180, Math.max(1, parseInt(e.target.value, 10) || 1)))}
                   className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl font-bold mt-1"
                 />
               </label>

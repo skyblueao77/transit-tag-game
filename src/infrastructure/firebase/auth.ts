@@ -138,6 +138,8 @@ export async function setupInitialAdmin(
   } catch (err) {
     if (createdNewUser && auth.currentUser?.uid === uid) {
       await deleteUser(auth.currentUser).catch(() => {});
+    } else if (auth.currentUser?.uid === uid) {
+      await signOut(auth).catch(() => {});
     }
     throw err;
   }

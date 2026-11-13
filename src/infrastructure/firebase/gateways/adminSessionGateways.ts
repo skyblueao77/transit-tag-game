@@ -675,8 +675,10 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
 
       // 2. プレイヤーを初期状態にリセット
       for (const d of usersSnap.docs) {
+        const team = d.data().team;
         batch.update(doc(db, 'users', d.id), {
           ...playerResetPatch,
+          role: team === 'B' ? 'ONI' : 'RUNNER',
           shinkansenSegmentCount: 0,
           protectionZone: 'NONE',
           penaltyRevealUntil: 0,

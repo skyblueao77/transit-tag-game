@@ -15,7 +15,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
-import type { LocationLog, Role, ProtectionZoneType } from './types';
+import type { Role, ProtectionZoneType } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
@@ -24,7 +24,6 @@ import {
   completeMission,
   exposeLocation,
   updatePrivateLocation,
-  resumeWaiting,
   startWaiting,
   requestSafetyAction,
 } from './src/application';
@@ -83,7 +82,7 @@ const MissionView = lazy(() => import('./views/MissionView'));
 const AdminView = lazy(() => import('./views/AdminView'));
 
 const App: React.FC = () => {
-  const { authUserId, authReady, currentUser, userLoading, setCurrentUser } = useAuthUser();
+  const { authUserId, authReady, currentUser, isAuthAdmin, userLoading, setCurrentUser } = useAuthUser();
   const authUserIdRef = useRef(authUserId);
   useEffect(() => {
     authUserIdRef.current = authUserId;
@@ -111,7 +110,6 @@ const App: React.FC = () => {
   const { confirm, dialogProps } = useConfirmDialog();
   const isOnline = useOnlineStatus();
 
-  const [locationLogs] = useState<LocationLog[]>([]);
   const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
   const [safetyActionBusy, setSafetyActionBusy] = useState(false);
   const safetyActionBusyRef = useRef(false);
@@ -140,8 +138,8 @@ const App: React.FC = () => {
 
   // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
   const isAdmin = useMemo(
-    () => currentUser?.team === 'ADMIN',
-    [currentUser]
+    () => isAuthAdmin || currentUser?.team === 'ADMIN',
+    [isAuthAdmin, currentUser]
   );
 
   const myRole = useMemo((): Role => {
@@ -234,7 +232,7 @@ const App: React.FC = () => {
                 longitude: pos.coords.longitude,
               },
               phase: gameConfig.gameStatus,
-              now,
+              now: Date.now(),
               duration: EXPOSE_DURATION,
             }, firebaseExposedLocationStore);
             if (exposeResult.ok === false) throw new Error(exposeResult.reason);
@@ -450,12 +448,6 @@ const App: React.FC = () => {
     }
     toast.success('待機モードに入りました。お疲れ様でした。');
   }, [confirm, currentUser, gameConfig.gameSessionId, gameConfig.postShinkansenWaitMinutes]);
-
-  const handleResumeWaiting = useCallback(async (): Promise<void> => {
-    if (!gameConfig.gameSessionId) return;
-    const result = await resumeWaiting({ expectedSessionId: gameConfig.gameSessionId }, firebaseWaitingGateway);
-    if (result.ok === false) console.error('Waiting resume request was rejected:', result.reason);
-  }, [gameConfig.gameSessionId]);
 
   const handleUpdateProtectionZone = useCallback(async (zone: ProtectionZoneType): Promise<void> => {
     if (!currentUser) return;
@@ -700,7 +692,6 @@ const App: React.FC = () => {
                   element={
                     <MapView
                       users={allUsers}
-                      logs={locationLogs}
                       currentUser={currentUser}
                       privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
                       exposedLocations={exposedLocations}
@@ -709,7 +700,6 @@ const App: React.FC = () => {
                       onCapture={handleCapture}
                       onActivateInvincibility={handleActivateInvincibility}
                       onStartShinkansenWait={handleStartShinkansenWait}
-                      onResumeWaiting={handleResumeWaiting}
                       onUpdateLastStation={handleUpdateLastStation}
                       onUpdateProtectionZone={handleUpdateProtectionZone}
                       onStartShinkansen={handleStartShinkansen}
