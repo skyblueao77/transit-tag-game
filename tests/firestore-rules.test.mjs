@@ -76,7 +76,7 @@ function fields(values) {
                 : Array.isArray(value)
                   ? value.length === 0
                     ? { arrayValue: {} }
-                    : { arrayValue: { values: value.map(v => (typeof v === 'string' ? { stringValue: v } : fields(v))) } }
+                    : { arrayValue: { values: value.map(v => (typeof v === 'string' ? { stringValue: v } : { mapValue: fields(v) })) } }
                   : { stringValue: value },
       ]),
     ),
@@ -1066,26 +1066,25 @@ describe('Firestore Security Rules', () => {
     });
     assert.equal(wipeRes.status, 403);
 
-    // Participant attempts to prepend a forged CAPTURE log via log-only config update
-    const forgedLogRes = await firestore('game_config/current', {
+    // Participant attempts to prepend a forged CAPTURE log via log-only config update -> 403
+    const forgedLogRes = await firestore('game_config/current?updateMask.fieldPaths=logs', {
       token: userAToken,
       method: 'PATCH',
       body: fields({
-        gameStatus: 'DAY1_ACTIVE',
-        gameSessionId: CURRENT_SESSION_ID,
-        sessionStartedAt: SESSION_STARTED_AT,
-        sessionSchemaVersion: 2,
-        day: 1,
-        missionMode: 'SEPARATE',
-        isGameOver: false,
-        teamARole: 'RUNNER',
-        teamBRole: 'ONI',
-        teamAScore: 100,
-        teamBScore: 50,
         logs: [{ id: 'forged-1', timestamp: Date.now(), message: 'Forged capture log', type: 'CAPTURE' }],
       }),
     });
     assert.equal(forgedLogRes.status, 403);
+
+    // Legitimate SYSTEM log prepend with updateMask.fieldPaths=logs -> 200
+    const systemLogRes = await firestore('game_config/current?updateMask.fieldPaths=logs', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        logs: [{ id: 'sys-1', timestamp: Date.now(), message: 'Legit system log', type: 'SYSTEM' }],
+      }),
+    });
+    assert.equal(systemLogRes.status, 200);
   });
 
   test('rejects forged exposedLocations scope and shrinking active PENALTY snapshot', async () => {
