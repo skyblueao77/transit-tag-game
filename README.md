@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/ci.yml)
 [![Release](https://github.com/skyblueao77/transit-tag-game/actions/workflows/release.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/release.yml)
-![Version](https://img.shields.io/badge/Release-v1.1.0-blue)
+![Version](https://img.shields.io/badge/Release-v1.2.0-blue)
 ![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Hardened%20%26%20Zero--Trust%20Enforced-success)
-![Tests](https://img.shields.io/badge/Tests-267%20Unit%20%7C%2028%20Rules%20%7C%202%20Integration-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-269%20Unit%20%7C%20229%20Audit%20%7C%2028%20Rules%20%7C%202%20Integration-brightgreen)
 ![100-Pattern Matrix](https://img.shields.io/badge/100--Pattern%20Matrix-100%25%20Verified-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue)
 ![Biome](https://img.shields.io/badge/Lint-Biome%20A11y%20Strict-purple)
