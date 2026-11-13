@@ -121,3 +121,74 @@ export function shouldThrottleLocationUpdate(
 
   return { shouldUpload: false, reason: 'DISTANCE_BELOW_THRESHOLD', distanceMeters: distance };
 }
+
+export interface TeammateSplitPlayerInput {
+  id: string;
+  team: string;
+  status: string;
+}
+
+export interface TeammateExposedLocationInput {
+  latitude: number;
+  longitude: number;
+  expiresAt: number;
+}
+
+export interface TeammateSplitMetrics {
+  maxTeammateDistance: number;
+  isTeamSplitAlert: boolean;
+}
+
+export const TEAM_SPLIT_ALERT_THRESHOLD_METERS = 1500;
+
+export function computeTeammateSplitMetrics(params: {
+  currentUserId: string;
+  currentUserTeam: string;
+  myCoords: Coordinates | null;
+  users: readonly TeammateSplitPlayerInput[];
+  exposedLocations: Record<string, TeammateExposedLocationInput | undefined>;
+  nowMs: number;
+  thresholdMeters?: number;
+}): TeammateSplitMetrics {
+  const {
+    currentUserId,
+    currentUserTeam,
+    myCoords,
+    users,
+    exposedLocations,
+    nowMs,
+    thresholdMeters = TEAM_SPLIT_ALERT_THRESHOLD_METERS,
+  } = params;
+
+  if (!myCoords || !currentUserTeam) {
+    return { maxTeammateDistance: 0, isTeamSplitAlert: false };
+  }
+
+  let maxTeammateDistance = 0;
+  for (const teammate of users) {
+    if (teammate.id === currentUserId || teammate.team !== currentUserTeam || teammate.status !== 'ACTIVE') {
+      continue;
+    }
+    const exp = exposedLocations[teammate.id];
+    if (
+      exp
+      && typeof exp.latitude === 'number'
+      && typeof exp.longitude === 'number'
+      && exp.expiresAt > nowMs
+    ) {
+      const dist = calculateHaversineDistanceMeters(myCoords, {
+        latitude: exp.latitude,
+        longitude: exp.longitude,
+      });
+      if (dist > maxTeammateDistance) {
+        maxTeammateDistance = dist;
+      }
+    }
+  }
+
+  return {
+    maxTeammateDistance,
+    isTeamSplitAlert: maxTeammateDistance > thresholdMeters,
+  };
+}
+

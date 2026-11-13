@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import type { User, PrivateLocation, ExposedLocation, GameConfig, Role, ProtectionZoneType } from '../types';
 import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
 import {
-  calculateHaversineDistanceMeters,
+  computeTeammateSplitMetrics,
   findCandidateTransitSuggestions,
   findTransitSuggestion,
   getPlayerRole,
@@ -221,33 +221,19 @@ const MapView: React.FC<Props> = ({
   }, [captureCandidates, selectedTargetId]);
 
   // チーム同一行動の距離判定（期限切れのスナップショットは除外）
-  const teammateDistances = useMemo(() => {
-    if (!privateLocation || !currentUser.team) return [];
-    const myCoords: Coordinates = { latitude: privateLocation.latitude, longitude: privateLocation.longitude };
-
-    return users
-      .filter(u => u.id !== currentUser.id && u.team === currentUser.team && u.status === 'ACTIVE')
-      .map(teammate => {
-        const exp = exposedLocations[teammate.id];
-        if (
-          exp
-          && typeof exp.latitude === 'number'
-          && typeof exp.longitude === 'number'
-          && exp.expiresAt > epoch5sMs
-        ) {
-          const dist = calculateHaversineDistanceMeters(myCoords, { latitude: exp.latitude, longitude: exp.longitude });
-          return { teammate, distanceMeters: dist };
-        }
-        return null;
-      })
-      .filter((item): item is { teammate: User; distanceMeters: number } => item !== null);
-  }, [privateLocation, currentUser.id, currentUser.team, users, exposedLocations, epoch5sMs]);
-
-  const maxTeammateDistance = teammateDistances.length > 0
-    ? Math.max(...teammateDistances.map(d => d.distanceMeters))
-    : 0;
-
-  const isTeamSplitAlert = maxTeammateDistance > 1500;
+  const { maxTeammateDistance, isTeamSplitAlert } = useMemo(
+    () => computeTeammateSplitMetrics({
+      currentUserId: currentUser.id,
+      currentUserTeam: currentUser.team,
+      myCoords: privateLocation
+        ? { latitude: privateLocation.latitude, longitude: privateLocation.longitude }
+        : null,
+      users,
+      exposedLocations,
+      nowMs: epoch5sMs,
+    }),
+    [privateLocation, currentUser.id, currentUser.team, users, exposedLocations, epoch5sMs],
+  );
 
   // 地図初期化（GPS更新や毎秒カウントダウンのたびに破棄・再生成しないよう isOniLocked のみに依存）
   // biome-ignore lint/correctness/useExhaustiveDependencies: initial map coordinates only, not recreated on GPS updates

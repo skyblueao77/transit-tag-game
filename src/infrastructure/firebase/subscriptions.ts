@@ -17,6 +17,10 @@ import {
   mapPrivateLocation,
   mapUserDocument,
 } from './snapshotMappers';
+import {
+  createDifferentialPlayerSubscriber,
+  type DifferentialPlayerSubscriber,
+} from '../differentialPlayerSubscriber';
 
 export function subscribeCurrentPlayer(
   uid: string,
@@ -75,149 +79,58 @@ export function subscribeExposedLocations(
   return subscriber.dispose;
 }
 
-export interface ExposedLocationsSubscriber {
-  setPlayerIds: (playerIds: readonly string[]) => void;
-  dispose: () => void;
-}
+export type ExposedLocationsSubscriber = DifferentialPlayerSubscriber;
 
 export function createExposedLocationsSubscriber(
   expectedSessionId: string,
   onValue: (locations: Record<string, ExposedLocation>) => void,
   onError: (error: Error) => void,
 ): ExposedLocationsSubscriber {
-  let active = true;
-  const values: Record<string, ExposedLocation> = {};
-  const subscriptions = new Map<string, Unsubscribe>();
-  const publish = () => {
-    if (active) onValue({ ...values });
-  };
-
-  const setPlayerIds = (playerIds: readonly string[]) => {
-    if (!active) return;
-    const nextIds = new Set(playerIds);
-    let removedAny = false;
-
-    for (const [playerId, unsubscribe] of subscriptions.entries()) {
-      if (!nextIds.has(playerId)) {
-        unsubscribe();
-        subscriptions.delete(playerId);
-        if (playerId in values) {
-          delete values[playerId];
-          removedAny = true;
-        }
-      }
-    }
-
-    for (const playerId of nextIds) {
-      if (subscriptions.has(playerId)) continue;
-      const unsubscribe = onSnapshot(
-        doc(db, 'exposedLocations', playerId),
-        snapshot => {
-          const mapped = mapExposedLocationDocuments(snapshot.exists()
-            ? [{ id: snapshot.id, data: snapshot.data() }]
-            : [], expectedSessionId);
-          if (mapped[playerId]) values[playerId] = mapped[playerId];
-          else delete values[playerId];
-          publish();
-        },
-        error => {
-          delete values[playerId];
-          publish();
-          if ((error as Error & { code?: string }).code !== 'permission-denied') onError(error);
-        },
-      );
-      subscriptions.set(playerId, unsubscribe);
-    }
-
-    if (removedAny || subscriptions.size === 0) {
-      publish();
-    }
-  };
-
-  const dispose = () => {
-    active = false;
-    for (const unsubscribe of subscriptions.values()) {
-      unsubscribe();
-    }
-    subscriptions.clear();
-  };
-
-  return { setPlayerIds, dispose };
+  return createDifferentialPlayerSubscriber<ExposedLocation>({
+    subscribePlayer: (playerId, onNext, onFailure) => onSnapshot(
+      doc(db, 'exposedLocations', playerId),
+      snapshot => {
+        const mapped = mapExposedLocationDocuments(
+          snapshot.exists() ? [{ id: snapshot.id, data: snapshot.data() }] : [],
+          expectedSessionId,
+        );
+        onNext(mapped[playerId] ?? null);
+      },
+      onFailure,
+    ),
+    onPublish: values => {
+      onValue(Object.fromEntries(values.entries()));
+    },
+    onError,
+  });
 }
 
-export interface EmergencyLocationProjectionsSubscriber {
-  setPlayerIds: (playerIds: readonly string[]) => void;
-  dispose: () => void;
-}
+export type EmergencyLocationProjectionsSubscriber = DifferentialPlayerSubscriber;
 
 export function createEmergencyLocationProjectionsSubscriber(
   expectedSessionId: string,
   onValue: (projections: EmergencyLocationProjection[]) => void,
   onError: (error: Error) => void,
 ): EmergencyLocationProjectionsSubscriber {
-  let active = true;
-  const values = new Map<string, EmergencyLocationProjection>();
-  const subscriptions = new Map<string, Unsubscribe>();
-  const publish = () => {
-    if (!active) return;
-    const now = Date.now();
-    onValue([...values.values()].filter(projection => projection.expiresAt > now));
-  };
-
-  const setPlayerIds = (playerIds: readonly string[]) => {
-    if (!active) return;
-    const nextIds = new Set(playerIds);
-    let removedAny = false;
-
-    for (const [playerId, unsubscribe] of subscriptions.entries()) {
-      if (!nextIds.has(playerId)) {
-        unsubscribe();
-        subscriptions.delete(playerId);
-        if (values.delete(playerId)) {
-          removedAny = true;
-        }
-      }
-    }
-
-    for (const playerId of nextIds) {
-      if (subscriptions.has(playerId)) continue;
-      const unsubscribe = onSnapshot(
-        doc(db, 'emergencyLocationProjections', playerId),
-        snapshot => {
-          const projection = mapEmergencyLocationProjection(
-            snapshot.id,
-            snapshot.exists() ? snapshot.data() : null,
-            expectedSessionId,
-          );
-          if (projection) values.set(playerId, projection);
-          else values.delete(playerId);
-          publish();
-        },
-        error => {
-          values.delete(playerId);
-          publish();
-          if ((error as Error & { code?: string }).code !== 'permission-denied') {
-            onError(error);
-          }
-        },
-      );
-      subscriptions.set(playerId, unsubscribe);
-    }
-
-    if (removedAny || subscriptions.size === 0) {
-      publish();
-    }
-  };
-
-  const dispose = () => {
-    active = false;
-    for (const unsubscribe of subscriptions.values()) {
-      unsubscribe();
-    }
-    subscriptions.clear();
-  };
-
-  return { setPlayerIds, dispose };
+  return createDifferentialPlayerSubscriber<EmergencyLocationProjection>({
+    subscribePlayer: (playerId, onNext, onFailure) => onSnapshot(
+      doc(db, 'emergencyLocationProjections', playerId),
+      snapshot => {
+        const projection = mapEmergencyLocationProjection(
+          snapshot.id,
+          snapshot.exists() ? snapshot.data() : null,
+          expectedSessionId,
+        );
+        onNext(projection);
+      },
+      onFailure,
+    ),
+    onPublish: values => {
+      const now = Date.now();
+      onValue([...values.values()].filter(projection => projection.expiresAt > now));
+    },
+    onError,
+  });
 }
 
 export function subscribeEmergencyLocationProjections(

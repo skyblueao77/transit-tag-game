@@ -92,6 +92,16 @@ export {
 export type { GameClockState } from './time';
 export { computeMapTimeLeft } from './mapTimers';
 export type { ComputeMapTimeLeftInput, MapTimeLeft } from './mapTimers';
+export { AUTO_EXPOSE_MAX_DURATION_MS, resolveAutoExposePlan } from './autoExpose';
+export type {
+  AutoExposeConfigInput,
+  AutoExposeExistingSnapshotInput,
+  AutoExposePlan,
+  AutoExposePrivateLocationInput,
+  AutoExposeScope,
+  AutoExposeUserInput,
+  ResolveAutoExposePlanInput,
+} from './autoExpose';
 export { resolveLocationVisibility } from './reveal';
 export { resolveAdminRevealPlan } from './adminReveal';
 export {
@@ -184,12 +194,17 @@ export type {
 } from './capture';
 export {
   calculateHaversineDistanceMeters,
+  computeTeammateSplitMetrics,
   shouldThrottleLocationUpdate,
+  TEAM_SPLIT_ALERT_THRESHOLD_METERS,
 } from './locationThrottling';
 export type {
   LocationThrottleOptions,
   ShouldUploadInput,
   ShouldUploadResult,
+  TeammateExposedLocationInput,
+  TeammateSplitMetrics,
+  TeammateSplitPlayerInput,
   ThrottleDecisionReason,
 } from './locationThrottling';
 export {

@@ -1,6 +1,6 @@
 # Firebase Sparkプラン（完全無料版）対応ガイド
 
-本ブランチ（`feature/spark-plan-support`）では、Firebaseの有料プラン（Blaze / 従量課金 / クレジットカード登録必須）を必要とせず、**完全無料の「Sparkプラン」のみでTransit Tag Game（鉄道鬼ごっこ）を運用できるよう最適化**されています。
+本アプリケーションは、Firebaseの有料プラン（Blaze / 従量課金 / クレジットカード登録必須）を必要とせず、**完全無料の「Sparkプラン」のみでTransit Tag Game（鉄道鬼ごっこ）を運用できるよう最適化**されています。
 
 ---
 
@@ -12,7 +12,7 @@ Google Cloud / Firebaseの仕様上、Cloud Functionsの利用・デプロイに
 
 ### Sparkプラン対応の改修内容
 
-| 機能 | 従来（Blazeプラン / Cloud Functions） | Sparkプラン対応（本ブランチ / 完全無料） |
+| 機能 | 従来（Blazeプラン / Cloud Functions） | Sparkプラン対応（現行構成 / 完全無料） |
 | :--- | :--- | :--- |
 | **ゲーム操作（捕獲・ミッション・無敵）** | `httpsCallable` → Cloud Functions | Firestore クライアントトランザクション（`runTransaction`）で直接実行 |
 | **管理者操作（フェーズ変更・攻守交代等）** | `httpsCallable` → Cloud Functions | Firestore クライアントトランザクション（`runTransaction`）で直接実行 |
