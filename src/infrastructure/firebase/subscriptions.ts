@@ -70,34 +70,79 @@ export function subscribeExposedLocations(
   onValue: (locations: Record<string, ExposedLocation>) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
+  const subscriber = createExposedLocationsSubscriber(expectedSessionId, onValue, onError);
+  subscriber.setPlayerIds(playerIds);
+  return subscriber.dispose;
+}
+
+export interface ExposedLocationsSubscriber {
+  setPlayerIds: (playerIds: readonly string[]) => void;
+  dispose: () => void;
+}
+
+export function createExposedLocationsSubscriber(
+  expectedSessionId: string,
+  onValue: (locations: Record<string, ExposedLocation>) => void,
+  onError: (error: Error) => void,
+): ExposedLocationsSubscriber {
   let active = true;
   const values: Record<string, ExposedLocation> = {};
+  const subscriptions = new Map<string, Unsubscribe>();
   const publish = () => {
     if (active) onValue({ ...values });
   };
-  const unsubscribes = [...new Set(playerIds)].map(playerId => onSnapshot(
-    doc(db, 'exposedLocations', playerId),
-    snapshot => {
-      const mapped = mapExposedLocationDocuments(snapshot.exists()
-        ? [{ id: snapshot.id, data: snapshot.data() }]
-        : [], expectedSessionId);
-      if (mapped[playerId]) values[playerId] = mapped[playerId];
-      else delete values[playerId];
+
+  const setPlayerIds = (playerIds: readonly string[]) => {
+    if (!active) return;
+    const nextIds = new Set(playerIds);
+    let removedAny = false;
+
+    for (const [playerId, unsubscribe] of subscriptions.entries()) {
+      if (!nextIds.has(playerId)) {
+        unsubscribe();
+        subscriptions.delete(playerId);
+        if (playerId in values) {
+          delete values[playerId];
+          removedAny = true;
+        }
+      }
+    }
+
+    for (const playerId of nextIds) {
+      if (subscriptions.has(playerId)) continue;
+      const unsubscribe = onSnapshot(
+        doc(db, 'exposedLocations', playerId),
+        snapshot => {
+          const mapped = mapExposedLocationDocuments(snapshot.exists()
+            ? [{ id: snapshot.id, data: snapshot.data() }]
+            : [], expectedSessionId);
+          if (mapped[playerId]) values[playerId] = mapped[playerId];
+          else delete values[playerId];
+          publish();
+        },
+        error => {
+          delete values[playerId];
+          publish();
+          if ((error as Error & { code?: string }).code !== 'permission-denied') onError(error);
+        },
+      );
+      subscriptions.set(playerId, unsubscribe);
+    }
+
+    if (removedAny || subscriptions.size === 0) {
       publish();
-    },
-    error => {
-      delete values[playerId];
-      publish();
-      if ((error as Error & { code?: string }).code !== 'permission-denied') onError(error);
-    },
-  ));
-  publish();
-  return () => {
-    active = false;
-    unsubscribes.forEach(unsubscribe => {
-      unsubscribe();
-    });
+    }
   };
+
+  const dispose = () => {
+    active = false;
+    for (const unsubscribe of subscriptions.values()) {
+      unsubscribe();
+    }
+    subscriptions.clear();
+  };
+
+  return { setPlayerIds, dispose };
 }
 
 export function subscribeEmergencyLocationProjections(

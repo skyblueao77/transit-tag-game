@@ -113,8 +113,7 @@ import {
   type AdminRoleSwapPlayer,
 } from '../../game/adminGameState.ts';
 import {
-  resolveAdminRevealPlan,
-  type AdminRevealLocation,
+  resolveAdminRevealSchedule,
   type AdminRevealPlayer,
 } from '../../game/adminReveal.ts';
 import {
@@ -125,13 +124,20 @@ import {
   resolveMissionAssignment,
 } from '../../game/adminMission.ts';
 import {
-  planGameResetPreview,
+  buildResetReceiptContract,
   isResetConfirmationExpired,
+  isResetConfirmationStale,
+  isValidResetId,
+  planFutureGameResetConfig,
+  planFuturePlayerReset,
+  planGameResetPreview,
+  resolveResetReceiptReplay,
+  type ResetConfirmationSnapshot,
   type ResetDocumentIdentity,
   type ResetParticipantDocument,
   RESET_MAX_ESTIMATED_WRITES,
 } from '../../game/gameReset.ts';
-import { DEFAULT_DYNAMIC_RULE_SETTINGS, MISSIONS } from '../../../constants.ts';
+import { DEFAULT_DYNAMIC_RULE_SETTINGS, INITIAL_GAME_CONFIG, MISSIONS } from '../../../constants.ts';
 import type { Mission } from '../../../types.ts';
 import type { GameStatus, Role, DynamicRuleSettings } from '../../game/types.ts';
 
@@ -182,6 +188,23 @@ function generateSecureId(prefix = ''): string {
     }
   }
   throw new Error('Secure random generator is not available in this runtime.');
+}
+
+async function computeResetFingerprint(fingerprintInput: string): Promise<string> {
+  if (typeof crypto !== 'undefined' && crypto.subtle && typeof TextEncoder !== 'undefined') {
+    const encoded = new TextEncoder().encode(fingerprintInput);
+    const digest = await crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Fallback FNV-1a 64-bit hex if subtle crypto is unavailable in an insecure context
+  let h1 = 0x811c9dc5;
+  let h2 = 0x811c9dc5;
+  for (let i = 0; i < fingerprintInput.length; i += 1) {
+    const code = fingerprintInput.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (code + i), 0x01000193) >>> 0;
+  }
+  return `${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`;
 }
 
 function createLogId(): string {
@@ -272,6 +295,14 @@ export const clientCaptureGateway: CaptureGateway = {
         if (captor.team !== 'A' && captor.team !== 'B') return { ok: false, reason: 'INVALID_CAPTOR_TEAM' };
         if (target.team !== 'A' && target.team !== 'B') return { ok: false, reason: 'INVALID_TARGET_TEAM' };
 
+        const captureWaitMinutes =
+          typeof configData.captureWaitMinutes === 'number'
+          && Number.isInteger(configData.captureWaitMinutes)
+          && configData.captureWaitMinutes >= 1
+          && configData.captureWaitMinutes <= 120
+            ? configData.captureWaitMinutes
+            : undefined;
+
         const capture = resolveCapture({
           captorId,
           targetId: input.targetId,
@@ -284,8 +315,8 @@ export const clientCaptureGateway: CaptureGateway = {
           now,
           startTime: configData.startTime,
           victoryMode: configData.victoryMode,
-          captureWaitDurationMs: typeof configData.captureWaitMinutes === 'number'
-            ? configData.captureWaitMinutes * 60 * 1000
+          captureWaitDurationMs: captureWaitMinutes !== undefined
+            ? captureWaitMinutes * 60 * 1000
             : undefined,
         });
 
@@ -307,14 +338,17 @@ export const clientCaptureGateway: CaptureGateway = {
 
         const teamScoreField = capture.reward.team === 'A' ? 'teamAScore' : 'teamBScore';
 
-        transaction.update(configRef, {
+        const configUpdates: UpdateData<DocumentData> = {
           teamARole: capture.teamRoles.teamARole,
           teamBRole: capture.teamRoles.teamBRole,
-          nextRevealTime: capture.nextRevealTime,
           lastCaptureTargetId: input.targetId,
           [teamScoreField]: increment(capture.reward.scoreDelta),
           logs,
-        });
+        };
+        if (capture.nextRevealTime !== undefined) {
+          configUpdates.nextRevealTime = capture.nextRevealTime;
+        }
+        transaction.update(configRef, configUpdates);
 
         for (const change of capture.playerChanges) {
           const userRef = doc(db, 'users', change.playerId);
@@ -488,9 +522,14 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         const isAllowed = canCompleteMission(configData.gameStatus, isFinal);
         if (!isAllowed) return { ok: false, reason: 'MISSION_NOT_ALLOWED' };
 
+        const catalogPoints = missionData.points;
+        if (typeof catalogPoints !== 'number' || !Number.isInteger(catalogPoints) || catalogPoints < 1 || catalogPoints > 100) {
+          return { ok: false, reason: 'PERSISTENCE_ERROR' };
+        }
+
         const reward = calculateMissionReward({
           id: input.missionId,
-          points: typeof missionData.points === 'number' ? missionData.points : 20,
+          points: catalogPoints,
         }, isFinal);
         const score = calculateMissionScore(reward, Math.random());
 
@@ -576,8 +615,15 @@ export const clientWaitingGateway: WaitingGateway = {
         if (role !== 'RUNNER') return { ok: false, reason: 'WRONG_ROLE' };
         if (userData.status !== 'ACTIVE') return { ok: false, reason: 'INVALID_STATUS' };
 
-        const waitDurationMs = typeof configData.postShinkansenWaitMinutes === 'number'
-          ? configData.postShinkansenWaitMinutes * 60 * 1000
+        const postShinkansenWaitMinutes =
+          typeof configData.postShinkansenWaitMinutes === 'number'
+          && Number.isInteger(configData.postShinkansenWaitMinutes)
+          && configData.postShinkansenWaitMinutes >= 1
+          && configData.postShinkansenWaitMinutes <= 180
+            ? configData.postShinkansenWaitMinutes
+            : undefined;
+        const waitDurationMs = postShinkansenWaitMinutes !== undefined
+          ? postShinkansenWaitMinutes * 60 * 1000
           : undefined;
 
         const result = startManualWaiting({
@@ -709,13 +755,15 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
         const userRef = doc(db, 'users', uid);
         const configRef = doc(db, 'game_config', 'current');
         const locRef = doc(db, 'privateLocations', uid);
+        const exposedRef = doc(db, 'exposedLocations', uid);
         const projRef = doc(db, 'emergencyLocationProjections', uid);
 
         // すべての読み取りをトランザクションの最初で実行 (Firestore read-before-write 規則)
-        const [userSnap, configSnap, locSnap, projSnap] = await Promise.all([
+        const [userSnap, configSnap, locSnap, exposedSnap, projSnap] = await Promise.all([
           transaction.get(userRef),
           transaction.get(configRef),
           transaction.get(locRef),
+          transaction.get(exposedRef),
           transaction.get(projRef),
         ]);
 
@@ -754,6 +802,9 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
             shinkansenStartTime: null,
             invincibleUntil: 0,
           });
+          if ((decision.status === 'EMERGENCY' || decision.status === 'RETIRED') && exposedSnap.exists()) {
+            transaction.delete(exposedRef);
+          }
           transaction.update(configRef, { logs });
         }
 
@@ -874,6 +925,11 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
 
         const newConfig = {
           ...DEFAULT_DYNAMIC_RULE_SETTINGS,
+          currentArea: typeof configData?.currentArea === 'string' ? configData.currentArea : INITIAL_GAME_CONFIG.currentArea,
+          currentRegion: typeof configData?.currentRegion === 'string' ? configData.currentRegion : INITIAL_GAME_CONFIG.currentRegion,
+          announcement: typeof configData?.announcement === 'string' ? configData.announcement : INITIAL_GAME_CONFIG.announcement,
+          goalLat: typeof configData?.goalLat === 'number' ? configData.goalLat : INITIAL_GAME_CONFIG.goalLat,
+          goalLng: typeof configData?.goalLng === 'number' ? configData.goalLng : INITIAL_GAME_CONFIG.goalLng,
           gameSessionId: newSessionId,
           sessionStartedAt: now,
           sessionSchemaVersion: 2,
@@ -883,11 +939,19 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
           teamBRole: 'ONI' as Role,
           teamAScore: 0,
           teamBScore: 0,
-          missionMode: 'SAME',
+          missionMode: 'DIFFERENT',
+          activeMissionA: null,
+          activeMissionB: null,
+          isGameEnded: false,
           isGameOver: false,
           isFinalMissionActive: false,
           activeFinalMissionId: null,
+          startTime: 0,
           finalMissionEndTime: 0,
+          nextRevealTime: now + DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes * 60 * 1000,
+          lastCaptureTargetId: null,
+          broadcastMessage: '',
+          broadcastTime: 0,
           locationRevealUntil: null,
           teamARevealUntil: null,
           teamBRevealUntil: null,
@@ -1250,40 +1314,23 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
           });
         }
 
-        const locations: AdminRevealLocation[] = [];
-        for (const p of roster) {
-          locations.push({
-            id: p.id,
-            gameSessionId: sessionValidation.gameSessionId,
-            latitude: 35.6812,
-            longitude: 139.7671,
-            updatedAt: now,
-          });
-        }
-
-        const revealPlan = resolveAdminRevealPlan({
+        const revealSchedule = resolveAdminRevealSchedule({
           scope: input.scope,
           durationMinutes: input.durationMinutes,
           roster,
-          locations,
-          gameSessionId: sessionValidation.gameSessionId,
           now,
         });
 
-        if (revealPlan.allowed === false) {
+        if (revealSchedule.allowed === false) {
           const reason: AdminRevealFailureReason =
-            revealPlan.reason === 'ZERO_VALID_LOCATIONS'
+            revealSchedule.reason === 'ZERO_ELIGIBLE_PLAYERS'
               ? 'ZERO_VALID_LOCATIONS'
-              : revealPlan.reason === 'INVALID_ROSTER'
+              : revealSchedule.reason === 'INVALID_ROSTER'
                 ? 'INVALID_ROSTER'
-                : revealPlan.reason === 'INVALID_TIME'
+                : revealSchedule.reason === 'INVALID_TIME'
                   ? 'INVALID_GAME_CONFIG'
                   : 'INVALID_ARGUMENT';
           return { ok: false, reason };
-        }
-
-        if (revealPlan.snapshots.length === 0) {
-          return { ok: false, reason: 'ZERO_VALID_LOCATIONS' };
         }
 
         const scopeLabel = input.scope === 'GLOBAL' ? '全員' : input.scope === 'TEAM_A' ? 'Team A' : 'Team B';
@@ -1295,16 +1342,16 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
         });
 
         transaction.update(configRef, {
-          [revealPlan.configField]: Timestamp.fromMillis(revealPlan.expiresAt),
+          [revealSchedule.configField]: Timestamp.fromMillis(revealSchedule.expiresAt),
           logs,
         });
 
         const result: AdminRevealResult = {
           ok: true,
           scope: input.scope,
-          expiresAt: revealPlan.expiresAt,
-          projectedCount: revealPlan.snapshots.length,
-          skippedCount: roster.length - revealPlan.snapshots.length,
+          expiresAt: revealSchedule.expiresAt,
+          projectedCount: revealSchedule.targetPlayerIds.length,
+          skippedCount: revealSchedule.skippedPlayerIds.length,
           duplicate: false,
         };
 
@@ -1598,9 +1645,10 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         return { ok: false, reason: 'INVALID_CONFIG' };
       }
 
-      const confirmationToken = generateSecureId('token');
+      const confirmationToken = generateSecureId();
       const expiresAt = Date.now() + 5 * 60 * 1000;
       const proposedSessionId = generateSecureId();
+      const fingerprint = await computeResetFingerprint(previewPlan.fingerprintInput);
 
       const previewData = {
         confirmationToken,
@@ -1619,6 +1667,8 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
 
       await setDoc(doc(db, 'admins', uid, 'gameResetConfirmations', confirmationToken), {
         ...previewData,
+        fingerprint,
+        used: false,
         createdAt: Date.now(),
       });
 
@@ -1638,8 +1688,30 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
 
+      if (!isValidResetId(input.confirmationToken) || !isValidResetId(input.requestId)) {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
+      }
       if (!isValidGameSessionId(input.expectedSessionId)) {
         return { ok: false, reason: 'SESSION_CHANGED' };
+      }
+
+      const receiptRef = doc(db, 'admins', uid, 'resetReceipts', input.requestId);
+      const receiptSnap = await getDoc(receiptRef);
+      if (receiptSnap.exists()) {
+        const receiptData = receiptSnap.data();
+        const replay = resolveResetReceiptReplay(
+          receiptData,
+          input.requestId,
+          input.expectedSessionId,
+          input.confirmationToken,
+        );
+        if (replay === 'MATCH') {
+          return receiptData.result as ExecuteGameResetResult;
+        }
+        if (replay === 'SESSION_CHANGED') {
+          return { ok: false, reason: 'SESSION_CHANGED' };
+        }
+        return { ok: false, reason: 'REQUEST_ID_REUSED' };
       }
 
       const confRef = doc(db, 'admins', uid, 'gameResetConfirmations', input.confirmationToken);
@@ -1647,6 +1719,9 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       if (!confSnap.exists()) return { ok: false, reason: 'CONFIRMATION_NOT_FOUND' };
 
       const conf = confSnap.data();
+      if (conf.used === true) {
+        return { ok: false, reason: 'CONFIRMATION_ALREADY_USED' };
+      }
       if (conf.currentSessionId !== input.expectedSessionId) {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
@@ -1658,16 +1733,8 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
 
       const configRef = doc(db, 'game_config', 'current');
-      const configSnap = await getDoc(configRef);
-      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
-      const configData = configSnap.data();
-      const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
-      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
-
-      const now = Date.now();
-      const newSessionId = conf.proposedSessionId;
-
-      const [usersSnap, privateSnap, exposedSnap, projSnap, completionsSnap] = await Promise.all([
+      const [configSnap, usersSnap, privateSnap, exposedSnap, projSnap, completionsSnap] = await Promise.all([
+        getDoc(configRef),
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
         getDocs(collection(db, 'privateLocations')),
         getDocs(collection(db, 'exposedLocations')),
@@ -1675,46 +1742,91 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         getDocs(collection(db, 'missionCompletions')),
       ]);
 
-      const totalEstimatedWrites = 1 + usersSnap.docs.length + privateSnap.docs.length + exposedSnap.docs.length + projSnap.docs.length + completionsSnap.docs.length + 1;
-      if (totalEstimatedWrites > RESET_MAX_ESTIMATED_WRITES) {
+      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+      const configData = configSnap.data();
+      const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
+      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
+
+      const actualPlan = planGameResetPreview({
+        config: configData,
+        participants: usersSnap.docs.map(d => ({ id: d.id, team: d.data().team })),
+        privateLocations: privateSnap.docs.map(d => ({ id: d.id })),
+        exposedLocations: exposedSnap.docs.map(d => ({ id: d.id })),
+        emergencyProjections: projSnap.docs.map(d => ({ id: d.id })),
+      });
+      if (!actualPlan) {
+        return { ok: false, reason: 'INVALID_CONFIG' };
+      }
+
+      const actualFingerprint = await computeResetFingerprint(actualPlan.fingerprintInput);
+      if (
+        typeof conf.fingerprint !== 'string'
+        || isResetConfirmationStale(conf as ResetConfirmationSnapshot, actualPlan, actualFingerprint)
+      ) {
+        return { ok: false, reason: 'CONFIRMATION_STALE' };
+      }
+
+      const now = Date.now();
+      const newSessionId = conf.proposedSessionId;
+      const futureConfigPlan = planFutureGameResetConfig({
+        proposedSessionId: newSessionId,
+        resetAt: now,
+        nextRevealTime: now + DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes * 60 * 1000,
+      });
+      const playerResetPatch = planFuturePlayerReset(newSessionId);
+      if (!futureConfigPlan || !playerResetPatch) {
+        return { ok: false, reason: 'INVALID_CONFIG' };
+      }
+
+      // 1 config + N users + private + exposed + projections + conf update + receipt set
+      const coreWrites = 1 + usersSnap.docs.length + privateSnap.docs.length + exposedSnap.docs.length + projSnap.docs.length + 2;
+      if (coreWrites > RESET_MAX_ESTIMATED_WRITES) {
         return { ok: false, reason: 'RESET_TOO_LARGE' };
+      }
+
+      const remainingBudget = RESET_MAX_ESTIMATED_WRITES - coreWrites;
+      let mainBatchCompletions = completionsSnap.docs;
+      if (completionsSnap.docs.length > remainingBudget) {
+        const overflowCount = completionsSnap.docs.length - remainingBudget;
+        const overflowDocs = completionsSnap.docs.slice(0, overflowCount);
+        mainBatchCompletions = completionsSnap.docs.slice(overflowCount);
+        for (let i = 0; i < overflowDocs.length; i += 400) {
+          const chunkBatch = writeBatch(db);
+          for (const d of overflowDocs.slice(i, i + 400)) {
+            chunkBatch.delete(doc(db, 'missionCompletions', d.id));
+          }
+          await chunkBatch.commit();
+        }
       }
 
       const batch = writeBatch(db);
 
-      // 1. game_config を初期状態にリセット
+      const {
+        clearRevealDeadlines: _clearRevealDeadlines,
+        preserveLogCount: _preserveLogCount,
+        ...futureConfigFields
+      } = futureConfigPlan;
+
+      // 1. game_config を初期状態にリセット（エリア情報等は維持）
       batch.set(configRef, {
         ...DEFAULT_DYNAMIC_RULE_SETTINGS,
-        gameSessionId: newSessionId,
-        sessionStartedAt: now,
-        sessionSchemaVersion: 2,
-        gameStatus: 'PRE_GAME',
-        day: 1,
-        teamARole: 'RUNNER',
-        teamBRole: 'ONI',
-        teamAScore: 0,
-        teamBScore: 0,
-        missionMode: 'SAME',
-        isGameOver: false,
-        isFinalMissionActive: false,
-        activeFinalMissionId: null,
-        finalMissionEndTime: 0,
+        ...futureConfigFields,
+        currentArea: typeof configData.currentArea === 'string' ? configData.currentArea : INITIAL_GAME_CONFIG.currentArea,
+        currentRegion: typeof configData.currentRegion === 'string' ? configData.currentRegion : INITIAL_GAME_CONFIG.currentRegion,
+        announcement: typeof configData.announcement === 'string' ? configData.announcement : INITIAL_GAME_CONFIG.announcement,
+        goalLat: typeof configData.goalLat === 'number' ? configData.goalLat : INITIAL_GAME_CONFIG.goalLat,
+        goalLng: typeof configData.goalLng === 'number' ? configData.goalLng : INITIAL_GAME_CONFIG.goalLng,
+        lastCaptureTargetId: null,
         locationRevealUntil: null,
         teamARevealUntil: null,
         teamBRevealUntil: null,
         logs: [],
-      });
+      }, { merge: true });
 
       // 2. プレイヤーを初期状態にリセット
       for (const d of usersSnap.docs) {
         batch.update(doc(db, 'users', d.id), {
-          gameSessionId: newSessionId,
-          score: 0,
-          status: 'ACTIVE',
-          waitingUntil: 0,
-          invincibleCards: 0,
-          invincibleUntil: 0,
-          shinkansenStartTime: null,
+          ...playerResetPatch,
           shinkansenSegmentCount: 0,
           protectionZone: 'NONE',
           penaltyRevealUntil: 0,
@@ -1733,12 +1845,28 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       for (const d of projSnap.docs) {
         batch.delete(doc(db, 'emergencyLocationProjections', d.id));
       }
-      for (const d of completionsSnap.docs) {
+      for (const d of mainBatchCompletions) {
         batch.delete(doc(db, 'missionCompletions', d.id));
       }
 
-      // 4. トークンを削除
-      batch.delete(confRef);
+      // 4. 確認トークンを使用済みにし、レシートを原子的に書き込む
+      batch.update(confRef, { used: true, usedAt: now });
+      const receiptContract = buildResetReceiptContract(
+        input.requestId,
+        sessionValidation.gameSessionId,
+        input.confirmationToken,
+        newSessionId,
+      ) ?? {
+        operation: 'executeGameReset' as const,
+        requestId: input.requestId,
+        gameSessionId: sessionValidation.gameSessionId,
+        confirmationToken: input.confirmationToken,
+        result: { ok: true as const, executed: true as const, newSessionId },
+      };
+      batch.set(receiptRef, {
+        ...receiptContract,
+        createdAt: now,
+      });
 
       await batch.commit();
 
@@ -1755,10 +1883,16 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
 };
 
 export async function sendAdminBroadcast(message: string, expectedSessionId: string): Promise<boolean> {
-  const trimmed = message.trim();
-  if (!trimmed) return false;
-  const configRef = doc(db, 'game_config', 'current');
   try {
+    const uid = requireAuthUid();
+    const isAdmin = await verifyAdmin(uid);
+    if (!isAdmin) return false;
+    if (!isValidGameSessionId(expectedSessionId)) return false;
+
+    const trimmed = typeof message === 'string' ? message.trim() : '';
+    if (!trimmed || trimmed.length > 200) return false;
+
+    const configRef = doc(db, 'game_config', 'current');
     await runTransaction(db, async transaction => {
       const configSnap = await transaction.get(configRef);
       if (!configSnap.exists()) {
@@ -1789,12 +1923,47 @@ export async function sendAdminBroadcast(message: string, expectedSessionId: str
   }
 }
 
+function isIntInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+
 export async function updateAdminRuleSettings(
   settings: Partial<DynamicRuleSettings>,
   expectedSessionId: string,
 ): Promise<{ ok: boolean; reason?: string }> {
-  const configRef = doc(db, 'game_config', 'current');
   try {
+    const uid = requireAuthUid();
+    const isAdmin = await verifyAdmin(uid);
+    if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+    if (!isValidGameSessionId(expectedSessionId)) return { ok: false, reason: 'INVALID_SESSION_ID' };
+    if (!settings || typeof settings !== 'object') return { ok: false, reason: 'INVALID_ARGUMENT' };
+
+    if (settings.victoryMode !== undefined && settings.victoryMode !== 'SURVIVAL' && settings.victoryMode !== 'SCORE_SWAP') {
+      return { ok: false, reason: 'INVALID_VICTORY_MODE' };
+    }
+    if (settings.shinkansenMaxMinutes !== undefined && !isIntInRange(settings.shinkansenMaxMinutes, 0, 600)) {
+      return { ok: false, reason: 'INVALID_SHINKANSEN_MAX_MINUTES' };
+    }
+    if (settings.shinkansenMaxSegments !== undefined && !isIntInRange(settings.shinkansenMaxSegments, 0, 50)) {
+      return { ok: false, reason: 'INVALID_SHINKANSEN_MAX_SEGMENTS' };
+    }
+    if (settings.postShinkansenWaitMinutes !== undefined && !isIntInRange(settings.postShinkansenWaitMinutes, 1, 180)) {
+      return { ok: false, reason: 'INVALID_POST_SHINKANSEN_WAIT_MINUTES' };
+    }
+    if (settings.periodicRevealIntervalMinutes !== undefined && !isIntInRange(settings.periodicRevealIntervalMinutes, 5, 120)) {
+      return { ok: false, reason: 'INVALID_PERIODIC_REVEAL_INTERVAL_MINUTES' };
+    }
+    if (settings.periodicRevealDurationMinutes !== undefined && !isIntInRange(settings.periodicRevealDurationMinutes, 1, 30)) {
+      return { ok: false, reason: 'INVALID_PERIODIC_REVEAL_DURATION_MINUTES' };
+    }
+    if (settings.captureWaitMinutes !== undefined && !isIntInRange(settings.captureWaitMinutes, 5, 120)) {
+      return { ok: false, reason: 'INVALID_CAPTURE_WAIT_MINUTES' };
+    }
+    if (settings.missionPenaltyRevealMinutes !== undefined && !isIntInRange(settings.missionPenaltyRevealMinutes, 1, 180)) {
+      return { ok: false, reason: 'INVALID_MISSION_PENALTY_REVEAL_MINUTES' };
+    }
+
+    const configRef = doc(db, 'game_config', 'current');
     return await runTransaction(db, async transaction => {
       const configSnap = await transaction.get(configRef);
       if (!configSnap.exists()) {
@@ -1851,10 +2020,21 @@ export async function applyAdminPenaltyReveal(
   durationMinutes: number,
   expectedSessionId: string,
 ): Promise<{ ok: boolean; reason?: string }> {
-  const configRef = doc(db, 'game_config', 'current');
-  const userRef = doc(db, 'users', targetPlayerId);
-
   try {
+    const uid = requireAuthUid();
+    const isAdmin = await verifyAdmin(uid);
+    if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+    if (!isValidGameSessionId(expectedSessionId)) return { ok: false, reason: 'INVALID_SESSION_ID' };
+    if (typeof targetPlayerId !== 'string' || targetPlayerId.trim().length === 0) {
+      return { ok: false, reason: 'INVALID_PLAYER_ID' };
+    }
+    if (!isIntInRange(durationMinutes, 1, 180)) {
+      return { ok: false, reason: 'INVALID_DURATION' };
+    }
+
+    const configRef = doc(db, 'game_config', 'current');
+    const userRef = doc(db, 'users', targetPlayerId);
+
     return await runTransaction(db, async transaction => {
       const [configSnap, userSnap] = await Promise.all([
         transaction.get(configRef),
@@ -1869,9 +2049,12 @@ export async function applyAdminPenaltyReveal(
       if (configData.gameSessionId !== expectedSessionId) {
         return { ok: false, reason: 'SESSION_MISMATCH' };
       }
+      if (userData.gameSessionId !== expectedSessionId || (userData.team !== 'A' && userData.team !== 'B')) {
+        return { ok: false, reason: 'PLAYER_NOT_IN_SESSION' };
+      }
 
       const now = Date.now();
-      const penaltyDurationMs = Math.max(1, durationMinutes) * 60 * 1000;
+      const penaltyDurationMs = durationMinutes * 60 * 1000;
       const penaltyRevealUntil = now + penaltyDurationMs;
 
       // Update user document

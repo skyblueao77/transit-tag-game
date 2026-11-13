@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import type { GameConfig, User, Mission, PrivateLocation, ExposedLocation } from '../../types';
 import { INITIAL_GAME_CONFIG } from '../../constants';
 import {
-  subscribeExposedLocations,
+  createExposedLocationsSubscriber,
+  type ExposedLocationsSubscriber,
   subscribeGameConfig,
   subscribeMissions,
   subscribePlayers,
@@ -24,35 +25,46 @@ export function useGameSubscriptions(
   onBroadcast?: (message: string) => void,
   onConfigError?: (error: Error) => void,
 ): UseGameSubscriptionsResult {
-  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [rawUsers, setRawUsers] = useState<User[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [gameConfig, setGameConfig] = useState<GameConfig>(INITIAL_GAME_CONFIG);
   const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
   const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
   const lastBroadcastTimeRef = useRef<number | null>(null);
+  const exposedSubscriberRef = useRef<ExposedLocationsSubscriber | null>(null);
+
+  const allUsers = useMemo(
+    () => (gameConfig.gameSessionId
+      ? rawUsers.filter(user => user.gameSessionId === gameConfig.gameSessionId)
+      : rawUsers),
+    [rawUsers, gameConfig.gameSessionId],
+  );
 
   const exposedPlayerIdsJson = useMemo(
-    () => JSON.stringify(allUsers.filter(user => user.team === 'A' || user.team === 'B').map(user => user.id)),
+    () => JSON.stringify(
+      allUsers
+        .filter(
+          user => (user.team === 'A' || user.team === 'B')
+            && user.status !== 'EMERGENCY'
+            && user.status !== 'RETIRED',
+        )
+        .map(user => user.id),
+    ),
     [allUsers],
   );
+  const exposedPlayerIdsRef = useRef<string[]>([]);
+  exposedPlayerIdsRef.current = JSON.parse(exposedPlayerIdsJson) as string[];
 
   useEffect(() => {
     if (!authUserId) {
-      setAllUsers([]);
+      setRawUsers([]);
       return;
     }
-    const currentSession = gameConfig.gameSessionId;
     return subscribePlayers(
-      players => {
-        if (currentSession) {
-          setAllUsers(players);
-        } else {
-          setAllUsers(players);
-        }
-      },
+      setRawUsers,
       error => console.error('Error fetching users data:', error),
     );
-  }, [authUserId, gameConfig.gameSessionId]);
+  }, [authUserId]);
 
   useEffect(() => {
     if (!authUserId || !gameConfig.gameSessionId) {
@@ -73,17 +85,28 @@ export function useGameSubscriptions(
   useEffect(() => {
     if (!authUserId) {
       setExposedLocations({});
+      exposedSubscriberRef.current = null;
       return;
     }
-    const playerIds = JSON.parse(exposedPlayerIdsJson) as string[];
-    setExposedLocations({});
-    return subscribeExposedLocations(
-      playerIds,
+    const subscriber = createExposedLocationsSubscriber(
       gameConfig.gameSessionId ?? '',
       setExposedLocations,
       error => console.error('Error fetching exposed locations:', error),
     );
-  }, [authUserId, exposedPlayerIdsJson, gameConfig.gameSessionId]);
+    exposedSubscriberRef.current = subscriber;
+    subscriber.setPlayerIds(exposedPlayerIdsRef.current);
+    return () => {
+      if (exposedSubscriberRef.current === subscriber) {
+        exposedSubscriberRef.current = null;
+      }
+      subscriber.dispose();
+    };
+  }, [authUserId, gameConfig.gameSessionId]);
+
+  useEffect(() => {
+    if (!authUserId) return;
+    exposedSubscriberRef.current?.setPlayerIds(JSON.parse(exposedPlayerIdsJson) as string[]);
+  }, [authUserId, exposedPlayerIdsJson]);
 
   useEffect(() => {
     if (!authUserId) return;

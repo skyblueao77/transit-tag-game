@@ -98,6 +98,76 @@ function isValidCoordinatePair(latitude: unknown, longitude: unknown): boolean {
     && typeof longitude === 'number' && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
 }
 
+export type AdminRevealSchedule =
+  | {
+      allowed: true;
+      scope: AdminRevealScope;
+      audience: 'AUTHENTICATED_PARTICIPANTS_AND_ADMIN';
+      durationMilliseconds: number;
+      expiresAt: number;
+      configField: AdminRevealConfigField;
+      targetPlayerIds: string[];
+      skippedPlayerIds: string[];
+    }
+  | {
+      allowed: false;
+      reason: 'INVALID_SCOPE' | 'INVALID_DURATION' | 'INVALID_TIME' | 'INVALID_ROSTER' | 'ZERO_ELIGIBLE_PLAYERS';
+    };
+
+export function resolveAdminRevealSchedule(input: {
+  scope: unknown;
+  durationMinutes: unknown;
+  roster: readonly AdminRevealPlayer[];
+  now: number;
+}): AdminRevealSchedule {
+  if (!input || typeof input !== 'object') return { allowed: false, reason: 'INVALID_ROSTER' };
+  if (!isScope(input.scope)) return { allowed: false, reason: 'INVALID_SCOPE' };
+  if (typeof input.durationMinutes !== 'number'
+    || !Number.isInteger(input.durationMinutes)
+    || input.durationMinutes < MIN_ADMIN_REVEAL_DURATION_MINUTES
+    || input.durationMinutes > MAX_ADMIN_REVEAL_DURATION_MINUTES) {
+    return { allowed: false, reason: 'INVALID_DURATION' };
+  }
+  if (!Number.isFinite(input.now) || input.now < 0) return { allowed: false, reason: 'INVALID_TIME' };
+  if (!validateRoster(input.roster)) return { allowed: false, reason: 'INVALID_ROSTER' };
+
+  const durationMilliseconds = input.durationMinutes * ADMIN_REVEAL_DURATION_MINUTE_MS;
+  const expiresAt = input.now + durationMilliseconds;
+  if (!Number.isFinite(expiresAt)) return { allowed: false, reason: 'INVALID_TIME' };
+
+  const scopedPlayers = input.roster.filter(player => {
+    if (player.team !== 'A' && player.team !== 'B') return false;
+    if (input.scope === 'TEAM_A') return player.team === 'A';
+    if (input.scope === 'TEAM_B') return player.team === 'B';
+    return true;
+  });
+
+  const targetPlayerIds: string[] = [];
+  const skippedPlayerIds: string[] = [];
+  for (const player of scopedPlayers) {
+    if (SAFETY_STATUSES.has(player.status)) {
+      skippedPlayerIds.push(player.id);
+    } else {
+      targetPlayerIds.push(player.id);
+    }
+  }
+
+  if (targetPlayerIds.length === 0) {
+    return { allowed: false, reason: 'ZERO_ELIGIBLE_PLAYERS' };
+  }
+
+  return {
+    allowed: true,
+    scope: input.scope,
+    audience: 'AUTHENTICATED_PARTICIPANTS_AND_ADMIN',
+    durationMilliseconds,
+    expiresAt,
+    configField: configFieldForScope(input.scope),
+    targetPlayerIds,
+    skippedPlayerIds,
+  };
+}
+
 export function resolveAdminRevealPlan(input: AdminRevealInput): AdminRevealPlan {
   if (!input || typeof input !== 'object') return { allowed: false, reason: 'INVALID_ROSTER' };
   if (!isScope(input.scope)) return { allowed: false, reason: 'INVALID_SCOPE' };

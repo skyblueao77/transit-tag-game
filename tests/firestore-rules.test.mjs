@@ -76,7 +76,7 @@ function fields(values) {
                 : Array.isArray(value)
                   ? value.length === 0
                     ? { arrayValue: {} }
-                    : { arrayValue: { values: value.map(v => (typeof v === 'string' ? { stringValue: v } : fields(v))) } }
+                    : { arrayValue: { values: value.map(v => (typeof v === 'string' ? { stringValue: v } : { mapValue: fields(v) })) } }
                   : { stringValue: value },
       ]),
     ),
@@ -923,6 +923,54 @@ describe('Firestore Security Rules', () => {
     assert.equal((await commitBatch(survivalCaptureWrites, sOniToken)).status, 200);
   });
 
+  test('P0-SEC-01: rejects anonymous or existing-participant admin bootstrap before bootstrap', async () => {
+    const bootstrapDocName = `projects/${projectId}/databases/(default)/documents/system/admin_bootstrap`;
+
+    // Anonymous account cannot create admin_bootstrap even if not yet initialized
+    const anonUser = await auth('signUp', {});
+    const anonBootstrapWrites = [
+      {
+        update: {
+          name: bootstrapDocName,
+          fields: fields({ initializedAt: new Date(), initializedBy: anonUser.localId }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/admins/${anonUser.localId}`,
+          fields: fields({ role: 'admin', createdAt: new Date() }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+    ];
+    assert.equal((await commitBatch(anonBootstrapWrites, anonUser.idToken)).status, 403);
+
+    // Existing participant (even upgraded or password) cannot self-bootstrap if /users/{uid} exists
+    const existingParticipant = await auth('signUp', { email: 'participant@test.local', password: 'participantPassword123' });
+    await seed(`users/${existingParticipant.localId}`, {
+      id: existingParticipant.localId, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Participant',
+      role: 'RUNNER', status: 'ACTIVE', score: 0, invincibleCards: 0,
+    });
+    const participantBootstrapWrites = [
+      {
+        update: {
+          name: bootstrapDocName,
+          fields: fields({ initializedAt: new Date(), initializedBy: existingParticipant.localId }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/admins/${existingParticipant.localId}`,
+          fields: fields({ role: 'admin', createdAt: new Date() }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+    ];
+    assert.equal((await commitBatch(participantBootstrapWrites, existingParticipant.idToken)).status, 403);
+  });
+
   test('P0-SEC-01: one-time admin bootstrap succeeds for initial user and blocks subsequent escalations', async () => {
     // 1. Initial admin bootstrap: User creates system/admin_bootstrap and admins/{uid} in atomic batch
     const initialAdmin = await auth('signUp', { email: 'initial-admin@test.local', password: 'bootstrapPassword123' });
@@ -1017,6 +1065,102 @@ describe('Firestore Security Rules', () => {
       }),
     });
     assert.equal(wipeRes.status, 403);
+
+    // Participant attempts to prepend a forged CAPTURE log via log-only config update -> 403
+    const forgedLogRes = await firestore('game_config/current?updateMask.fieldPaths=logs', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        logs: [{ id: 'forged-1', timestamp: Date.now(), message: 'Forged capture log', type: 'CAPTURE' }],
+      }),
+    });
+    assert.equal(forgedLogRes.status, 403);
+
+    // Legitimate SYSTEM log prepend with updateMask.fieldPaths=logs -> 200
+    const systemLogRes = await firestore('game_config/current?updateMask.fieldPaths=logs', {
+      token: userAToken,
+      method: 'PATCH',
+      body: fields({
+        logs: [{ id: 'sys-1', timestamp: Date.now(), message: 'Legit system log', type: 'SYSTEM' }],
+      }),
+    });
+    assert.equal(systemLogRes.status, 200);
+  });
+
+  test('rejects forged exposedLocations scope and shrinking active PENALTY snapshot', async () => {
+    const penaltyUser = await auth('signUp', {});
+    const pUid = penaltyUser.localId;
+    const pToken = penaltyUser.idToken;
+    const penaltyDeadline = Date.now() + 10 * 60 * 1000;
+
+    await seed(`users/${pUid}`, {
+      id: pUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Penalty Player',
+      role: 'RUNNER', color: '#ef4444', status: 'ACTIVE', score: 0, invincibleCards: 0,
+      penaltyRevealUntil: penaltyDeadline,
+    });
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+      sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+      teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 100, teamBScore: 50, logs: [],
+    });
+
+    // Forged GLOBAL scope when locationRevealUntil is absent -> 403
+    assert.equal((await firestore(`exposedLocations/${pUid}`, {
+      token: pToken,
+      method: 'PATCH',
+      body: exposedLocationFields(35.68, 139.76, { revealScope: 'GLOBAL' }),
+    })).status, 403);
+
+    // Valid PENALTY snapshot -> 200
+    assert.equal((await firestore(`exposedLocations/${pUid}`, {
+      token: pToken,
+      method: 'PATCH',
+      body: exposedLocationFields(35.68, 139.76, { revealScope: 'PENALTY', expiresAt: penaltyDeadline }),
+    })).status, 200);
+
+    // Shrinking or overwriting active PENALTY snapshot with INDIVIDUAL -> 403
+    assert.equal((await firestore(`exposedLocations/${pUid}`, {
+      token: pToken,
+      method: 'PATCH',
+      body: exposedLocationFields(35.68, 139.76, { revealScope: 'INDIVIDUAL', expiresAt: Date.now() + 30_000 }),
+    })).status, 403);
+  });
+
+  test('rejects ONI role using runner protectionZone, shinkansen tracking, or stacking invincibility', async () => {
+    const oniUser = await auth('signUp', {});
+    const oUid = oniUser.localId;
+    const oToken = oniUser.idToken;
+
+    await seed(`users/${oUid}`, {
+      id: oUid, gameSessionId: CURRENT_SESSION_ID, team: 'B', name: 'Team B ONI',
+      role: 'RUNNER', color: '#3b82f6', status: 'ACTIVE', score: 0, invincibleCards: 2,
+      invincibleUntil: Date.now() + 5 * 60 * 1000,
+    });
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE', gameSessionId: CURRENT_SESSION_ID, sessionStartedAt: SESSION_STARTED_AT,
+      sessionSchemaVersion: 2, day: 1, missionMode: 'SEPARATE', isGameOver: false,
+      teamARole: 'RUNNER', teamBRole: 'ONI', teamAScore: 100, teamBScore: 50, logs: [],
+    });
+
+    // Team B is ONI, so protectionZone and shinkansen tracking must be rejected
+    assert.equal((await firestore(`users/${oUid}?updateMask.fieldPaths=protectionZone`, {
+      token: oToken,
+      method: 'PATCH',
+      body: fields({ protectionZone: 'GREEN_CAR' }),
+    })).status, 403);
+
+    assert.equal((await firestore(`users/${oUid}?updateMask.fieldPaths=shinkansenStartTime&updateMask.fieldPaths=shinkansenSegmentCount`, {
+      token: oToken,
+      method: 'PATCH',
+      body: fields({ shinkansenStartTime: Date.now(), shinkansenSegmentCount: 0 }),
+    })).status, 403);
+
+    // Invincibility card cannot be used by ONI or while invincibleUntil is still active
+    assert.equal((await firestore(`users/${oUid}?updateMask.fieldPaths=invincibleCards&updateMask.fieldPaths=invincibleUntil`, {
+      token: oToken,
+      method: 'PATCH',
+      body: fields({ invincibleCards: 1, invincibleUntil: Date.now() + 10 * 60 * 1000 }),
+    })).status, 403);
   });
 
   test('P2-SEC-12: blocks participant from deleting their own user document', async () => {
