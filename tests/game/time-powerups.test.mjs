@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
+  formatCountdownHms,
   gameTimeAt,
   isActiveUntil,
   isExpired,
@@ -39,6 +40,14 @@ describe('deadline helpers', () => {
     assert.equal(isActiveUntil(now, now), false);
     assert.equal(isExpired(now, now), true);
     assert.equal(isExpired(now - 1, now), true);
+  });
+
+  test('formatCountdownHms formats zero, sub-minute, and multi-hour deadlines', () => {
+    assert.equal(formatCountdownHms(undefined, now), '00:00:00');
+    assert.equal(formatCountdownHms(now, now), '00:00:00');
+    assert.equal(formatCountdownHms(now - 5_000, now), '00:00:00');
+    assert.equal(formatCountdownHms(now + 65_000, now), '00:01:05');
+    assert.equal(formatCountdownHms(now + (2 * 3600 + 3 * 60 + 9) * 1000, now), '02:03:09');
   });
 });
 

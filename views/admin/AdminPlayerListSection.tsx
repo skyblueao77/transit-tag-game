@@ -1,8 +1,10 @@
 import type React from 'react';
 import { ArrowLeftRight, RefreshCw, Trash2, Users } from 'lucide-react';
-import type { User } from '../../types';
+import type { GameConfig, User } from '../../types';
+import { getPlayerRole } from '../../src/game';
 
 interface AdminPlayerListSectionProps {
+  config: GameConfig;
   users: User[];
   nowMs: number;
   modifyingPlayerIds: Set<string>;
@@ -13,6 +15,7 @@ interface AdminPlayerListSectionProps {
 }
 
 const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
+  config,
   users,
   nowMs,
   modifyingPlayerIds,
@@ -27,7 +30,9 @@ const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
       参加プレイヤー ({users.length}名)
     </h3>
     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-      {users.map(u => (
+      {users.map(u => {
+        const effectiveRole = getPlayerRole(u, config);
+        return (
         <div key={u.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
           <div>
             <div className="text-xs font-black text-slate-800">{u.name}</div>
@@ -35,7 +40,7 @@ const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
               <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
                 u.team === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
               }`}>TEAM {u.team}</span>
-              <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-600">{u.role}</span>
+              <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-600">{effectiveRole}</span>
               <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
                 u.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'
               }`}>{u.status}</span>
@@ -81,7 +86,8 @@ const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   </section>
 );

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import type { User } from '../../types';
 import {
   getCurrentAuthUserId,
@@ -18,14 +18,12 @@ export interface UseAuthUserResult {
 
 export function useAuthUser(): UseAuthUserResult {
   const [authUserId, setAuthUserId] = useState<string | null>(getCurrentAuthUserId);
-  const authUserIdRef = useRef(authUserId);
   const [authReady, setAuthReady] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userLoading, setUserLoading] = useState(true);
 
   useEffect(() => {
     return subscribeAuthUserId(uid => {
-      authUserIdRef.current = uid;
       setAuthUserId(uid);
       setAuthReady(true);
       if (!uid) {
