@@ -138,6 +138,7 @@ export type {
   AdminRevealSkipReason,
 } from './adminReveal';
 export {
+  EMERGENCY_CLOCK_SKEW_TOLERANCE_MS,
   EMERGENCY_LOCATION_FRESHNESS_MS,
   EMERGENCY_LOCATION_PROJECTION_TTL_MS,
   resolveEmergencyLocationProjection,
@@ -230,3 +231,5 @@ export type {
   TransitSegment,
   TransitSuggestion,
 } from './stationInference';
+export { getUtf8ByteLength, truncateToUtf8Bytes } from './utf8';
+

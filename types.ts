@@ -90,6 +90,7 @@ export interface GameConfig {
   goalLng: number;
   
   startTime: number;
+  pauseStartTime?: number | null;
   gameStatus: GameStatus;
 
   broadcastMessage: string;

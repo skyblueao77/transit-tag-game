@@ -27,6 +27,7 @@ export interface ComputeMapTimeLeftInput {
   gameConfig: {
     gameStatus: GameStatus;
     startTime?: number;
+    pauseStartTime?: number | null;
     nextRevealTime?: number;
     isFinalMissionActive?: boolean;
     finalMissionEndTime?: number;
@@ -56,8 +57,15 @@ export function computeMapTimeLeft(
     ? remainingSeconds(currentUser.waitingUntil, now)
     : 0;
 
+  const pausedNow = isGamePaused(gameConfig.gameStatus)
+    && typeof gameConfig.pauseStartTime === 'number'
+    && Number.isFinite(gameConfig.pauseStartTime)
+    && gameConfig.pauseStartTime > 0
+    ? Math.min(now, gameConfig.pauseStartTime)
+    : now;
+
   const oniLockTime = (gameConfig.startTime || 0) + ONI_INITIAL_LOCK_DURATION_MS;
-  const oniLock = currentRole === 'ONI' ? remainingSeconds(oniLockTime, now) : 0;
+  const oniLock = currentRole === 'ONI' ? remainingSeconds(oniLockTime, pausedNow) : 0;
 
   if (isGamePaused(gameConfig.gameStatus) && previous) {
     return {

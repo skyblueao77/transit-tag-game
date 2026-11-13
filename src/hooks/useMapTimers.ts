@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { DEFAULT_DYNAMIC_RULE_SETTINGS } from '../../constants';
 import { computeMapTimeLeft, type MapTimeLeft } from '../game';
+import { getServerNowMs } from '../infrastructure/firebase/serverClock';
 import type { GameConfig, Role, User } from '../../types';
 
 export default function useMapTimers(
@@ -9,7 +10,7 @@ export default function useMapTimers(
   currentRole: Role,
 ): { timeLeft: MapTimeLeft; nowMs: number } {
   const [state, setState] = useState<{ timeLeft: MapTimeLeft; nowMs: number }>(() => {
-    const now = Date.now();
+    const now = getServerNowMs();
     return {
       nowMs: now,
       timeLeft: computeMapTimeLeft({
@@ -24,7 +25,7 @@ export default function useMapTimers(
 
   useEffect(() => {
     const update = () => {
-      const now = Date.now();
+      const now = getServerNowMs();
       setState(previous => ({
         nowMs: now,
         timeLeft: computeMapTimeLeft(

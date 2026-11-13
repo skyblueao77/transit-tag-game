@@ -34,6 +34,7 @@ import {
   type EmergencyLocationProjectionsSubscriber,
   subscribeMissionCompletions,
 } from '../../src/infrastructure/firebase/subscriptions';
+import { getServerNowMs } from '../../src/infrastructure/firebase/serverClock';
 import type { PhaseControlAction } from './AdminPhaseControlSection';
 import type { ConfirmOptions } from '../../src/hooks/useConfirmDialog';
 
@@ -57,7 +58,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   const [isApplyingPenalty, setIsApplyingPenalty] = useState(false);
 
   const [modifyingPlayerIds, setModifyingPlayerIds] = useState<Set<string>>(new Set());
-  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [nowMs, setNowMs] = useState<number>(() => getServerNowMs());
 
   const [missionTab, setMissionTab] = useState<'DISPATCH' | 'CATALOG' | 'COMPLETIONS'>('DISPATCH');
   const [missionSearch, setMissionSearch] = useState('');
@@ -105,7 +106,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setNowMs(Date.now());
+      setNowMs(getServerNowMs());
     }, 5000);
     return () => {
       clearInterval(timer);
@@ -404,7 +405,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
         return;
       }
       delete revealRequestIdsRef.current[scope];
-      toast.success(`${result.duplicate ? '既に実行済みです。' : '公開しました。'}\n公開: ${result.projectedCount}名 / 除外: ${result.skippedCount}名`);
+      toast.success(`${result.duplicate ? '既に実行済みです。' : '公開指示を配信しました。'}\n対象: ${result.projectedCount}名（順次位置共有） / 除外: ${result.skippedCount}名`);
     } finally {
       revealBusyRef.current = false;
       setIsProcessing(false);

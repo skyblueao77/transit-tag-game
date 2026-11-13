@@ -2,8 +2,10 @@ import { doc, increment, serverTimestamp, setDoc, updateDoc, writeBatch } from '
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 import type { ProtectionZoneType } from '../../game/types';
+import { getUtf8ByteLength, truncateToUtf8Bytes } from '../../game/utf8';
 import { TEAM_COLORS } from '../../../constants';
 import { assertAdmin, assertSignedInPlayer } from './gateways/shared';
+import { getServerNowMs, markServerTimestampWriteSent } from './serverClock';
 
 interface Coordinates {
   latitude: number;
@@ -16,21 +18,25 @@ export async function createPlayerWithPrivateLocation(
   expectedSessionId: string,
 ): Promise<void> {
   assertSignedInPlayer(player.id);
+  const normalizedName = typeof player.name === 'string' ? truncateToUtf8Bytes(player.name.trim(), 80) : '';
   if (
-    !Number.isFinite(location.latitude) || location.latitude < -90 || location.latitude > 90
+    normalizedName.length === 0
+    || getUtf8ByteLength(normalizedName) > 80
+    || !Number.isFinite(location.latitude) || location.latitude < -90 || location.latitude > 90
     || !Number.isFinite(location.longitude) || location.longitude < -180 || location.longitude > 180
     || typeof expectedSessionId !== 'string' || expectedSessionId.trim().length === 0
   ) {
     throw new Error('INVALID_ARGUMENT');
   }
   const batch = writeBatch(db);
-  batch.set(doc(db, 'users', player.id), { ...player, gameSessionId: expectedSessionId });
+  batch.set(doc(db, 'users', player.id), { ...player, name: normalizedName, gameSessionId: expectedSessionId });
   batch.set(doc(db, 'privateLocations', player.id), {
     gameSessionId: expectedSessionId,
     latitude: location.latitude,
     longitude: location.longitude,
     updatedAt: serverTimestamp(),
   });
+  markServerTimestampWriteSent();
   await batch.commit();
 }
 
@@ -39,10 +45,8 @@ export async function updatePlayerLastStation(
   lastStation: string,
 ): Promise<void> {
   assertSignedInPlayer(playerId);
-  const normalizedStation = typeof lastStation === 'string' ? lastStation.trim() : '';
-  if (normalizedStation.length > 100) {
-    throw new Error('INVALID_STATION');
-  }
+  const rawStation = typeof lastStation === 'string' ? lastStation.trim() : '';
+  const normalizedStation = truncateToUtf8Bytes(rawStation, 250, '...');
   const userRef = doc(db, 'users', playerId);
   await setDoc(userRef, { lastStation: normalizedStation }, { merge: true });
 }
@@ -94,7 +98,7 @@ export async function startPlayerShinkansen(playerId: string): Promise<void> {
   assertSignedInPlayer(playerId);
   const userRef = doc(db, 'users', playerId);
   await updateDoc(userRef, {
-    shinkansenStartTime: Date.now(),
+    shinkansenStartTime: getServerNowMs(),
     shinkansenSegmentCount: 0,
   });
 }

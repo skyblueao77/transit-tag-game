@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { EmergencyLocationProjection, User } from '../types';
 import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup } from './playerMapPopup';
+import { getServerNowMs } from '../src/infrastructure/firebase/serverClock';
 
 interface Props {
   projections: EmergencyLocationProjection[];
@@ -16,7 +17,7 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
   const markersRef = useRef<Record<string, L.CircleMarker>>({});
   const hasAutoCenteredRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => getServerNowMs());
 
   const activeProjections = useMemo(
     () => projections.filter(projection => projection.safetyStatus === 'EMERGENCY' && projection.expiresAt > now),
@@ -24,7 +25,7 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
   );
   const usersById = useMemo(() => new Map(users.map(user => [user.id, user])), [users]);
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    const timer = window.setInterval(() => setNow(getServerNowMs()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 

@@ -18,7 +18,6 @@ import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPop
 import useWakeLock from '../src/hooks/useWakeLock';
 import useOnlineStatus from '../src/hooks/useOnlineStatus';
 import useMapTimers from '../src/hooks/useMapTimers';
-import useMapGeolocation from '../src/hooks/useMapGeolocation';
 import { toast } from 'sonner';
 import stationsData from '../src/data/stations.json';
 import StationSuggestCard from '../src/components/StationSuggestCard';
@@ -188,21 +187,15 @@ const MapView: React.FC<Props> = ({
 
   useWakeLock(true);
 
-  useMapGeolocation({
-    currentUserId: currentUser.id,
-    gameSessionId: gameConfig.gameSessionId,
-    gameStatus: gameConfig.gameStatus,
-    onUpdatePrivateLocation,
-  });
-
+  const isAdminViewer = currentUser.team === 'ADMIN';
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
   const { timeLeft, nowMs } = useMapTimers(currentUser, gameConfig, currentRole);
-  const isOniLocked = timeLeft.oniLock > 0;
+  const isOniLocked = !isAdminViewer && timeLeft.oniLock > 0;
   const epoch5sMs = Math.floor(nowMs / 5000) * 5000;
 
   const captureCandidates = useMemo(
     () => (
-      currentRole === 'ONI'
+      !isAdminViewer && currentRole === 'ONI'
         ? users.filter(user => (
           user.id !== currentUser.id &&
           user.status === 'ACTIVE' &&
@@ -211,7 +204,7 @@ const MapView: React.FC<Props> = ({
         ))
         : []
     ),
-    [currentRole, users, currentUser.id, gameConfig, epoch5sMs],
+    [isAdminViewer, currentRole, users, currentUser.id, gameConfig, epoch5sMs],
   );
 
   useEffect(() => {
@@ -222,17 +215,19 @@ const MapView: React.FC<Props> = ({
 
   // チーム同一行動の距離判定（期限切れのスナップショットは除外）
   const { maxTeammateDistance, isTeamSplitAlert } = useMemo(
-    () => computeTeammateSplitMetrics({
-      currentUserId: currentUser.id,
-      currentUserTeam: currentUser.team,
-      myCoords: privateLocation
-        ? { latitude: privateLocation.latitude, longitude: privateLocation.longitude }
-        : null,
-      users,
-      exposedLocations,
-      nowMs: epoch5sMs,
-    }),
-    [privateLocation, currentUser.id, currentUser.team, users, exposedLocations, epoch5sMs],
+    () => (isAdminViewer
+      ? { maxTeammateDistance: 0, isTeamSplitAlert: false }
+      : computeTeammateSplitMetrics({
+          currentUserId: currentUser.id,
+          currentUserTeam: currentUser.team,
+          myCoords: privateLocation
+            ? { latitude: privateLocation.latitude, longitude: privateLocation.longitude }
+            : null,
+          users,
+          exposedLocations,
+          nowMs: epoch5sMs,
+        })),
+    [isAdminViewer, privateLocation, currentUser.id, currentUser.team, users, exposedLocations, epoch5sMs],
   );
 
   // 地図初期化（GPS更新や毎秒カウントダウンのたびに破棄・再生成しないよう isOniLocked のみに依存）
@@ -261,7 +256,7 @@ const MapView: React.FC<Props> = ({
     const currentMap = mapRef.current;
     if (!currentMap || isOniLocked) return;
 
-    const now = Date.now();
+    const now = nowMs;
     const visibleIds = new Set<string>();
 
     users.forEach(user => {
@@ -379,7 +374,7 @@ const MapView: React.FC<Props> = ({
 
       <div ref={containerRef} style={{ flex: 1, width: '100%', zIndex: 0 }} />
 
-      {!isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
+      {!isAdminViewer && !isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] w-full px-4 max-w-sm sm:max-w-md pointer-events-none">
           <StationSuggestCard
             suggestion={transitSuggestion}
@@ -398,45 +393,53 @@ const MapView: React.FC<Props> = ({
         </div>
       )}
 
-      <MapStatusBadges currentUser={currentUser} timeLeft={timeLeft} formatTime={formatTime} />
+      {!isAdminViewer && (
+        <MapStatusBadges currentUser={currentUser} timeLeft={timeLeft} formatTime={formatTime} />
+      )}
 
-      <div className="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
-        {currentRole === 'ONI' && (
-          <MapOniCapturePanel
-            currentUser={currentUser}
-            gameConfig={gameConfig}
-            captureCandidates={captureCandidates}
-            selectedTargetId={selectedTargetId}
-            isProcessing={isProcessing}
-            onSelectTarget={setSelectedTargetId}
-            onCapture={async targetId => {
-              setIsProcessing(true);
-              try {
-                await onCapture(targetId);
-              } finally {
-                setIsProcessing(false);
-              }
-            }}
-          />
-        )}
-        {currentRole === 'RUNNER' && (
-          <MapRunnerControls
-            currentUser={currentUser}
-            gameConfig={gameConfig}
-            timeLeft={timeLeft}
-            nowMs={nowMs}
-            isProcessing={isProcessing}
-            setIsProcessing={setIsProcessing}
-            formatTime={formatTime}
-            onActivateInvincibility={onActivateInvincibility}
-            onStartShinkansenWait={onStartShinkansenWait}
-            onUpdateProtectionZone={onUpdateProtectionZone}
-            onStartShinkansen={onStartShinkansen}
-            onIncrementShinkansenSegment={onIncrementShinkansenSegment}
-            onResetShinkansen={onResetShinkansen}
-          />
-        )}
-      </div>
+      {isAdminViewer ? (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] px-4 py-2 rounded-full bg-slate-900/90 text-white text-xs font-bold shadow-lg pointer-events-none">
+          管理者プレビュー（閲覧専用）
+        </div>
+      ) : (
+        <div className="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
+          {currentRole === 'ONI' && (
+            <MapOniCapturePanel
+              currentUser={currentUser}
+              gameConfig={gameConfig}
+              captureCandidates={captureCandidates}
+              selectedTargetId={selectedTargetId}
+              isProcessing={isProcessing}
+              onSelectTarget={setSelectedTargetId}
+              onCapture={async targetId => {
+                setIsProcessing(true);
+                try {
+                  await onCapture(targetId);
+                } finally {
+                  setIsProcessing(false);
+                }
+              }}
+            />
+          )}
+          {currentRole === 'RUNNER' && (
+            <MapRunnerControls
+              currentUser={currentUser}
+              gameConfig={gameConfig}
+              timeLeft={timeLeft}
+              nowMs={nowMs}
+              isProcessing={isProcessing}
+              setIsProcessing={setIsProcessing}
+              formatTime={formatTime}
+              onActivateInvincibility={onActivateInvincibility}
+              onStartShinkansenWait={onStartShinkansenWait}
+              onUpdateProtectionZone={onUpdateProtectionZone}
+              onStartShinkansen={onStartShinkansen}
+              onIncrementShinkansenSegment={onIncrementShinkansenSegment}
+              onResetShinkansen={onResetShinkansen}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -84,7 +84,7 @@ export function resolveAdminRoleSwap(input: AdminRoleSwapInput): AdminRoleSwapRe
       excludedSafetyPlayerIds.push(player.id);
       return [];
     }
-    if (player.status !== 'ACTIVE' && player.status !== 'WAITING') return [];
+    if (player.status !== 'ACTIVE' && player.status !== 'WAITING' && player.status !== 'CAPTURED') return [];
 
     if (player.team === newOniTeam) {
       return [{

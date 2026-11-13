@@ -5,6 +5,7 @@ import { FINAL_MISSIONS } from '../constants';
 import type { CompleteMissionResult } from '../src/application/gameplayPorts';
 import { canCompleteMission, formatCountdownHms, isSameMissionId } from '../src/game';
 import { subscribeMissionCompletions } from '../src/infrastructure/firebase/subscriptions';
+import { getServerNowMs } from '../src/infrastructure/firebase/serverClock';
 import useConfirmDialog from '../src/hooks/useConfirmDialog';
 import ConfirmDialog from '../src/components/ui/ConfirmDialog';
 import { Target, CheckCircle2, MapPin, Hourglass, Camera, Hash } from 'lucide-react';
@@ -40,7 +41,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
   const [completedMissionIds, setCompletedMissionIds] = useState<Set<string>>(() => new Set());
   const [timeLeft, setTimeLeft] = useState(() =>
     config.isFinalMissionActive
-      ? formatCountdownHms(config.finalMissionEndTime, Date.now())
+      ? formatCountdownHms(config.finalMissionEndTime, getServerNowMs())
       : '00:00:00',
   );
   const { confirm, dialogProps } = useConfirmDialog();
@@ -76,8 +77,8 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
     return missions.find(m => m != null && m.id === activeMissionId) ?? null;
   }, [activeMissionId, missions]);
 
-  // 最終ミッションオブジェクト（activeFinalMissionId で特定、なければ先頭）
-  const finalMission = useMemo((): Mission => {
+  // 最終ミッションオブジェクト（activeFinalMissionId で特定。未設定時は null）
+  const finalMission = useMemo((): Mission | null => {
     const id = config.activeFinalMissionId;
     if (id) {
       const foundInCatalog = Array.isArray(missions) ? missions.find(m => m != null && m.id === id) : undefined;
@@ -85,9 +86,10 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
       const found = FINAL_MISSIONS.find(m => m.id === id);
       if (found) return found;
     }
-    const fallbackInCatalog = Array.isArray(missions) ? missions.find(m => m?.isFinalMission) : undefined;
-    return fallbackInCatalog ?? FINAL_MISSIONS[0];
+    return null;
   }, [config.activeFinalMissionId, missions]);
+
+  const isAdminViewer = user.team === 'ADMIN';
 
   const isCurrentMissionCompleted = Boolean(
     activeMissionId && (
@@ -98,9 +100,11 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
   );
 
   const isFinalMissionCompleted = Boolean(
-    isFinalReported
-    || completedMissionIds.has(finalMission.id)
-    || (config.gameSessionId && user.lastCompletionId === `${user.team}_${config.gameSessionId}_${finalMission.id}`),
+    finalMission && (
+      isFinalReported
+      || completedMissionIds.has(finalMission.id)
+      || (config.gameSessionId && user.lastCompletionId === `${user.team}_${config.gameSessionId}_${finalMission.id}`)
+    ),
   );
 
   // 新しいミッションやセッションが来たらローカルの直近完了表示をリセット
@@ -122,7 +126,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
   useEffect(() => {
     if (!config.isFinalMissionActive) return;
     const update = () => {
-      const formatted = formatCountdownHms(config.finalMissionEndTime, Date.now());
+      const formatted = formatCountdownHms(config.finalMissionEndTime, getServerNowMs());
       setTimeLeft(formatted);
       return formatted;
     };
@@ -137,8 +141,9 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
 
   // ミッション完了報告（座標判定なし・自主報告）
   const handleComplete = async () => {
+    if (isAdminViewer) return;
     const isFinalMission = config.isFinalMissionActive;
-    const mission: Mission = isFinalMission ? finalMission : (currentMission as Mission);
+    const mission: Mission | null = isFinalMission ? finalMission : currentMission;
     if (!mission || !canCompleteMission(config.gameStatus, isFinalMission)) return;
     if (isFinalMission && isFinalMissionCompleted) return;
     if (!isFinalMission && isCurrentMissionCompleted) return;
@@ -197,38 +202,51 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
               <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 text-center">Time Remaining</div>
               <div className="text-5xl font-black font-mono mb-6 text-white text-center">{timeLeft}</div>
 
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <Target className="text-red-500 shrink-0 mt-1" size={20} />
-                  <div>
-                    <div className="text-xs font-black text-slate-400 uppercase mb-1">Final Mission</div>
-                    <div className="text-base font-bold leading-tight text-white">{finalMission.title}</div>
+              {finalMission ? (
+                <div className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <Target className="text-red-500 shrink-0 mt-1" size={20} />
+                    <div>
+                      <div className="text-xs font-black text-slate-400 uppercase mb-1">Final Mission</div>
+                      <div className="text-base font-bold leading-tight text-white">{finalMission.title}</div>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-300 leading-relaxed pl-8">{finalMission.description}</p>
+                  <div className="pl-8 flex items-center gap-2 mt-2">
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                      finalMission.type === 'PHOTO' ? 'bg-amber-900/50 text-amber-400' : 'bg-emerald-900/50 text-emerald-400'
+                    }`}>
+                      {finalMission.type === 'PHOTO' ? '📸 写真をLINEで送る' : '📍 チェックインして報告'}
+                    </span>
+                    <span className="text-[10px] font-black text-red-400">+{finalMission.points} PT</span>
                   </div>
                 </div>
-                <p className="text-sm text-slate-300 leading-relaxed pl-8">{finalMission.description}</p>
-                <div className="pl-8 flex items-center gap-2 mt-2">
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                    finalMission.type === 'PHOTO' ? 'bg-amber-900/50 text-amber-400' : 'bg-emerald-900/50 text-emerald-400'
-                  }`}>
-                    {finalMission.type === 'PHOTO' ? '📸 写真をLINEで送る' : '📍 チェックインして報告'}
-                  </span>
-                  <span className="text-[10px] font-black text-red-400">+{finalMission.points} PT</span>
+              ) : (
+                <div className="text-center py-6 text-slate-400 text-sm font-bold">
+                  最終ミッションを読み込み中...
                 </div>
-              </div>
+              )}
             </div>
 
-            <button
-              type="button"
-              onClick={handleComplete}
-              disabled={isSubmitting || isFinalMissionCompleted}
-              className={`w-full py-5 font-black rounded-2xl shadow-xl transition-all text-xl uppercase ${
-                isFinalMissionCompleted
-                  ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                  : 'bg-red-600 hover:bg-red-700 text-white active:scale-95'
-              }`}
-            >
-              {isSubmitting ? 'Processing...' : isFinalMissionCompleted ? '報告済み / Reported' : '完了報告を行う'}
-            </button>
+            {finalMission && !isAdminViewer && (
+              <button
+                type="button"
+                onClick={handleComplete}
+                disabled={isSubmitting || isFinalMissionCompleted}
+                className={`w-full py-5 font-black rounded-2xl shadow-xl transition-all text-xl uppercase ${
+                  isFinalMissionCompleted
+                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                    : 'bg-red-600 hover:bg-red-700 text-white active:scale-95'
+                }`}
+              >
+                {isSubmitting ? 'Processing...' : isFinalMissionCompleted ? '報告済み / Reported' : '完了報告を行う'}
+              </button>
+            )}
+            {isAdminViewer && (
+              <div className="w-full py-4 text-center rounded-2xl bg-slate-800 border border-slate-700 text-slate-400 text-sm font-bold">
+                管理者プレビュー（報告不可）
+              </div>
+            )}
           </div>
         </div>
       </>
@@ -313,14 +331,20 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleComplete}
-                disabled={isSubmitting}
-                className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-lg disabled:bg-slate-300"
-              >
-                <CheckCircle2 size={24} /> 完了報告を行う
-              </button>
+              {isAdminViewer ? (
+                <div className="w-full py-4 text-center rounded-2xl bg-slate-100 border border-slate-200 text-slate-500 text-sm font-bold">
+                  管理者プレビュー（報告不可）
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleComplete}
+                  disabled={isSubmitting}
+                  className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-lg disabled:bg-slate-300"
+                >
+                  <CheckCircle2 size={24} /> 完了報告を行う
+                </button>
+              )}
             </div>
           ) : (
             <div className="text-center py-12">

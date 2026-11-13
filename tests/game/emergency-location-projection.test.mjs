@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
+  EMERGENCY_CLOCK_SKEW_TOLERANCE_MS,
   EMERGENCY_LOCATION_FRESHNESS_MS,
   resolveEmergencyLocationProjection,
 } from '../../src/game/emergencyLocationProjection.ts';
@@ -31,8 +32,9 @@ describe('Emergency location projection policy', () => {
     }
   });
 
-  test('rejects invalid and future source timestamps', () => {
-    for (const sourceLocationUpdatedAt of [undefined, NaN, -1, now + 1]) {
+  test('allows minor server clock skew and rejects invalid or overly future source timestamps', () => {
+    assert.equal(resolveEmergencyLocationProjection({ ...fresh, sourceLocationUpdatedAt: now + 500 }).kind, 'PROJECT');
+    for (const sourceLocationUpdatedAt of [undefined, NaN, -1, now + EMERGENCY_CLOCK_SKEW_TOLERANCE_MS + 1]) {
       assert.deepEqual(resolveEmergencyLocationProjection({ ...fresh, sourceLocationUpdatedAt }), {
         kind: 'INVALID_TIME',
       });

@@ -56,6 +56,7 @@ import {
   validateExpectedSession,
 } from '../../../game/gameSession.ts';
 import { appendToConfigLogs, createLogId } from './shared.ts';
+import { getServerNowMs } from '../serverClock.ts';
 
 // ============================================================
 // 1. Capture Gateway (捕獲)
@@ -89,7 +90,7 @@ export const clientCaptureGateway: CaptureGateway = {
         return { ok: false, reason: 'TARGET_NOT_FOUND' };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -222,7 +223,7 @@ export const clientInvincibilityGateway: InvincibilityGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -316,7 +317,7 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -425,7 +426,7 @@ export const clientWaitingGateway: WaitingGateway = {
       if (!uid) return { ok: false, reason: 'INVALID_ARGUMENT' };
       if (!isValidGameSessionId(input.expectedSessionId)) return { ok: false, reason: 'SESSION_CHANGED' };
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -507,7 +508,7 @@ export const clientWaitingGateway: WaitingGateway = {
       if (!uid) return { ok: false, reason: 'INVALID_ARGUMENT' };
       if (!isValidGameSessionId(input.expectedSessionId)) return { ok: false, reason: 'SESSION_CHANGED' };
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -583,7 +584,7 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {

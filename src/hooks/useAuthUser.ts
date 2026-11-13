@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import type { User } from '../../types';
 import {
   getCurrentAuthUserId,
-  isCurrentAuthUserAdmin,
   subscribeAuthUserId,
+  subscribeCurrentAuthUserAdmin,
 } from '../infrastructure/firebase/auth';
 import {
   subscribeCurrentPlayer,
@@ -45,14 +45,15 @@ export function useAuthUser(): UseAuthUserResult {
       return;
     }
 
-    let cancelled = false;
-    void isCurrentAuthUserAdmin()
-      .then(isAdmin => {
-        if (!cancelled) setIsAuthAdmin(isAdmin);
-      })
-      .catch(() => {
-        if (!cancelled) setIsAuthAdmin(false);
-      });
+    const unsubscribeAdmin = subscribeCurrentAuthUserAdmin(
+      authUserId,
+      isAdmin => {
+        setIsAuthAdmin(isAdmin);
+      },
+      () => {
+        setIsAuthAdmin(false);
+      },
+    );
 
     const unsubscribe = subscribeCurrentPlayer(
       authUserId,
@@ -68,7 +69,7 @@ export function useAuthUser(): UseAuthUserResult {
     );
 
     return () => {
-      cancelled = true;
+      unsubscribeAdmin();
       unsubscribe();
     };
   }, [authUserId]);

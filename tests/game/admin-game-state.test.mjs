@@ -40,6 +40,7 @@ describe('Admin Game State Core', () => {
         { playerId: 'a-waiting', status: 'ACTIVE', waitingUntil: 0, shinkansenStartTime: null },
         { playerId: 'b-active', status: 'WAITING', waitingUntil: now + ONI_INITIAL_LOCK_DURATION_MS, shinkansenStartTime: null, invincibleUntil: 0 },
         { playerId: 'b-waiting', status: 'WAITING', waitingUntil: now + ONI_INITIAL_LOCK_DURATION_MS, shinkansenStartTime: null, invincibleUntil: 0 },
+        { playerId: 'a-captured', status: 'ACTIVE', waitingUntil: 0, shinkansenStartTime: null },
       ],
       excludedSafetyPlayerIds: ['a-emergency', 'b-retired'],
     });

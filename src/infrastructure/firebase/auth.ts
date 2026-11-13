@@ -6,8 +6,9 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
-import { doc, getDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, serverTimestamp, writeBatch, type Unsubscribe } from 'firebase/firestore';
 import { auth, db } from './firebaseClient';
+import { markServerTimestampWriteSent } from './serverClock';
 
 /**
  * 初回管理者が既に初期化済みかどうかを確認します。
@@ -134,6 +135,7 @@ export async function setupInitialAdmin(
       role: 'admin',
       createdAt: serverTimestamp(),
     });
+    markServerTimestampWriteSent();
     await batch.commit();
   } catch (err) {
     if (createdNewUser && auth.currentUser?.uid === uid) {
@@ -151,6 +153,22 @@ export async function isCurrentAuthUserAdmin(): Promise<boolean> {
   const uid = getCurrentAuthUserId();
   if (!uid) return false;
   return (await getDoc(doc(db, 'admins', uid))).exists();
+}
+
+export function subscribeCurrentAuthUserAdmin(
+  uid: string,
+  onValue: (isAdmin: boolean) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'admins', uid),
+    snapshot => {
+      onValue(snapshot.exists());
+    },
+    error => {
+      onError?.(error);
+    },
+  );
 }
 
 export async function signOutCurrentUser(): Promise<void> {

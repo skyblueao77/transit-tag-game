@@ -3,6 +3,7 @@ import type { ExposedLocation, GameConfig, PrivateLocation, User } from '../../t
 import { resolveAutoExposePlan } from '../game';
 import { exposeLocation } from '../application';
 import { firebaseExposedLocationStore } from '../infrastructure/firebase/locationStores';
+import { getServerNowMs } from '../infrastructure/firebase/serverClock';
 
 interface UsePlayerAutoExposeParams {
   isOnline: boolean;
@@ -26,7 +27,7 @@ export default function usePlayerAutoExpose({
   exposedLocations,
 }: UsePlayerAutoExposeParams): void {
   useEffect(() => {
-    const now = Date.now();
+    const now = getServerNowMs();
     const existing = currentUser ? exposedLocations[currentUser.id] : undefined;
     const plan = resolveAutoExposePlan({
       isOnline,

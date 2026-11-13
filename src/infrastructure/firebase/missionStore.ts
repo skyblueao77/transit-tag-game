@@ -9,6 +9,7 @@ import {
 import type { Mission } from '../../../types';
 import { db } from './firebaseClient';
 import { appendToConfigLogs, assertAdmin, createLogId } from './gateways/shared';
+import { getServerNowMs } from './serverClock';
 
 /**
  * 管理者が新しいミッションを追加または既存のミッションを更新します。
@@ -106,7 +107,7 @@ export async function awardMissionCompletionByAdmin(input: AwardMissionInput): P
       }
 
       const scoreField = input.team === 'A' ? 'teamAScore' : 'teamBScore';
-      const now = Date.now();
+      const now = getServerNowMs();
       const updatedLogs = appendToConfigLogs(configData.logs, {
         id: logId,
         now,

@@ -1,6 +1,6 @@
 import type React from 'react';
 import type { GameConfig, User, Mission } from '../types';
-import { Shield, QrCode } from 'lucide-react';
+import { Shield, QrCode, Map as MapIcon, Target } from 'lucide-react';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
 import useConfirmDialog from '../src/hooks/useConfirmDialog';
 import ConfirmDialog from '../src/components/ui/ConfirmDialog';
@@ -44,7 +44,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   return (
     <div className="min-h-[100dvh] bg-slate-100 text-slate-800 font-sans">
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 pb-24 space-y-6">
-        <header className="flex justify-between items-center bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
+        <header className="flex flex-wrap justify-between items-center gap-3 bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-lg sm:text-xl font-black text-slate-900 flex items-center gap-2">
               <Shield size={20} className="text-blue-600" />
@@ -54,13 +54,27 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               セッション: {config.gameSessionId ? `${config.gameSessionId.slice(0, 12)}...` : '未初期化'}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => dashboard.setShowQrModal(true)}
-            className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 flex items-center gap-1.5 shadow-sm transition-all"
-          >
-            <QrCode size={14} /> 招待QR
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <a
+              href="#/map"
+              className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 transition-all"
+            >
+              <MapIcon size={14} /> マップ確認
+            </a>
+            <a
+              href="#/mission"
+              className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 transition-all"
+            >
+              <Target size={14} /> ミッション確認
+            </a>
+            <button
+              type="button"
+              onClick={() => dashboard.setShowQrModal(true)}
+              className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 flex items-center gap-1.5 shadow-sm transition-all"
+            >
+              <QrCode size={14} /> 招待QR
+            </button>
+          </div>
         </header>
 
         <AdminSessionSetupSection
