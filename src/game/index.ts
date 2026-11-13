@@ -89,6 +89,8 @@ export {
   SHINKANSEN_WAIT_DURATION_MS,
 } from './time';
 export type { GameClockState } from './time';
+export { computeMapTimeLeft } from './mapTimers';
+export type { ComputeMapTimeLeftInput, MapTimeLeft } from './mapTimers';
 export { resolveLocationVisibility } from './reveal';
 export { resolveAdminRevealPlan } from './adminReveal';
 export {

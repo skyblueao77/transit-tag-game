@@ -1,29 +1,13 @@
-import { doc, getDoc, increment, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
-import { auth, db } from './firebaseClient';
+import { doc, increment, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { db } from './firebaseClient';
 import type { User } from '../../../types';
 import type { ProtectionZoneType } from '../../game/types';
 import { TEAM_COLORS } from '../../../constants';
+import { assertAdmin, assertSignedInPlayer } from './gateways/shared';
 
 interface Coordinates {
   latitude: number;
   longitude: number;
-}
-
-function assertSignedInPlayer(playerId: string): string {
-  const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error('UNAUTHENTICATED');
-  if (typeof playerId !== 'string' || playerId.trim().length === 0 || uid !== playerId) {
-    throw new Error('PERMISSION_DENIED');
-  }
-  return uid;
-}
-
-async function assertAdmin(): Promise<string> {
-  const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error('UNAUTHENTICATED');
-  const adminSnap = await getDoc(doc(db, 'admins', uid));
-  if (!adminSnap.exists()) throw new Error('PERMISSION_DENIED');
-  return uid;
 }
 
 export async function createPlayerWithPrivateLocation(
