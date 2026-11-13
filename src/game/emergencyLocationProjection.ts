@@ -1,5 +1,6 @@
 export const EMERGENCY_LOCATION_FRESHNESS_MS = 2 * 60 * 1000;
 export const EMERGENCY_LOCATION_PROJECTION_TTL_MS = EMERGENCY_LOCATION_FRESHNESS_MS;
+export const EMERGENCY_CLOCK_SKEW_TOLERANCE_MS = 30_000;
 
 export interface EmergencyLocationProjectionInput {
   status: string;
@@ -24,7 +25,7 @@ export function resolveEmergencyLocationProjection(
     || typeof input.sourceLocationUpdatedAt !== 'number'
     || !Number.isFinite(input.sourceLocationUpdatedAt)
     || input.sourceLocationUpdatedAt < 0
-    || input.sourceLocationUpdatedAt > input.now) {
+    || input.sourceLocationUpdatedAt > input.now + EMERGENCY_CLOCK_SKEW_TOLERANCE_MS) {
     return { kind: 'INVALID_TIME' };
   }
   if (typeof input.latitude !== 'number' || !Number.isFinite(input.latitude)

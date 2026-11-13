@@ -48,6 +48,7 @@ import {
   requireAuthUid,
   verifyAdmin,
 } from './shared.ts';
+import { getServerNowMs } from '../serverClock.ts';
 
 // ============================================================
 // 9. Admin Reveal Gateway (位置スナップショット公開)
@@ -83,7 +84,7 @@ export const clientAdminRevealGateway: AdminRevealGateway = {
         .filter(d => d.data().team === 'A' || d.data().team === 'B')
         .map(d => d.id);
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -191,7 +192,7 @@ export const clientAdminScoreAdjustmentGateway: AdminScoreAdjustmentGateway = {
         };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -374,7 +375,7 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
       }
       for (const fm of FINAL_MISSIONS) {
         const fmRef = doc(db, 'missions', fm.id);
-        batch.set(fmRef, fm, { merge: true });
+        batch.set(fmRef, { ...fm, isFinalMission: true }, { merge: true });
       }
       await batch.commit();
 
@@ -414,7 +415,7 @@ export async function sendAdminBroadcast(message: string, expectedSessionId: str
       if (configData.gameSessionId !== expectedSessionId) {
         throw new Error('SESSION_MISMATCH');
       }
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = generateSecureId('log');
       const logs = appendToConfigLogs(configData.logs, {
         id: logId,
@@ -492,7 +493,7 @@ export async function updateAdminRuleSettings(
       if (settings.captureWaitMinutes !== undefined) updates.captureWaitMinutes = settings.captureWaitMinutes;
       if (settings.missionPenaltyRevealMinutes !== undefined) updates.missionPenaltyRevealMinutes = settings.missionPenaltyRevealMinutes;
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = generateSecureId('log');
       const modeLabel = settings.victoryMode === 'SURVIVAL' ? 'サバイバル制' : settings.victoryMode === 'SCORE_SWAP' ? 'ポイント交代制' : '';
       const detailParts: string[] = [];
@@ -561,7 +562,7 @@ export async function applyAdminPenaltyReveal(
         return { ok: false, reason: 'PLAYER_NOT_IN_SESSION' };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const penaltyDurationMs = durationMinutes * 60 * 1000;
       const penaltyRevealUntil = now + penaltyDurationMs;
 

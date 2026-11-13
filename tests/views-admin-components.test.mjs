@@ -170,10 +170,10 @@ describe('Admin view extracted UI components', () => {
     const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
     assert.doesNotMatch(
       appSource,
-      /isAdminPath \|\| isAdmin[\s\S]{0,120}overflow-hidden/,
+      /isAdminPath \? \([\s\S]{0,120}overflow-hidden/,
       'admin route wrapper must not trap scrolling with overflow-hidden',
     );
-    assert.match(appSource, /isAdminPath \|\| isAdmin[\s\S]{0,120}min-h-\[100dvh\]/);
+    assert.match(appSource, /isAdminPath \? \([\s\S]{0,120}min-h-\[100dvh\]/);
     assert.match(appSource, /h-\[100dvh\] max-h-\[100dvh\]/);
     assert.match(appSource, /<main className="flex-1 min-h-0 overflow-y-auto/);
 

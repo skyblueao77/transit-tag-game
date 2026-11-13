@@ -80,6 +80,7 @@ const gameStatuses = new Set<ResetGameStatus>([
   'DAY2_ACTIVE', 'DAY2_PAUSED', 'FINAL_MISSION', 'GAME_OVER',
 ]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const hex32Pattern = /^[0-9a-f]{32}$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -90,7 +91,7 @@ function validCount(value: number): boolean {
 }
 
 export function isValidResetId(value: unknown): value is string {
-  return typeof value === 'string' && uuidPattern.test(value);
+  return typeof value === 'string' && (uuidPattern.test(value) || hex32Pattern.test(value));
 }
 
 export type ResetRequestValidation<T> =

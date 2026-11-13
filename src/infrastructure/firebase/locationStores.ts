@@ -2,9 +2,11 @@ import { doc, serverTimestamp, setDoc, Timestamp, writeBatch } from 'firebase/fi
 import { db } from './firebaseClient';
 import type { ExposedLocationStore, PrivateLocationStore } from '../../application';
 import { EMERGENCY_LOCATION_PROJECTION_TTL_MS } from '../../game/emergencyLocationProjection';
+import { getServerNowMs, markServerTimestampWriteSent } from './serverClock';
 
 export const firebasePrivateLocationStore: PrivateLocationStore = {
   save: async (playerId, location, expectedSessionId) => {
+    markServerTimestampWriteSent();
     await setDoc(doc(db, 'privateLocations', playerId), {
       gameSessionId: expectedSessionId,
       latitude: location.latitude,
@@ -16,7 +18,7 @@ export const firebasePrivateLocationStore: PrivateLocationStore = {
 
 export const firebaseEmergencyLocationStore: PrivateLocationStore = {
   save: async (playerId, location, expectedSessionId) => {
-    const now = Date.now();
+    const now = getServerNowMs();
     const batch = writeBatch(db);
     batch.set(doc(db, 'privateLocations', playerId), {
       gameSessionId: expectedSessionId,
@@ -35,6 +37,7 @@ export const firebaseEmergencyLocationStore: PrivateLocationStore = {
       safetyStatus: 'EMERGENCY',
       projectionKind: 'EMERGENCY',
     });
+    markServerTimestampWriteSent();
     await batch.commit();
   },
 };

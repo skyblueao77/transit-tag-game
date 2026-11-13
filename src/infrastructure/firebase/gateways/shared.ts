@@ -1,5 +1,6 @@
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebaseClient.ts';
+import { truncateToUtf8Bytes } from '../../../game/utf8.ts';
 
 export const MAX_LOGS = 200;
 
@@ -23,7 +24,7 @@ export function appendToConfigLogs(configLogs: unknown, entry: LogEntryInput): u
   const log = {
     id: entry.id,
     timestamp: entry.now,
-    message: `${timeStr} ${entry.message}`,
+    message: truncateToUtf8Bytes(`${timeStr} ${entry.message}`, 300, '...'),
     type: entry.type,
   };
   const prevLogs = Array.isArray(configLogs) ? configLogs : [];

@@ -3,6 +3,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import type { User } from '../../../types';
 import { TEAM_COLORS } from '../../../constants';
 import { validateGameSession } from '../../game/gameSession';
+import { truncateToUtf8Bytes } from '../../game/utf8';
 import { auth, db } from './firebaseClient';
 import { registerWithUserId, signInWithUserId, signOutCurrentUser } from './auth';
 import { firebasePrivateLocationStore } from './locationStores';
@@ -45,15 +46,58 @@ export async function registerPlayerAccount(input: {
     return { ok: false, reason: 'SESSION_NOT_INITIALIZED' };
   }
 
+  const normalizedName = truncateToUtf8Bytes(input.name.trim(), 80);
+  if (!normalizedName) {
+    throw new Error('INVALID_ARGUMENT');
+  }
+
   let createdAuthUid: string | null = null;
   try {
-    const id = await registerWithUserId(input.userId, input.password);
-    createdAuthUid = id;
+    let id: string;
+    try {
+      id = await registerWithUserId(input.userId, input.password);
+      createdAuthUid = id;
+    } catch (authErr: unknown) {
+      const code = (authErr as { code?: string })?.code;
+      if (code !== 'auth/email-already-in-use') {
+        throw authErr;
+      }
+      // 削除済みプレイヤー等で Auth ユーザーだけ残っている場合、パスワードが一致し Firestore 側に存在しなければ再利用する
+      let existingUid: string;
+      try {
+        existingUid = await signInWithUserId(input.userId, input.password);
+      } catch (signInErr: unknown) {
+        const signInCode = (signInErr as { code?: string })?.code;
+        if (signInCode === 'auth/wrong-password' || signInCode === 'auth/invalid-credential') {
+          throw authErr;
+        }
+        throw signInErr;
+      }
+      const [userSnap, adminSnap] = await Promise.all([
+        getDoc(doc(db, 'users', existingUid)),
+        getDoc(doc(db, 'admins', existingUid)),
+      ]);
+      if (adminSnap.exists()) {
+        await signOutCurrentUser().catch(() => {});
+        throw authErr;
+      }
+      if (userSnap.exists()) {
+        const existingData = userSnap.data();
+        if (existingData?.gameSessionId === activeSessionId) {
+          await signOutCurrentUser().catch(() => {});
+          throw authErr;
+        }
+        // 前セッションの残留レコードが存在する場合は上書きできないためサインアウトして案内する
+        await signOutCurrentUser().catch(() => {});
+        throw authErr;
+      }
+      id = existingUid;
+    }
 
     const color: string = input.team === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
     const newUser: User = {
       id,
-      name: input.name.trim(),
+      name: normalizedName,
       role: 'RUNNER',
       team: input.team,
       color,

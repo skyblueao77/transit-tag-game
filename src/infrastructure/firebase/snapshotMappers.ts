@@ -27,7 +27,7 @@ export function mapMissionDocuments(
 ): Mission[] {
   return documents.map(({ id, data }) => {
     const mission: Record<string, unknown> = { id };
-    for (const field of ['area', 'region', 'title', 'description', 'points', 'lat', 'lng', 'type']) {
+    for (const field of ['area', 'region', 'title', 'description', 'points', 'lat', 'lng', 'type', 'isFinalMission']) {
       if (Object.hasOwn(data, field)) mission[field] = data[field];
     }
     return mission as unknown as Mission;
@@ -140,6 +140,9 @@ export function mapGameConfigDocument(
   if (typeof data.goalLat === 'number' && Number.isFinite(data.goalLat)) config.goalLat = data.goalLat;
   if (typeof data.goalLng === 'number' && Number.isFinite(data.goalLng)) config.goalLng = data.goalLng;
   if (typeof data.startTime === 'number' && Number.isFinite(data.startTime)) config.startTime = data.startTime;
+  if (data.pauseStartTime === null || (typeof data.pauseStartTime === 'number' && Number.isFinite(data.pauseStartTime))) {
+    config.pauseStartTime = data.pauseStartTime;
+  }
   if (typeof data.gameStatus === 'string') config.gameStatus = data.gameStatus as GameConfig['gameStatus'];
   if (typeof data.broadcastMessage === 'string') config.broadcastMessage = data.broadcastMessage;
   if (typeof data.broadcastTime === 'number' && Number.isFinite(data.broadcastTime)) config.broadcastTime = data.broadcastTime;

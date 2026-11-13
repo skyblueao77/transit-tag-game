@@ -6,6 +6,7 @@ import type { User } from '../types';
 import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle } from 'lucide-react';
 import { isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
 import { loginPlayerAccount, registerPlayerAccount } from '../src/infrastructure/firebase/playerSetup';
+import { getUtf8ByteLength } from '../src/game/utf8';
 
 interface Props {
   onComplete: (user: User) => void;
@@ -68,6 +69,10 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId.trim() || !password.trim() || !name.trim() || isSubmitting) return;
+    if (getUtf8ByteLength(name.trim()) > 80) {
+      toast.error('ニックネームが長すぎます（日本語約26文字／80バイト以内で入力してください）。');
+      return;
+    }
     if (password.length < 6) {
       toast.error('パスワードは6文字以上で入力してください。');
       return;
@@ -241,10 +246,13 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
                 onChange={e => setName(e.target.value)}
                 className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-sm transition-all"
                 placeholder="例: たなか"
-                maxLength={50}
+                maxLength={80}
                 required
                 disabled={isSubmitting}
               />
+              <p className="text-[9px] text-slate-400 mt-1 ml-1 font-medium">
+                ※{getUtf8ByteLength(name.trim())} / 80バイト（日本語約26文字まで）
+              </p>
             </div>
 
             {/* チーム選択 */}

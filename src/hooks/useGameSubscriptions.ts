@@ -24,6 +24,7 @@ export function useGameSubscriptions(
   authUserId: string | null,
   onBroadcast?: (message: string) => void,
   onConfigError?: (error: Error) => void,
+  canSubscribeParticipants: boolean = Boolean(authUserId),
 ): UseGameSubscriptionsResult {
   const [rawUsers, setRawUsers] = useState<User[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -56,7 +57,7 @@ export function useGameSubscriptions(
   exposedPlayerIdsRef.current = exposedPlayerIds;
 
   useEffect(() => {
-    if (!authUserId) {
+    if (!authUserId || !canSubscribeParticipants) {
       setRawUsers([]);
       return;
     }
@@ -64,7 +65,7 @@ export function useGameSubscriptions(
       setRawUsers,
       error => console.error('Error fetching users data:', error),
     );
-  }, [authUserId]);
+  }, [authUserId, canSubscribeParticipants]);
 
   useEffect(() => {
     if (!authUserId || !gameConfig.gameSessionId) {

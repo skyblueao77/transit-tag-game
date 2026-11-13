@@ -12,6 +12,10 @@ export interface AdminPhaseTransitionInput {
   action: unknown;
   now: number;
   finalMissionId?: string;
+  currentStartTime?: unknown;
+  pauseStartTime?: unknown;
+  currentNextRevealTime?: unknown;
+  currentFinalMissionEndTime?: unknown;
 }
 
 export type AdminPhaseTransitionResult =
@@ -43,13 +47,38 @@ export function resolveAdminPhaseTransition(input: AdminPhaseTransitionInput): A
   const updates: Record<string, unknown> = { gameStatus: newPhase };
   switch (action) {
     case 'START_DAY1':
-      Object.assign(updates, { day: 1, startTime: input.now, isGameOver: false, isFinalMissionActive: false, activeFinalMissionId: null, finalMissionEndTime: 0 });
+      Object.assign(updates, { day: 1, startTime: input.now, pauseStartTime: null, isGameOver: false, isFinalMissionActive: false, activeFinalMissionId: null, finalMissionEndTime: 0 });
       break;
-    case 'START_DAY2': updates.day = 2; updates.startTime = input.now; break;
+    case 'START_DAY2':
+      updates.day = 2;
+      updates.startTime = input.now;
+      updates.pauseStartTime = null;
+      break;
+    case 'PAUSE':
+      updates.pauseStartTime = input.now;
+      break;
+    case 'RESUME': {
+      const pausedDelta = typeof input.pauseStartTime === 'number' && Number.isFinite(input.pauseStartTime) && input.pauseStartTime >= 0
+        ? Math.max(0, input.now - input.pauseStartTime)
+        : 0;
+      updates.pauseStartTime = null;
+      if (pausedDelta > 0) {
+        if (typeof input.currentStartTime === 'number' && Number.isFinite(input.currentStartTime) && input.currentStartTime > 0) {
+          updates.startTime = input.currentStartTime + pausedDelta;
+        }
+        if (typeof input.currentNextRevealTime === 'number' && Number.isFinite(input.currentNextRevealTime) && input.currentNextRevealTime > 0) {
+          updates.nextRevealTime = input.currentNextRevealTime + pausedDelta;
+        }
+        if (typeof input.currentFinalMissionEndTime === 'number' && Number.isFinite(input.currentFinalMissionEndTime) && input.currentFinalMissionEndTime > 0) {
+          updates.finalMissionEndTime = input.currentFinalMissionEndTime + pausedDelta;
+        }
+      }
+      break;
+    }
     case 'START_FINAL':
-      Object.assign(updates, { isFinalMissionActive: true, activeFinalMissionId: input.finalMissionId, finalMissionEndTime: input.now + FINAL_MISSION_DURATION_MS, isGameOver: false });
+      Object.assign(updates, { isFinalMissionActive: true, activeFinalMissionId: input.finalMissionId, finalMissionEndTime: input.now + FINAL_MISSION_DURATION_MS, pauseStartTime: null, isGameOver: false });
       break;
-    case 'END_GAME': Object.assign(updates, { isGameOver: true, isFinalMissionActive: false }); break;
+    case 'END_GAME': Object.assign(updates, { isGameOver: true, isFinalMissionActive: false, pauseStartTime: null }); break;
   }
   return { allowed: true, action, oldPhase, newPhase, updates, ...(action === 'START_FINAL' ? { selectedFinalMissionId: input.finalMissionId } : {}) };
 }

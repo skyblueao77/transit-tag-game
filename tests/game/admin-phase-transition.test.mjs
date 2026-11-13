@@ -39,9 +39,23 @@ describe('trusted admin phase core', () => {
     ]) assert.equal(resolveAdminPhaseTransition({ currentPhase, action, now }).allowed, false);
   });
   test('sets server side effects and preserves unrelated config by returning field patch only', () => {
-    assert.deepEqual(resolveAdminPhaseTransition({ currentPhase:'PRE_GAME', action:'START_DAY1', now }).updates, { gameStatus:'DAY1_ACTIVE', day:1, startTime:now, isGameOver:false, isFinalMissionActive:false, activeFinalMissionId:null, finalMissionEndTime:0 });
-    const day2 = resolveAdminPhaseTransition({ currentPhase:'DAY1_ENDED', action:'START_DAY2', now }); assert.deepEqual(day2.updates, { gameStatus:'DAY2_ACTIVE', day:2, startTime:now });
-    const paused = resolveAdminPhaseTransition({ currentPhase:'DAY2_ACTIVE', action:'PAUSE', now }); assert.deepEqual(paused.updates, { gameStatus:'DAY2_PAUSED' });
+    assert.deepEqual(resolveAdminPhaseTransition({ currentPhase:'PRE_GAME', action:'START_DAY1', now }).updates, { gameStatus:'DAY1_ACTIVE', day:1, startTime:now, pauseStartTime:null, isGameOver:false, isFinalMissionActive:false, activeFinalMissionId:null, finalMissionEndTime:0 });
+    const day2 = resolveAdminPhaseTransition({ currentPhase:'DAY1_ENDED', action:'START_DAY2', now }); assert.deepEqual(day2.updates, { gameStatus:'DAY2_ACTIVE', day:2, startTime:now, pauseStartTime:null });
+    const paused = resolveAdminPhaseTransition({ currentPhase:'DAY2_ACTIVE', action:'PAUSE', now }); assert.deepEqual(paused.updates, { gameStatus:'DAY2_PAUSED', pauseStartTime:now });
+    const resumed = resolveAdminPhaseTransition({
+      currentPhase: 'DAY2_PAUSED',
+      action: 'RESUME',
+      now: now + 300_000,
+      pauseStartTime: now,
+      currentStartTime: now - 600_000,
+      currentNextRevealTime: now + 900_000,
+    });
+    assert.deepEqual(resumed.updates, {
+      gameStatus: 'DAY2_ACTIVE',
+      pauseStartTime: null,
+      startTime: now - 300_000,
+      nextRevealTime: now + 1_200_000,
+    });
     const final = resolveAdminPhaseTransition({ currentPhase:'DAY2_ACTIVE', action:'START_FINAL', now, finalMissionId:'final_01' }); assert.equal(final.updates.finalMissionEndTime, now + FINAL_MISSION_DURATION_MS); assert.equal(final.updates.isFinalMissionActive, true);
     const ended = resolveAdminPhaseTransition({ currentPhase:'FINAL_MISSION', action:'END_GAME', now }); assert.equal(ended.updates.isGameOver, true); assert.equal(ended.updates.isFinalMissionActive, false);
   });

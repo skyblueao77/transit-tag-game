@@ -15,7 +15,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
-import type { Role, ProtectionZoneType } from './types';
+import type { Role, ProtectionZoneType, User } from './types';
 import type { UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
@@ -66,10 +66,12 @@ import {
 
 import useAuthUser from './src/hooks/useAuthUser';
 import useGameSubscriptions from './src/hooks/useGameSubscriptions';
+import useMapGeolocation from './src/hooks/useMapGeolocation';
 import useConfirmDialog from './src/hooks/useConfirmDialog';
 import useOnlineStatus from './src/hooks/useOnlineStatus';
 import usePlayerAutoExpose from './src/hooks/usePlayerAutoExpose';
 import useWaitingAutoResume from './src/hooks/useWaitingAutoResume';
+import { getServerNowMs } from './src/infrastructure/firebase/serverClock';
 import ConfirmDialog from './src/components/ui/ConfirmDialog';
 import LoadingSpinner from './src/components/ui/LoadingSpinner';
 import FinalResultView from './src/components/game/FinalResultView';
@@ -99,13 +101,30 @@ const App: React.FC = () => {
     toast.error('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
   }, []);
 
+  // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
+  const isAdmin = useMemo(
+    () => isAuthAdmin || currentUser?.team === 'ADMIN',
+    [isAuthAdmin, currentUser],
+  );
+  const [activeSessionIdForSubs, setActiveSessionIdForSubs] = useState<string | undefined>(undefined);
+  const canSubscribeParticipants = Boolean(
+    authUserId && (
+      isAdmin
+      || (currentUser?.team && activeSessionIdForSubs && currentUser.gameSessionId === activeSessionIdForSubs)
+    ),
+  );
+
   const {
     allUsers,
     missions,
     gameConfig,
     privateLocation,
     exposedLocations,
-  } = useGameSubscriptions(authUserId, onBroadcast, onConfigError);
+  } = useGameSubscriptions(authUserId, onBroadcast, onConfigError, canSubscribeParticipants);
+
+  useEffect(() => {
+    setActiveSessionIdForSubs(gameConfig.gameSessionId);
+  }, [gameConfig.gameSessionId]);
 
   const { confirm, dialogProps } = useConfirmDialog();
   const isOnline = useOnlineStatus();
@@ -136,14 +155,8 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
-  const isAdmin = useMemo(
-    () => isAuthAdmin || currentUser?.team === 'ADMIN',
-    [isAuthAdmin, currentUser]
-  );
-
   const myRole = useMemo((): Role => {
-    if (!currentUser) return 'RUNNER';
+    if (!currentUser) return isAdmin ? 'ONI' : 'RUNNER';
     if (isAdmin) return 'ONI';
     return getPlayerRole(currentUser, gameConfig);
   }, [currentUser, gameConfig, isAdmin]);
@@ -153,6 +166,13 @@ const App: React.FC = () => {
     (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebasePrivateLocationStore),
     [],
   );
+
+  useMapGeolocation({
+    currentUserId: !isAdmin && currentUser ? currentUser.id : '',
+    gameSessionId: gameConfig.gameSessionId,
+    gameStatus: gameConfig.gameStatus,
+    onUpdatePrivateLocation: handleUpdatePrivateLocation,
+  });
 
   const handleUpdateEmergencyLocation = useCallback(
     (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebaseEmergencyLocationStore),
@@ -197,12 +217,12 @@ const App: React.FC = () => {
     });
     if (!confirmed) return;
 
-    const now = Date.now();
+    const now = getServerNowMs();
     const EXPOSE_DURATION = 5 * 60 * 1000; // 5 分
     const currentUserId = currentUser.id;
     const expectedSessionId = gameConfig.gameSessionId;
 
-    // MapView が随時private locationを更新しているので、それをスナップショットとして使う
+    // App.tsx が随時private locationを更新しているので、それをスナップショットとして使う
     const snapLat = privateLocation?.latitude;
     const snapLng = privateLocation?.longitude;
 
@@ -232,7 +252,7 @@ const App: React.FC = () => {
                 longitude: pos.coords.longitude,
               },
               phase: gameConfig.gameStatus,
-              now: Date.now(),
+              now: getServerNowMs(),
               duration: EXPOSE_DURATION,
             }, firebaseExposedLocationStore);
             if (exposeResult.ok === false) throw new Error(exposeResult.reason);
@@ -490,6 +510,7 @@ const App: React.FC = () => {
       toast.info('新幹線乗車記録をリセットしました');
     } catch (err) {
       console.error('Failed to reset shinkansen:', err);
+      toast.error('新幹線乗車記録のリセットに失敗しました');
     }
   }, [currentUser]);
 
@@ -499,6 +520,22 @@ const App: React.FC = () => {
     waitingUntil: currentUser?.waitingUntil,
     gameSessionId: gameConfig.gameSessionId,
   });
+
+  const adminViewerUser = useMemo<User>(
+    () => ({
+      id: authUserId ?? 'admin-preview',
+      name: '管理者',
+      role: 'ONI',
+      team: 'ADMIN',
+      color: '#0f172a',
+      score: 0,
+      status: 'ACTIVE',
+      invincibleCards: 0,
+      ...(gameConfig.gameSessionId ? { gameSessionId: gameConfig.gameSessionId } : {}),
+    }),
+    [authUserId, gameConfig.gameSessionId],
+  );
+  const activeViewUser = currentUser ?? (isAdmin ? adminViewerUser : null);
 
   // ---- 画面分岐 ----
 
@@ -535,7 +572,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {isAdminPath || isAdmin ? (
+      {isAdminPath ? (
         <div className="min-h-[100dvh] w-full bg-slate-100 relative font-sans">
           <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
             <Routes>
@@ -547,11 +584,11 @@ const App: React.FC = () => {
             </Routes>
           </Suspense>
         </div>
-      ) : !currentUser ? (
+      ) : !activeViewUser ? (
         <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
           <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />
         </Suspense>
-      ) : (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) ? (
+      ) : (!isAdmin && (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver)) ? (
         <FinalResultView
           winner={winner}
           aScore={aScore}
@@ -619,7 +656,9 @@ const App: React.FC = () => {
                 <span className={`text-[10px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter ${myRole === 'ONI' ? 'bg-slate-900 text-white' : 'bg-blue-600 text-white'}`}>
                   {myRole}
                 </span>
-                <h1 className="font-bold text-slate-800 text-sm leading-tight">Team {currentUser.team}</h1>
+                <h1 className="font-bold text-slate-800 text-sm leading-tight">
+                  {activeViewUser.team === 'ADMIN' ? '管理者プレビュー' : `Team ${activeViewUser.team}`}
+                </h1>
               </div>
               <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
                 {gameConfig.currentRegion ?? ''} AREA
@@ -627,14 +666,16 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setSafetyDialogOpen(true)}
-              aria-label="SOS / リタイア"
-              className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center border border-red-100 active:scale-90 transition-all shadow-sm"
-            >
-              <Phone size={20} />
-            </button>
+            {currentUser && currentUser.team !== 'ADMIN' && (
+              <button
+                type="button"
+                onClick={() => setSafetyDialogOpen(true)}
+                aria-label="SOS / リタイア"
+                className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center border border-red-100 active:scale-90 transition-all shadow-sm"
+              >
+                <Phone size={20} />
+              </button>
+            )}
             <div className="flex items-center gap-3 bg-slate-50 px-3 py-2 rounded-2xl border border-slate-100">
               <div className="text-center">
                 <div className="text-[8px] font-black text-red-500 uppercase">A</div>
@@ -677,16 +718,16 @@ const App: React.FC = () => {
                 </p>
                 <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700">
 
-                    <div className="text-xs text-slate-500 font-black mb-2 uppercase text-center">Team {currentUser.team} Total Score</div>
+                    <div className="text-xs text-slate-500 font-black mb-2 uppercase text-center">Team {activeViewUser.team} Total Score</div>
                     <div className="text-5xl font-black text-center mt-2">
                       {/* 自分のチームに合わせて gameConfig から数値を取得する */}
-                      {currentUser.team === 'A' ? (gameConfig.teamAScore ?? 0) : (gameConfig.teamBScore ?? 0)}
+                      {activeViewUser.team === 'A' ? (gameConfig.teamAScore ?? 0) : (gameConfig.teamBScore ?? 0)}
                       <span className="text-lg ml-1 text-slate-400 font-bold">pt</span>
                     </div>
                     
                     {/* もし個人の貢献度（個人のスコア）も小さく出したい場合は以下を追加（任意） */}
                     <div className="mt-4 pt-4 border-t border-slate-700/50 text-center">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Your Individual Contribution: {currentUser.score ?? 0}pt</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Your Individual Contribution: {activeViewUser.score ?? 0}pt</span>
                     </div>
                   </div>
                 </div>
@@ -700,7 +741,7 @@ const App: React.FC = () => {
                   element={
                     <MapView
                       users={allUsers}
-                      currentUser={currentUser}
+                      currentUser={activeViewUser}
                       privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
                       exposedLocations={exposedLocations}
                       gameConfig={gameConfig}
@@ -723,7 +764,7 @@ const App: React.FC = () => {
                       config={gameConfig}
                       onComplete={handleScoreUpdate}
                       onExposeLocation={handleUpdateLocation}
-                      user={currentUser}
+                      user={activeViewUser}
                       missions={missions}
                     />
                   }

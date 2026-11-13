@@ -63,6 +63,7 @@ import {
   requireAuthUid,
   verifyAdmin,
 } from './shared.ts';
+import { getServerNowMs } from '../serverClock.ts';
 
 // ============================================================
 // 6. Admin Game Session Initialization Gateway (Session初期化)
@@ -75,7 +76,7 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const receiptRef = doc(db, 'admins', uid, 'sessionInitializationRequests', input.requestId);
       const receiptSnap = await getDoc(receiptRef);
       if (receiptSnap.exists()) {
@@ -92,6 +93,9 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
 
       const participantsSnap = await getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B'])));
       const participantRefs = participantsSnap.docs.map(p => doc(db, 'users', p.id));
+      if (participantRefs.length > 495) {
+        return { ok: false, reason: 'ROSTER_TOO_LARGE' };
+      }
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
@@ -142,6 +146,7 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
           isFinalMissionActive: false,
           activeFinalMissionId: null,
           startTime: 0,
+          pauseStartTime: null,
           finalMissionEndTime: 0,
           nextRevealTime: now + DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes * 60 * 1000,
           lastCaptureTargetId: null,
@@ -150,7 +155,12 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
           locationRevealUntil: null,
           teamARevealUntil: null,
           teamBRevealUntil: null,
-          logs: [],
+          logs: appendToConfigLogs(configData?.logs, {
+            id: createLogId(),
+            now,
+            message: '管理者が新しいゲームセッションを初期化しました',
+            type: 'SYSTEM',
+          }),
         };
 
         transaction.set(configRef, newConfig, { merge: true });
@@ -208,7 +218,7 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
         };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -229,6 +239,10 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
           action: input.action,
           now,
           finalMissionId,
+          currentStartTime: configData.startTime,
+          pauseStartTime: configData.pauseStartTime,
+          currentNextRevealTime: configData.nextRevealTime,
+          currentFinalMissionEndTime: configData.finalMissionEndTime,
         });
 
         if (transition.allowed === false) {
@@ -309,7 +323,7 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
         .filter(d => d.data().team === 'A' || d.data().team === 'B')
         .map(d => d.id);
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -403,7 +417,7 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -495,8 +509,9 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         return { ok: false, reason: 'INVALID_CONFIG' };
       }
 
+      const now = getServerNowMs();
       const confirmationToken = generateSecureId();
-      const expiresAt = Date.now() + 5 * 60 * 1000;
+      const expiresAt = now + 5 * 60 * 1000;
       const proposedSessionId = generateSecureId();
       const fingerprint = await computeResetFingerprint(previewPlan.fingerprintInput);
 
@@ -519,7 +534,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         ...previewData,
         fingerprint,
         used: false,
-        createdAt: Date.now(),
+        createdAt: now,
       });
 
       return {
@@ -578,7 +593,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       if (!conf.resetReady) {
         return { ok: false, reason: 'RESET_NOT_READY' };
       }
-      if (isResetConfirmationExpired(conf.expiresAt, Date.now())) {
+      if (isResetConfirmationExpired(conf.expiresAt, getServerNowMs())) {
         return { ok: false, reason: 'CONFIRMATION_EXPIRED' };
       }
 
@@ -616,7 +631,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         return { ok: false, reason: 'CONFIRMATION_STALE' };
       }
 
-      const now = Date.now();
+      const now = getServerNowMs();
       const newSessionId = conf.proposedSessionId;
       const futureConfigPlan = planFutureGameResetConfig({
         proposedSessionId: newSessionId,
@@ -653,14 +668,25 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
 
       const {
         clearRevealDeadlines: _clearRevealDeadlines,
-        preserveLogCount: _preserveLogCount,
+        preserveLogCount,
         ...futureConfigFields
       } = futureConfigPlan;
+
+      const preservedLogs = appendToConfigLogs(
+        (Array.isArray(configData.logs) ? configData.logs : []).slice(0, preserveLogCount),
+        {
+          id: createLogId(),
+          now,
+          message: '管理者がゲームをリセットし、新しいセッションを開始しました',
+          type: 'SYSTEM',
+        },
+      );
 
       // 1. game_config を初期状態にリセット（エリア情報等は維持）
       batch.set(configRef, {
         ...DEFAULT_DYNAMIC_RULE_SETTINGS,
         ...futureConfigFields,
+        pauseStartTime: null,
         currentArea: typeof configData.currentArea === 'string' ? configData.currentArea : INITIAL_GAME_CONFIG.currentArea,
         currentRegion: typeof configData.currentRegion === 'string' ? configData.currentRegion : INITIAL_GAME_CONFIG.currentRegion,
         announcement: typeof configData.announcement === 'string' ? configData.announcement : INITIAL_GAME_CONFIG.announcement,
@@ -670,7 +696,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         locationRevealUntil: null,
         teamARevealUntil: null,
         teamBRevealUntil: null,
-        logs: [],
+        logs: preservedLogs,
       }, { merge: true });
 
       // 2. プレイヤーを初期状態にリセット

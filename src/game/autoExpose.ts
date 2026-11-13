@@ -48,7 +48,7 @@ export interface AutoExposePlan {
   targetUntil: number;
 }
 
-export const AUTO_EXPOSE_MAX_DURATION_MS = 60 * 60 * 1000;
+export const AUTO_EXPOSE_MAX_DURATION_MS = 58 * 60 * 1000;
 
 export function resolveAutoExposePlan({
   isOnline,

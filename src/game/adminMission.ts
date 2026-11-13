@@ -60,7 +60,7 @@ function hasCanonicalMissionShape(value: unknown): value is Mission {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value).sort();
   const required = ['area', 'description', 'id', 'points', 'region', 'title', 'type'];
-  const optional = ['lat', 'lng'];
+  const optional = ['lat', 'lng', 'isFinalMission'];
   if (required.some(key => !Object.hasOwn(value, key))) return false;
   if (keys.some(key => !required.includes(key) && !optional.includes(key))) return false;
   if (typeof value.id !== 'string' || value.id.length === 0
@@ -71,6 +71,7 @@ function hasCanonicalMissionShape(value: unknown): value is Mission {
     || typeof value.type !== 'string' || !missionTypes.has(value.type)) return false;
   if (Object.hasOwn(value, 'lat') && (typeof value.lat !== 'number' || !Number.isFinite(value.lat))) return false;
   if (Object.hasOwn(value, 'lng') && (typeof value.lng !== 'number' || !Number.isFinite(value.lng))) return false;
+  if (Object.hasOwn(value, 'isFinalMission') && typeof value.isFinalMission !== 'boolean') return false;
   return true;
 }
 
@@ -129,7 +130,10 @@ export function resolveMissionAssignment(input: {
   if (!catalogIsValid(input.catalog)) return { allowed: false, reason: 'INVALID_CATALOG' };
   if (input.strategy !== 'MANUAL' && input.strategy !== 'RANDOM') return { allowed: false, reason: 'INVALID_STRATEGY' };
 
-  const byId = new Map(input.catalog.map(mission => [mission.id, mission]));
+  const normalCatalog = input.catalog.filter(mission => !mission.isFinalMission && !mission.id.startsWith('final_'));
+  if (normalCatalog.length === 0) return { allowed: false, reason: 'INVALID_CATALOG' };
+
+  const byId = new Map(normalCatalog.map(mission => [mission.id, mission]));
   if (input.strategy === 'MANUAL') {
     if (input.target !== 'TEAM_A' && input.target !== 'TEAM_B') return { allowed: false, reason: 'INVALID_TARGET' };
     if (typeof input.missionId !== 'string') return { allowed: false, reason: 'INVALID_MISSION' };
@@ -153,20 +157,20 @@ export function resolveMissionAssignment(input: {
   if (!randomValues || randomValues.length < (input.currentMode === 'SAME' ? 1 : 2)) {
     return { allowed: false, reason: 'INVALID_RANDOM' };
   }
-  const firstIndex = indexFromRandom(randomValues[0], input.catalog.length);
+  const firstIndex = indexFromRandom(randomValues[0], normalCatalog.length);
   const secondValue = input.currentMode === 'SAME' ? randomValues[0] : randomValues[1];
-  const secondIndexRaw = indexFromRandom(secondValue, input.catalog.length);
+  const secondIndexRaw = indexFromRandom(secondValue, normalCatalog.length);
   if (firstIndex === null || secondIndexRaw === null) {
     return { allowed: false, reason: 'INVALID_RANDOM' };
   }
-  const first = input.catalog[firstIndex];
+  const first = normalCatalog[firstIndex];
   let secondIndex = secondIndexRaw;
   if (input.currentMode === 'DIFFERENT' && secondIndex === firstIndex) {
     // Deterministically map the second draw to one of the other canonical entries.
-    secondIndex = (firstIndex + 1 + Math.floor(secondValue * (input.catalog.length - 1))) % input.catalog.length;
-    if (secondIndex === firstIndex) secondIndex = (firstIndex + 1) % input.catalog.length;
+    secondIndex = (firstIndex + 1 + Math.floor(secondValue * (normalCatalog.length - 1))) % normalCatalog.length;
+    if (secondIndex === firstIndex) secondIndex = (firstIndex + 1) % normalCatalog.length;
   }
-  const second = input.currentMode === 'SAME' ? first : input.catalog[secondIndex];
+  const second = input.currentMode === 'SAME' ? first : normalCatalog[secondIndex];
   if (input.persistedMissions !== undefined
     && (!validateCanonicalMission(input.persistedMissions[first.id], first)
       || !validateCanonicalMission(input.persistedMissions[second.id], second))) {
