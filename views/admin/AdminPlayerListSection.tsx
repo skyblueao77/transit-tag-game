@@ -29,13 +29,13 @@ const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
       <Users size={18} className="text-blue-600" />
       参加プレイヤー ({users.length}名)
     </h3>
-    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+    <div className="space-y-2 max-h-72 lg:max-h-[26rem] overflow-y-auto pr-1">
       {users.map(u => {
         const effectiveRole = getPlayerRole(u, config);
         return (
-        <div key={u.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
-          <div>
-            <div className="text-xs font-black text-slate-800">{u.name}</div>
+        <div key={u.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center gap-2">
+          <div className="min-w-0">
+            <div className="text-xs font-black text-slate-800 truncate">{u.name}</div>
             <div className="flex flex-wrap gap-1 mt-1">
               <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
                 u.team === 'A' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
@@ -56,7 +56,7 @@ const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={() => void onChangePlayerTeam(u)}

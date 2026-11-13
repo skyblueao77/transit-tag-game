@@ -25,12 +25,12 @@ export const ConfirmDialog: React.FC<Props> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150 overflow-y-auto">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
-        className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 flex flex-col gap-4"
+        className="w-full max-w-sm max-h-[90dvh] overflow-y-auto bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 flex flex-col gap-4"
       >
         <div className="flex items-center gap-3">
           <div

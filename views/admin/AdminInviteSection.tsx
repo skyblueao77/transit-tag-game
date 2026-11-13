@@ -38,19 +38,19 @@ const AdminInviteSection: React.FC<AdminInviteSectionProps> = ({
           type="text"
           readOnly
           value={inviteUrl}
-          className="flex-1 bg-transparent text-xs font-bold text-slate-600 outline-none truncate"
+          className="flex-1 min-w-0 bg-transparent text-xs font-bold text-slate-600 outline-none truncate"
         />
         <button
           type="button"
           onClick={onCopyInviteUrl}
-          className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black flex items-center gap-1 active:scale-95"
+          className="shrink-0 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black flex items-center gap-1 active:scale-95"
         >
           {copiedLink ? <Check size={14} /> : <Copy size={14} />}
           {copiedLink ? 'コピー完了' : 'URLコピー'}
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <button
           type="button"
           onClick={onCopyInviteMessage}

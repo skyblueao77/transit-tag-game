@@ -14,8 +14,8 @@ const InviteQrModal: React.FC<InviteQrModalProps> = ({
   onCopyInviteUrl,
   onClose,
 }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-5" role="dialog">
-    <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl text-center">
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-5 overflow-y-auto" role="dialog">
+    <div className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl text-center">
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-base font-black text-slate-900">参加用 QRコード</h3>
         <button type="button" onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">

@@ -185,8 +185,8 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
     return (
       <>
         <ConfirmDialog {...dialogProps} />
-        <div className="p-6 min-h-full flex flex-col items-center justify-center bg-slate-900 text-white">
-          <div className="w-full max-w-sm">
+        <div className="p-6 min-h-full flex flex-col items-center bg-slate-900 text-white">
+          <div className="w-full max-w-lg my-auto">
             <div className="bg-red-600 text-white text-[10px] font-black uppercase tracking-widest py-1 px-4 rounded-full w-fit mx-auto mb-6 animate-pulse">
               Final Mission Active
             </div>
@@ -240,7 +240,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
     return (
       <>
         <ConfirmDialog {...dialogProps} />
-        <div className="p-4 flex flex-col items-center justify-center min-h-[60vh] text-center">
+        <div className="p-4 sm:p-6 flex flex-col items-center justify-center min-h-full text-center">
           <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mb-6 text-emerald-500">
             <CheckCircle2 size={40} />
           </div>
@@ -248,12 +248,12 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
           <p className="text-slate-500 font-bold mb-6 uppercase tracking-widest text-xs">
             ミッション達成！次の配信を待機中...
           </p>
-          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 w-full max-w-xs mb-4">
+          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 w-full max-w-sm mb-4">
             <p className="text-sm text-emerald-700 font-bold">
               📸 写真のLINE送付を忘れずに！
             </p>
           </div>
-          <div className="bg-white p-6 rounded-3xl border-2 border-slate-100 shadow-sm w-full max-w-xs">
+          <div className="bg-white p-6 rounded-3xl border-2 border-slate-100 shadow-sm w-full max-w-sm">
             <p className="text-sm text-slate-600 font-medium">
               次の指令が出るまで<br />引き続き移動してください。
             </p>
@@ -267,7 +267,7 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
   return (
     <>
       <ConfirmDialog {...dialogProps} />
-      <div className="p-4 space-y-4">
+      <div className="p-4 sm:p-6 max-w-2xl mx-auto w-full space-y-4">
         <div className="bg-white rounded-3xl p-6 border shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <h3 className="flex items-center gap-2 font-black text-slate-800 uppercase tracking-wider">

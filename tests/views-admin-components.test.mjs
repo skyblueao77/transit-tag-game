@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { after, describe, test } from 'node:test';
 import { INITIAL_GAME_CONFIG } from '../constants.ts';
 import { closeViteSsrServer, renderSsrComponent } from './helpers/viteSsrLoader.mjs';
@@ -131,5 +132,62 @@ describe('Admin view extracted UI components', () => {
     assert.doesNotMatch(html, /運営太郎/);
     assert.match(html, /参加者A \(Team A - RUNNER\)/);
     assert.match(html, /参加者B \(Team B - ONI\)/);
+  });
+
+  test('Modals and FinalResultView render mobile-scrollable and PC-readable containers', async () => {
+    const resultHtml = await renderSsrComponent('/src/components/game/FinalResultView.tsx', {
+      winner: 'A',
+      aScore: 100,
+      bScore: 50,
+      logs: [],
+      safetyDialogOpen: false,
+      safetyActionBusy: false,
+      onOpenSafetyDialog: () => {},
+      onCloseSafetyDialog: () => {},
+      onChooseSafetyAction: async () => {},
+      onSignOutAndReload: async () => {},
+    });
+    assert.match(resultHtml, /min-h-\[100dvh\]/);
+    assert.match(resultHtml, /max-w-2xl/);
+
+    const qrHtml = await renderSsrComponent('/views/admin/InviteQrModal.tsx', {
+      qrDataUri: 'data:image/svg+xml,test',
+      copiedLink: false,
+      onCopyInviteUrl: () => {},
+      onClose: () => {},
+    });
+    assert.match(qrHtml, /max-h-\[90dvh\] overflow-y-auto/);
+
+    const safetyHtml = await renderSsrComponent('/src/components/game/SafetyActionDialog.tsx', {
+      busy: false,
+      onClose: () => {},
+      onChoose: async () => {},
+    });
+    assert.match(safetyHtml, /max-h-\[90dvh\] overflow-y-auto/);
+  });
+
+  test('App shell, AdminView, SetupView, and AdminAuthGate avoid scroll traps and cramped PC layouts', () => {
+    const appSource = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+    assert.doesNotMatch(
+      appSource,
+      /isAdminPath \|\| isAdmin[\s\S]{0,120}overflow-hidden/,
+      'admin route wrapper must not trap scrolling with overflow-hidden',
+    );
+    assert.match(appSource, /isAdminPath \|\| isAdmin[\s\S]{0,120}min-h-\[100dvh\]/);
+    assert.match(appSource, /h-\[100dvh\] max-h-\[100dvh\]/);
+    assert.match(appSource, /<main className="flex-1 min-h-0 overflow-y-auto/);
+
+    const adminSource = readFileSync(new URL('../views/AdminView.tsx', import.meta.url), 'utf8');
+    assert.match(adminSource, /min-h-\[100dvh\]/);
+    assert.match(adminSource, /max-w-6xl/);
+    assert.match(adminSource, /lg:grid-cols-12/);
+
+    const authGateSource = readFileSync(new URL('../views/admin/AdminAuthGate.tsx', import.meta.url), 'utf8');
+    assert.match(authGateSource, /min-h-\[100dvh\]/);
+    assert.match(authGateSource, /max-w-md/);
+
+    const setupSource = readFileSync(new URL('../views/SetupView.tsx', import.meta.url), 'utf8');
+    assert.match(setupSource, /min-h-\[100dvh\]/);
+    assert.match(setupSource, /max-w-md/);
   });
 });

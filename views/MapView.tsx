@@ -380,7 +380,7 @@ const MapView: React.FC<Props> = ({
       <div ref={containerRef} style={{ flex: 1, width: '100%', zIndex: 0 }} />
 
       {!isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] w-full px-4 max-w-sm pointer-events-none">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] w-full px-4 max-w-sm sm:max-w-md pointer-events-none">
           <StationSuggestCard
             suggestion={transitSuggestion}
             candidates={transitCandidates}
@@ -400,7 +400,7 @@ const MapView: React.FC<Props> = ({
 
       <MapStatusBadges currentUser={currentUser} timeLeft={timeLeft} formatTime={formatTime} />
 
-      <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[1000] w-full px-6 flex flex-col items-center gap-3">
+      <div className="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
         {currentRole === 'ONI' && (
           <MapOniCapturePanel
             currentUser={currentUser}

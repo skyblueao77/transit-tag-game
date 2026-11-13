@@ -504,7 +504,7 @@ const App: React.FC = () => {
 
   if (!authReady || userLoading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
+      <div className="min-h-[100dvh] bg-slate-900 flex items-center justify-center text-white">
         <LoadingSpinner message="ゲームデータを読み込み中..." />
       </div>
     );
@@ -536,7 +536,7 @@ const App: React.FC = () => {
       )}
 
       {isAdminPath || isAdmin ? (
-        <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
+        <div className="min-h-[100dvh] w-full bg-slate-100 relative font-sans">
           <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
             <Routes>
               <Route
@@ -568,10 +568,11 @@ const App: React.FC = () => {
           }}
         />
       ) : (
-        <div className="flex flex-col h-screen max-h-screen bg-slate-50 overflow-hidden">
+        <div className="flex flex-col h-[100dvh] max-h-[100dvh] bg-slate-50 overflow-hidden">
         {/* 一時中断オーバーレイ */}
         {gamePaused && !isAdmin && (
-          <div className="absolute inset-0 z-[2000] bg-red-600/95 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center text-white">
+          <div className="absolute inset-0 z-[2000] bg-red-600/95 backdrop-blur-md overflow-y-auto flex flex-col items-center p-8 text-center text-white">
+            <div className="my-auto flex flex-col items-center">
             <AlertTriangle size={80} className="mb-6 animate-bounce" />
             <h2 className="text-3xl font-black mb-4 uppercase italic">ゲーム一時中断</h2>
             <p className="text-lg font-bold leading-relaxed mb-8">
@@ -587,6 +588,7 @@ const App: React.FC = () => {
             >
               SOS / リタイア
             </button>
+            </div>
           </div>
         )}
         {safetyDialogOpen && (
@@ -606,7 +608,8 @@ const App: React.FC = () => {
         </div>
 
         {/* ヘッダー */}
-        <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between shadow-sm z-10">
+        <header className="shrink-0 bg-white border-b border-slate-200 px-4 py-3 shadow-sm z-10">
+          <div className="max-w-5xl mx-auto w-full flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-lg transition-all ${myRole === 'ONI' ? 'bg-slate-900 ring-4 ring-slate-100' : 'bg-blue-600 ring-4 ring-blue-50'}`}>
               {myRole === 'ONI' ? <Shield size={22} /> : <Zap size={22} />}
@@ -644,15 +647,17 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
+          </div>
         </header>
 
         {/* メインコンテンツ */}
-        <main className="flex-1 overflow-y-auto relative pb-20">
+        <main className="flex-1 min-h-0 overflow-y-auto relative overscroll-contain">
           {(gameConfig.gameStatus === 'PRE_GAME' || gameConfig.gameStatus === 'DAY1_ENDED') &&
           !isAdmin &&
           !isAdminPath ? (
             gameConfig.gameStatus === 'PRE_GAME' ? (
-              <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-6 text-center">
+              <div className="absolute inset-0 z-50 bg-white overflow-y-auto flex flex-col items-center p-6 text-center">
+                <div className="my-auto flex flex-col items-center">
                 <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-6 animate-pulse">
                   <Clock size={40} className="text-slate-400" />
                 </div>
@@ -660,9 +665,11 @@ const App: React.FC = () => {
                 <p className="text-slate-500 font-medium">
                   管理者の開始合図を待っています。<br />開始までしばらくお待ちください。
                 </p>
+                </div>
               </div>
             ) : (
-              <div className="absolute inset-0 z-50 bg-slate-900 flex flex-col items-center justify-center p-8 text-center text-white">
+              <div className="absolute inset-0 z-50 bg-slate-900 overflow-y-auto flex flex-col items-center p-8 text-center text-white">
+                <div className="my-auto flex flex-col items-center">
                 <XCircle size={64} className="text-slate-500 mb-6" />
                 <h2 className="text-2xl font-black mb-2 italic uppercase">DAY 1 FINISHED</h2>
                 <p className="text-slate-400 font-bold mb-8 uppercase tracking-widest text-xs leading-relaxed">
@@ -682,6 +689,7 @@ const App: React.FC = () => {
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Your Individual Contribution: {currentUser.score ?? 0}pt</span>
                     </div>
                   </div>
+                </div>
                 </div>
             )
           ) : (
@@ -746,9 +754,11 @@ const App: React.FC = () => {
         </main>
 
         {/* ボトムナビ */}
-        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around items-center h-16 px-2 z-10 shadow-[0_-4px_10px_rgba(0,0,0,0.03)]">
-          <NavAnchor to="/map" icon={<MapIcon size={24} />} label="MAP" />
-          <NavAnchor to="/mission" icon={<Target size={24} />} label="MISSION" />
+        <nav className="shrink-0 bg-white border-t border-slate-200 z-20 shadow-[0_-4px_10px_rgba(0,0,0,0.03)] pb-[env(safe-area-inset-bottom)]">
+          <div className="max-w-5xl mx-auto flex justify-around items-center h-16 px-2">
+            <NavAnchor to="/map" icon={<MapIcon size={24} />} label="MAP" />
+            <NavAnchor to="/mission" icon={<Target size={24} />} label="MISSION" />
+          </div>
         </nav>
       </div>
       )}

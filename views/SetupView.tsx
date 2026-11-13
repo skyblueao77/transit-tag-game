@@ -130,9 +130,10 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
   const isLocationReady = currentPos !== null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-4 py-8 flex flex-col justify-center items-center text-white font-sans">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-4 py-8 flex flex-col items-center text-white font-sans">
+      <div className="w-full max-w-md my-auto flex flex-col items-center">
       {isFirebaseMisconfigured && (
-        <div className="w-full max-w-sm mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
+        <div className="w-full mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
           <AlertTriangle size={20} className="shrink-0 text-amber-300 mt-0.5" />
           <div>
             <div className="font-black text-amber-200 mb-0.5">Firebase環境設定エラー</div>
@@ -155,7 +156,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
         </div>
       </div>
 
-      <div className="w-full max-w-sm bg-white rounded-[2.5rem] p-7 shadow-[0_20px_50px_rgba(0,0,0,0.3)] text-slate-800 overflow-hidden relative">
+      <div className="w-full bg-white rounded-[2.5rem] p-7 shadow-[0_20px_50px_rgba(0,0,0,0.3)] text-slate-800 overflow-hidden relative">
         <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-white to-blue-500 opacity-60"></div>
 
         {/* タブ切り替え（新規参加 / ログイン） */}
@@ -363,6 +364,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
           Transit Tag Game
         </p>
       </footer>
+      </div>
     </div>
   );
 };
