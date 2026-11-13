@@ -518,6 +518,27 @@ describe('Firestore Security Rules', () => {
     assert.equal((await firestore(path, { token: userDToken, method: 'PATCH', body: freshProjection })).status, 200);
     assert.equal((await firestore(path, { token: adminToken })).status, 200, 'Admin can read Emergency location');
     assert.equal((await firestore(path, { token: userBToken })).status, 403, 'Other players cannot read Emergency projection');
+
+    // EMERGENCY player cannot delete their own projection while still EMERGENCY
+    assert.equal((await firestore(path, { token: userDToken, method: 'DELETE' })).status, 403);
+
+    // Atomic EMERGENCY -> RETIRED transition can delete own emergency projection
+    const retireWrites = [
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${userDUid}`,
+          fields: fields({
+            id: userDUid, gameSessionId: CURRENT_SESSION_ID, team: 'A', name: 'Projection Player', role: 'RUNNER',
+            color: '#ef4444', status: 'RETIRED', score: 0, invincibleCards: 0,
+            waitingUntil: 0, shinkansenStartTime: null, invincibleUntil: 0,
+          }).fields,
+        },
+      },
+      {
+        delete: `projects/${projectId}/databases/(default)/documents/${path}`,
+      },
+    ];
+    assert.equal((await commitBatch(retireWrites, userDToken)).status, 200, 'EMERGENCY -> RETIRED batch deleting projection must succeed');
   });
 
   test('allows Administrator in Spark plan to manage game_config, missions, and receipts', async () => {
