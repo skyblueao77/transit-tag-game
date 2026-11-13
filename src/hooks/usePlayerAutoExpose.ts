@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { ExposedLocation, GameConfig, PrivateLocation, User } from '../../types';
-import { canRevealLocation } from '../game';
+import { resolveAutoExposePlan } from '../game';
 import { exposeLocation } from '../application';
 import { firebaseExposedLocationStore } from '../infrastructure/firebase/locationStores';
 
@@ -26,61 +26,24 @@ export default function usePlayerAutoExpose({
   exposedLocations,
 }: UsePlayerAutoExposeParams): void {
   useEffect(() => {
-    if (!isOnline || !currentUser || isAdmin || !gameConfig.gameSessionId) return;
-    if (currentUser.status === 'EMERGENCY' || currentUser.status === 'RETIRED') return;
-    if (!canRevealLocation(gameConfig.gameStatus)) return;
-    if (!privateLocation || privateLocation.gameSessionId !== gameConfig.gameSessionId) return;
-
     const now = Date.now();
-    let activeScope: 'PENALTY' | 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | null = null;
-    let targetUntil = 0;
-
-    const penaltyUntil = typeof currentUser.penaltyRevealUntil === 'number' ? currentUser.penaltyRevealUntil : 0;
-    const globalUntil = typeof gameConfig.locationRevealUntil === 'number' ? gameConfig.locationRevealUntil : 0;
-    const teamAUntil = typeof gameConfig.teamARevealUntil === 'number' ? gameConfig.teamARevealUntil : 0;
-    const teamBUntil = typeof gameConfig.teamBRevealUntil === 'number' ? gameConfig.teamBRevealUntil : 0;
-
-    if (penaltyUntil > now) {
-      activeScope = 'PENALTY';
-      targetUntil = penaltyUntil;
-    } else if (globalUntil > now) {
-      activeScope = 'GLOBAL';
-      targetUntil = globalUntil;
-    } else if (currentUser.team === 'A' && teamAUntil > now) {
-      activeScope = 'TEAM_A';
-      targetUntil = teamAUntil;
-    } else if (currentUser.team === 'B' && teamBUntil > now) {
-      activeScope = 'TEAM_B';
-      targetUntil = teamBUntil;
-    }
-
-    if (!activeScope || targetUntil <= now) return;
-
-    const maxDurationMs = 60 * 60 * 1000;
-    const duration = Math.min(targetUntil - now, maxDurationMs);
-    if (duration <= 0) return;
-
-    const existing = exposedLocations[currentUser.id];
-    if (
-      existing
-      && existing.gameSessionId === gameConfig.gameSessionId
-      && existing.revealScope === activeScope
-    ) {
-      const remainingValidMs = existing.expiresAt - now;
-      const isExpiresAligned =
-        Math.abs(existing.expiresAt - targetUntil) < 5000 ||
-        (targetUntil - now > maxDurationMs && remainingValidMs > 30 * 60 * 1000);
-
-      const hasMoved =
-        activeScope === 'PENALTY' && (
-          Math.abs(existing.latitude - privateLocation.latitude) > 0.0001 ||
-          Math.abs(existing.longitude - privateLocation.longitude) > 0.0001
-        );
-
-      if (isExpiresAligned && !hasMoved) {
-        return;
-      }
-    }
+    const existing = currentUser ? exposedLocations[currentUser.id] : undefined;
+    const plan = resolveAutoExposePlan({
+      isOnline,
+      isAdmin,
+      now,
+      currentUser,
+      gameConfig: {
+        gameSessionId: gameConfig.gameSessionId,
+        gameStatus: gameConfig.gameStatus,
+        locationRevealUntil: gameConfig.locationRevealUntil,
+        teamARevealUntil: gameConfig.teamARevealUntil,
+        teamBRevealUntil: gameConfig.teamBRevealUntil,
+      },
+      privateLocation,
+      existingExposedLocation: existing,
+    });
+    if (!plan || !currentUser || !gameConfig.gameSessionId || !privateLocation) return;
 
     void exposeLocation({
       playerId: currentUser.id,
@@ -88,8 +51,8 @@ export default function usePlayerAutoExpose({
       privateLocation,
       phase: gameConfig.gameStatus,
       now,
-      duration,
-      revealScope: activeScope,
+      duration: plan.duration,
+      revealScope: plan.revealScope,
     }, firebaseExposedLocationStore);
   }, [
     isOnline,
