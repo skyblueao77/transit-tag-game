@@ -13,8 +13,10 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerLayerRef = useRef<L.LayerGroup | null>(null);
+  const markersRef = useRef<Record<string, L.CircleMarker>>({});
+  const hasAutoCenteredRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
   const activeProjections = useMemo(
     () => projections.filter(projection => projection.safetyStatus === 'EMERGENCY' && projection.expiresAt > now),
@@ -38,6 +40,8 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
       map.remove();
       mapRef.current = null;
       markerLayerRef.current = null;
+      markersRef.current = {};
+      hasAutoCenteredRef.current = false;
       setMapReady(false);
     };
   }, []);
@@ -47,9 +51,40 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
     const layer = markerLayerRef.current;
     if (!mapReady || !map || !layer) return;
 
-    layer.clearLayers();
+    const nextIds = new Set(activeProjections.map(projection => projection.playerId));
+
+    for (const [id, marker] of Object.entries(markersRef.current)) {
+      if (!nextIds.has(id)) {
+        layer.removeLayer(marker);
+        delete markersRef.current[id];
+      }
+    }
+
     activeProjections.forEach(projection => {
       const user = usersById.get(projection.playerId);
+      const popupContent = user
+        ? createPlayerMapPopup(document, {
+            name: user.name,
+            team: user.team,
+            status: 'EMERGENCY',
+          }, 'EMERGENCY')
+        : null;
+
+      const existingMarker = markersRef.current[projection.playerId];
+      if (existingMarker) {
+        existingMarker.setLatLng([projection.latitude, projection.longitude]);
+        if (popupContent) {
+          if (existingMarker.getPopup()) {
+            existingMarker.setPopupContent(popupContent);
+          } else {
+            existingMarker.bindPopup(popupContent);
+          }
+        } else if (existingMarker.getPopup()) {
+          existingMarker.unbindPopup();
+        }
+        return;
+      }
+
       const marker = L.circleMarker([projection.latitude, projection.longitude], {
         radius: 10,
         fillColor: '#ef4444',
@@ -58,17 +93,18 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
         opacity: 1,
         fillOpacity: 0.9,
       }).addTo(layer);
-      if (user) {
-        marker.bindPopup(createPlayerMapPopup(document, {
-          name: user.name,
-          team: user.team,
-          status: 'EMERGENCY',
-        }, 'EMERGENCY'));
+      if (popupContent) {
+        marker.bindPopup(popupContent);
       }
+      markersRef.current[projection.playerId] = marker;
     });
-    if (activeProjections.length > 0) {
+
+    if (activeProjections.length === 0) {
+      hasAutoCenteredRef.current = false;
+    } else if (!hasAutoCenteredRef.current) {
       const first = activeProjections[0];
       map.setView([first.latitude, first.longitude], Math.max(map.getZoom(), 13));
+      hasAutoCenteredRef.current = true;
     }
   }, [mapReady, activeProjections, usersById]);
 

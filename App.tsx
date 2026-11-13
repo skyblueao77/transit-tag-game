@@ -5,12 +5,9 @@ import {
   Map as MapIcon,
   Target,
   Settings,
-  Trophy,
   Shield,
   Zap,
   Swords,
-  History,
-  LogOut,
   AlertTriangle,
   Phone,
   XCircle,
@@ -76,6 +73,8 @@ import usePlayerAutoExpose from './src/hooks/usePlayerAutoExpose';
 import useWaitingAutoResume from './src/hooks/useWaitingAutoResume';
 import ConfirmDialog from './src/components/ui/ConfirmDialog';
 import LoadingSpinner from './src/components/ui/LoadingSpinner';
+import FinalResultView from './src/components/game/FinalResultView';
+import SafetyActionDialog from './src/components/game/SafetyActionDialog';
 
 // Route-based Code Splitting with React.lazy
 const SetupView = lazy(() => import('./views/SetupView'));
@@ -561,76 +560,21 @@ const App: React.FC = () => {
           <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />
         </Suspense>
       ) : (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver) ? (
-        <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
-          <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
-          <h1 className="text-4xl font-black italic mb-2">FINAL RESULT</h1>
-          <p className="text-slate-400 font-bold mb-12 uppercase tracking-widest">全行程終了！お疲れ様でした</p>
-
-          <div className="w-full max-w-md bg-slate-800 rounded-3xl p-8 border-2 border-slate-700 shadow-2xl mb-8">
-            <div className="text-center mb-8">
-              <div className="text-xs font-black text-slate-500 uppercase mb-2">Winner</div>
-              <div className={`text-6xl font-black ${winner === 'A' ? 'text-red-500' : winner === 'B' ? 'text-blue-500' : 'text-white'}`}>
-                {winner === 'DRAW' ? 'DRAW' : `TEAM ${winner}`}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="text-center p-4 bg-red-500/10 rounded-2xl border border-red-500/20">
-                <div className="text-[10px] font-black text-red-500 uppercase mb-1">Team A</div>
-                <div className="text-3xl font-black">{aScore} <span className="text-xs">pt</span></div>
-              </div>
-              <div className="text-center p-4 bg-blue-500/10 rounded-2xl border border-blue-500/20">
-                <div className="text-[10px] font-black text-blue-500 uppercase mb-1">Team B</div>
-                <div className="text-3xl font-black">{bScore} <span className="text-xs">pt</span></div>
-              </div>
-            </div>
-          </div>
-
-          <div className="w-full max-w-md bg-slate-800/50 rounded-3xl p-6 border border-slate-700">
-            <h3 className="flex items-center gap-2 font-black text-slate-400 mb-4 uppercase tracking-widest text-sm">
-              <History size={18} /> Game History
-            </h3>
-            <div className="space-y-3">
-              {(gameConfig.logs ?? []).map(log => (
-                <div key={log.id} className="text-xs border-b border-slate-700/50 pb-2 flex gap-3">
-                  <span className="text-slate-500 shrink-0 font-mono">
-                    {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                  <span className={
-                    log.type === 'CAPTURE' ? 'text-red-400 font-bold' :
-                    log.type === 'MISSION' ? 'text-indigo-400 font-bold' :
-                    log.type === 'EMERGENCY' ? 'text-amber-400 font-black' :
-                    'text-slate-300'
-                  }>
-                    {log.message}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setSafetyDialogOpen(true)}
-            className="mt-4 rounded-2xl bg-red-600 px-6 py-4 font-black text-white shadow-lg"
-          >
-            SOS / リタイア
-          </button>
-          {safetyDialogOpen && (
-            <SafetyActionDialog
-              busy={safetyActionBusy}
-              onClose={() => setSafetyDialogOpen(false)}
-              onChoose={handleSafetyAction}
-            />
-          )}
-
-          <button
-            type="button"
-            onClick={async () => { await signOutCurrentUser(); window.location.reload(); }}
-            className="mt-12 flex items-center gap-2 text-slate-500 font-bold hover:text-white transition-colors"
-          >
-            <LogOut size={18} /> 最初に戻る
-          </button>
-        </div>
+        <FinalResultView
+          winner={winner}
+          aScore={aScore}
+          bScore={bScore}
+          logs={gameConfig.logs ?? []}
+          safetyDialogOpen={safetyDialogOpen}
+          safetyActionBusy={safetyActionBusy}
+          onOpenSafetyDialog={() => setSafetyDialogOpen(true)}
+          onCloseSafetyDialog={() => setSafetyDialogOpen(false)}
+          onChooseSafetyAction={handleSafetyAction}
+          onSignOutAndReload={async () => {
+            await signOutCurrentUser();
+            window.location.reload();
+          }}
+        />
       ) : (
         <div className="flex flex-col h-screen max-h-screen bg-slate-50 overflow-hidden">
         {/* 一時中断オーバーレイ */}
@@ -821,32 +765,6 @@ const App: React.FC = () => {
     </HashRouter>
   );
 };
-
-const SafetyActionDialog: React.FC<{
-  busy: boolean;
-  onClose: () => void;
-  onChoose: (action: SafetyAction, reasonCode: SafetyReasonCode) => Promise<void>;
-}> = ({ busy, onClose, onChoose }) => (
-  <div className="fixed inset-0 z-3000 flex items-center justify-center bg-slate-950/80 p-5" role="dialog" aria-modal="true" aria-label="Safety Action">
-    <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-black text-slate-900">緊急連絡 / リタイア</h2>
-        <button type="button" onClick={onClose} disabled={busy} aria-label="閉じる" className="rounded-lg p-2 text-slate-500 disabled:opacity-50">
-          <XCircle size={22} />
-        </button>
-      </div>
-      <p className="mb-4 text-sm font-medium text-slate-600">該当する内容を選択してください。詳細な個人情報は記録されません。Emergencyを選ぶと、最新の位置情報がある場合に限り、正確な位置を管理者だけに最大2分間共有します。リタイアでは位置を共有しません。</p>
-      <div className="grid gap-2">
-        <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'ILLNESS_OR_INJURY')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">急病・怪我</button>
-        <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'EQUIPMENT_ISSUE')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">機材トラブル</button>
-        <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'OTHER')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">その他の緊急事態</button>
-        <button type="button" disabled={busy} onClick={() => void onChoose('RETIRE', 'RETIREMENT_REQUEST')} className="mt-2 rounded-xl bg-slate-900 px-4 py-3 text-left font-bold text-white disabled:opacity-50">リタイア</button>
-      </div>
-      {busy && <p className="mt-4 text-center text-sm font-bold text-slate-500">送信中...</p>}
-      <p className="mt-4 text-xs text-slate-500">送信できない場合はLINE等で運営へ直接連絡してください。</p>
-    </div>
-  </div>
-);
 
 const NavAnchor: React.FC<{ to: string; icon: React.ReactNode; label: string }> = ({
   to,

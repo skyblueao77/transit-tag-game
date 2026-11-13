@@ -1,16 +1,11 @@
 import type React from 'react';
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { deleteUser } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 import type { User } from '../types';
-import { TEAM_COLORS } from '../constants';
 import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle } from 'lucide-react';
-import { registerWithUserId, signInWithUserId } from '../src/infrastructure/firebase/auth';
-import { createPlayerWithPrivateLocation } from '../src/infrastructure/firebase/playerStore';
-import { auth, db, isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
-import { firebasePrivateLocationStore } from '../src/infrastructure/firebase/locationStores';
+import { isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
+import { loginPlayerAccount, registerPlayerAccount } from '../src/infrastructure/firebase/playerSetup';
 
 interface Props {
   onComplete: (user: User) => void;
@@ -33,13 +28,18 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
   // 起動時に一度だけ現在地を取得
   useEffect(() => {
     if (!('geolocation' in navigator)) return;
+    let mounted = true;
     navigator.geolocation.getCurrentPosition(
       pos => {
+        if (!mounted) return;
         setCurrentPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
       },
       err => console.log('初期位置取得スキップ:', err.message),
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true, timeout: 10000 },
     );
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const getFriendlyAuthError = (err: unknown): string => {
@@ -74,56 +74,22 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
     }
 
     setIsSubmitting(true);
-    let createdAuthUid: string | null = null;
     try {
-      let activeSessionId = gameSessionId;
-      if (!activeSessionId) {
-        const configSnap = await getDoc(doc(db, 'game_config', 'current'));
-        const configData = configSnap.data();
-        if (
-          typeof configData?.gameSessionId === 'string' &&
-          configData.gameSessionId.trim().length > 0 &&
-          typeof configData?.sessionStartedAt === 'number' &&
-          typeof configData?.sessionSchemaVersion === 'number' &&
-          configData.sessionSchemaVersion >= 2
-        ) {
-          activeSessionId = configData.gameSessionId;
-        }
-      }
-      if (!activeSessionId) {
+      const posToSave = currentPos ?? { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
+      const result = await registerPlayerAccount({
+        userId,
+        password,
+        name,
+        team,
+        location: { latitude: posToSave.lat, longitude: posToSave.lng },
+        fallbackSessionId: gameSessionId,
+      });
+      if (result.ok === false) {
         toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
         return;
       }
-
-      const id = await registerWithUserId(userId, password);
-      createdAuthUid = id;
-
-      const color: string = team === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
-
-      const newUser: User = {
-        id,
-        name: name.trim(),
-        role: 'RUNNER',
-        team,
-        color,
-        score: 0,
-        status: 'ACTIVE',
-        gameSessionId: activeSessionId,
-        invincibleCards: 0,
-      };
-
-      const posToSave = currentPos ?? { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
-      await createPlayerWithPrivateLocation(newUser, {
-        latitude: posToSave.lat,
-        longitude: posToSave.lng,
-      }, activeSessionId);
-
-      createdAuthUid = null;
-      onComplete(newUser);
+      onComplete(result.user);
     } catch (err: unknown) {
-      if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
-        await deleteUser(auth.currentUser).catch(() => {});
-      }
       console.error('Registration error:', err);
       toast.error(getFriendlyAuthError(err));
     } finally {
@@ -137,24 +103,19 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
 
     setIsSubmitting(true);
     try {
-      const uid = await signInWithUserId(userId, password);
-      const userSnap = await getDoc(doc(db, 'users', uid));
+      const result = await loginPlayerAccount({
+        userId,
+        password,
+        currentLocation: currentPos
+          ? { latitude: currentPos.lat, longitude: currentPos.lng }
+          : null,
+        fallbackSessionId: gameSessionId,
+      });
 
-      if (userSnap.exists()) {
-        const existingUser = userSnap.data() as User;
-        const targetSession = gameSessionId || existingUser.gameSessionId;
-        // GPS測位が完了している場合のみ現在地を更新（未測位の東京駅初期値で上書きしない）
-        if (currentPos && targetSession) {
-          try {
-            await firebasePrivateLocationStore.save(uid, {
-              latitude: currentPos.lat,
-              longitude: currentPos.lng,
-            }, targetSession);
-          } catch (locErr) {
-            console.warn('Failed to update location on resume:', locErr);
-          }
-        }
-        onComplete(existingUser);
+      if (result.ok) {
+        onComplete(result.user);
+      } else if (result.reason === 'SESSION_MISMATCH') {
+        toast.error('前回のゲームセッションのアカウントです。現在のゲームに参加するには「新規エントリー」から新しくユーザーIDを作成してください。');
       } else {
         toast.error('プレイヤー情報が見つかりません。「新規エントリー」タブからアカウントを作成してください。');
       }

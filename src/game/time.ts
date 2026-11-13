@@ -8,6 +8,16 @@ export function remainingSeconds(until: number | undefined, now: number): number
   return Math.floor(remainingMilliseconds(until, now) / 1000);
 }
 
+export function formatCountdownHms(until: number | undefined, now: number): string {
+  const diff = remainingMilliseconds(until, now);
+  if (diff <= 0) return '00:00:00';
+  const totalSeconds = Math.floor(diff / 1000);
+  const h = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
+  const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, '0');
+  const s = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
 export function isExpired(until: number | undefined, now: number): boolean {
   return until === undefined || until <= now;
 }

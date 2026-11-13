@@ -76,6 +76,7 @@ export {
 export type { DetermineWinnerInput } from './scoring';
 
 export {
+  formatCountdownHms,
   gameElapsedSince,
   gameTimeAt,
   isActiveUntil,

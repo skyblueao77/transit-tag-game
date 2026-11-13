@@ -40,20 +40,20 @@ export function useGameSubscriptions(
     [rawUsers, gameConfig.gameSessionId],
   );
 
-  const exposedPlayerIdsJson = useMemo(
-    () => JSON.stringify(
-      allUsers
-        .filter(
-          user => (user.team === 'A' || user.team === 'B')
-            && user.status !== 'EMERGENCY'
-            && user.status !== 'RETIRED',
-        )
-        .map(user => user.id),
-    ),
+  const exposedPlayerIds = useMemo(
+    () => allUsers
+      .filter(
+        user => (user.team === 'A' || user.team === 'B')
+          && user.status !== 'EMERGENCY'
+          && user.status !== 'RETIRED',
+      )
+      .map(user => user.id)
+      .sort(),
     [allUsers],
   );
+  const exposedPlayerIdsKey = useMemo(() => exposedPlayerIds.join(','), [exposedPlayerIds]);
   const exposedPlayerIdsRef = useRef<string[]>([]);
-  exposedPlayerIdsRef.current = JSON.parse(exposedPlayerIdsJson) as string[];
+  exposedPlayerIdsRef.current = exposedPlayerIds;
 
   useEffect(() => {
     if (!authUserId) {
@@ -105,8 +105,12 @@ export function useGameSubscriptions(
 
   useEffect(() => {
     if (!authUserId) return;
-    exposedSubscriberRef.current?.setPlayerIds(JSON.parse(exposedPlayerIdsJson) as string[]);
-  }, [authUserId, exposedPlayerIdsJson]);
+    if (exposedPlayerIdsKey === '') {
+      exposedSubscriberRef.current?.setPlayerIds([]);
+      return;
+    }
+    exposedSubscriberRef.current?.setPlayerIds(exposedPlayerIdsRef.current);
+  }, [authUserId, exposedPlayerIdsKey]);
 
   useEffect(() => {
     if (!authUserId) return;
@@ -117,7 +121,10 @@ export function useGameSubscriptions(
   }, [authUserId]);
 
   useEffect(() => {
-    if (!authUserId) return;
+    if (!authUserId) {
+      lastBroadcastTimeRef.current = null;
+      return;
+    }
     return subscribeGameConfig(
       INITIAL_GAME_CONFIG,
       config => {

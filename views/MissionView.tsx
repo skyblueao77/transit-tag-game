@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { GameConfig, Mission, User } from '../types';
 import { FINAL_MISSIONS } from '../constants';
 import type { CompleteMissionResult } from '../src/application/gameplayPorts';
-import { canCompleteMission, isSameMissionId } from '../src/game';
+import { canCompleteMission, formatCountdownHms, isSameMissionId } from '../src/game';
 import { subscribeMissionCompletions } from '../src/infrastructure/firebase/subscriptions';
 import useConfirmDialog from '../src/hooks/useConfirmDialog';
 import ConfirmDialog from '../src/components/ui/ConfirmDialog';
@@ -18,12 +18,31 @@ interface Props {
   missions: Mission[];
 }
 
+function getMissionFailureMessage(reason: string): string {
+  switch (reason) {
+    case 'SESSION_CHANGED':
+      return 'ゲームセッションが更新されました。画面を再読み込みして確認してください。';
+    case 'INVALID_PHASE':
+      return '現在のゲームフェーズではこのミッションを完了報告できません。';
+    case 'PLAYER_NOT_ACTIVE':
+      return '現在のプレイヤーステータスではミッション報告できません。';
+    case 'MISSION_NOT_FOUND':
+      return '対象のミッションが見つかりません。';
+    default:
+      return '完了報告の処理に失敗しました。通信環境をご確認ください。';
+  }
+}
+
 const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocation: _onExposeLocation, missions = [] }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFinalReported, setIsFinalReported] = useState(false);
   const [lastCompletedMissionId, setLastCompletedMissionId] = useState<string | null>(null);
   const [completedMissionIds, setCompletedMissionIds] = useState<Set<string>>(() => new Set());
-  const [timeLeft, setTimeLeft] = useState('');
+  const [timeLeft, setTimeLeft] = useState(() =>
+    config.isFinalMissionActive
+      ? formatCountdownHms(config.finalMissionEndTime, Date.now())
+      : '00:00:00',
+  );
   const { confirm, dialogProps } = useConfirmDialog();
 
   // チームごとのアクティブミッションID
@@ -84,27 +103,33 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
     || (config.gameSessionId && user.lastCompletionId === `${user.team}_${config.gameSessionId}_${finalMission.id}`),
   );
 
-  // 新しいミッションが来たらローカルの直近完了表示をリセット
+  // 新しいミッションやセッションが来たらローカルの直近完了表示をリセット
   useEffect(() => {
     if (activeMissionId !== lastCompletedMissionId) {
       setLastCompletedMissionId(null);
     }
   }, [activeMissionId, lastCompletedMissionId]);
 
-  // 最終ミッションのカウントダウン
+  useEffect(() => {
+    if (!config.gameSessionId && !config.activeFinalMissionId) {
+      setIsFinalReported(false);
+      return;
+    }
+    setIsFinalReported(false);
+  }, [config.gameSessionId, config.activeFinalMissionId]);
+
+  // 最終ミッションのカウントダウン（初回即時反映）
   useEffect(() => {
     if (!config.isFinalMissionActive) return;
+    const update = () => {
+      const formatted = formatCountdownHms(config.finalMissionEndTime, Date.now());
+      setTimeLeft(formatted);
+      return formatted;
+    };
+    if (update() === '00:00:00') return;
     const timer = setInterval(() => {
-      const now = Date.now();
-      const diff = (config.finalMissionEndTime ?? 0) - now;
-      if (diff <= 0) {
-        setTimeLeft('00:00:00');
+      if (update() === '00:00:00') {
         clearInterval(timer);
-      } else {
-        const h = Math.floor(diff / 3600000).toString().padStart(2, '0');
-        const m = Math.floor((diff % 3600000) / 60000).toString().padStart(2, '0');
-        const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
-        setTimeLeft(`${h}:${m}:${s}`);
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -136,7 +161,8 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocati
           toast.info('このミッションは既にチームで達成報告済みです。');
           return;
         }
-        throw new Error(result.reason);
+        toast.error(getMissionFailureMessage(result.reason));
+        return;
       }
 
       if (isFinalMission) {

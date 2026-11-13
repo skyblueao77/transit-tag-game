@@ -50,6 +50,7 @@ export async function updatePlayerLastStation(
 export async function adminChangePlayerTeam(
   playerId: string,
   newTeam: 'A' | 'B',
+  newRole?: 'ONI' | 'RUNNER',
 ): Promise<void> {
   await assertAdmin();
   if (typeof playerId !== 'string' || playerId.trim().length === 0 || (newTeam !== 'A' && newTeam !== 'B')) {
@@ -60,6 +61,7 @@ export async function adminChangePlayerTeam(
   await updateDoc(userRef, {
     team: newTeam,
     color,
+    ...(newRole === 'ONI' || newRole === 'RUNNER' ? { role: newRole } : {}),
   });
 }
 
