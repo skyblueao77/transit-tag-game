@@ -3,6 +3,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { CALLABLE_OPTIONS } from '../shared/callableOptions';
 import {
   resumePlayerForAdmin,
   swapTeamRolesForAdmin,
@@ -101,7 +102,7 @@ function toHttpsError(error: unknown, operation: string, uid: string): HttpsErro
 }
 
 export const swapTeamRoles = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   async request => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication is required.', {
@@ -122,7 +123,7 @@ export const swapTeamRoles = onCall(
 );
 
 export const resumePlayer = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   async request => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication is required.', {

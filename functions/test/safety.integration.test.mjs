@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
@@ -140,6 +141,7 @@ async function call(data, token) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...APP_CHECK_HEADERS,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ data: requestData }),
@@ -383,7 +385,7 @@ describe('Safety Action callable emulator integration', () => {
 
     const response = await fetch(`http://127.0.0.1:5001/${projectId}/asia-northeast1/capturePlayer`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${oni.idToken}` },
+      headers: { 'Content-Type': 'application/json', ...APP_CHECK_HEADERS, Authorization: `Bearer ${oni.idToken}` },
       body: JSON.stringify({ data: { targetId: runner.localId, expectedSessionId: SESSION_ID } }),
     });
     const capture = await response.json();

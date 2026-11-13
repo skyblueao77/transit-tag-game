@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import "firebase/auth";
 import "firebase/firestore";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
@@ -25,20 +25,25 @@ const app = initializeApp(firebaseConfig);
 
 // 2.5. Firebase App Check 初期化（ブラウザ実行時かつサイトキー設定時のみ）
 if (typeof window !== 'undefined') {
-  const recaptchaSiteKey = typeof env.VITE_FIREBASE_RECAPTCHA_SITE_KEY === 'string'
-    ? env.VITE_FIREBASE_RECAPTCHA_SITE_KEY.trim()
+  const isDev = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.DEV : false;
+  if (isDev) {
+    const rawDebugToken = typeof env.VITE_APPCHECK_DEBUG_TOKEN === 'string'
+      ? env.VITE_APPCHECK_DEBUG_TOKEN.trim()
+      : '';
+    if (rawDebugToken) {
+      const globalTarget = (typeof self !== 'undefined' ? self : window) as unknown as {
+        FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean;
+      };
+      globalTarget.FIREBASE_APPCHECK_DEBUG_TOKEN = rawDebugToken === 'true' ? true : rawDebugToken;
+    }
+  }
+
+  const recaptchaSiteKey = typeof env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY === 'string'
+    ? env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY.trim()
     : '';
   if (recaptchaSiteKey) {
-    const isDev = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
-    if (isDev) {
-      const debugToken = typeof env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN === 'string'
-        ? env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN.trim()
-        : '';
-      (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN =
-        debugToken || true;
-    }
     initializeAppCheck(app, {
-      provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+      provider: new ReCaptchaEnterpriseProvider(recaptchaSiteKey),
       isTokenAutoRefreshEnabled: true,
     });
   }

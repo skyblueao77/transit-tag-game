@@ -4,6 +4,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import type { CallableRequest } from 'firebase-functions/v2/https';
+import { CALLABLE_OPTIONS } from '../shared/callableOptions';
 import {
   adjustTeamScoreForAdmin,
   AdminScoreAdjustmentServiceError,
@@ -78,6 +79,6 @@ async function handleAdjustTeamScore(request: CallableRequest<unknown>) {
 }
 
 export const adjustTeamScore = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   handleAdjustTeamScore,
 );

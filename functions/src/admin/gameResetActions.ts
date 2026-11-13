@@ -3,6 +3,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { CALLABLE_OPTIONS } from '../shared/callableOptions';
 import {
   executeGameResetForAdmin,
   GameResetServiceError,
@@ -112,7 +113,7 @@ function toHttpsError(error: unknown, uid: string, action: string): HttpsError {
   return new HttpsError('internal', 'Game reset request failed.', { reason: 'PERSISTENCE_ERROR' });
 }
 
-export const prepareGameReset = onCall({ region: 'asia-northeast1' }, async request => {
+export const prepareGameReset = onCall(CALLABLE_OPTIONS, async request => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Authentication is required.', { reason: 'UNAUTHENTICATED' });
   }
@@ -127,7 +128,7 @@ export const prepareGameReset = onCall({ region: 'asia-northeast1' }, async requ
   }
 });
 
-export const executeGameReset = onCall({ region: 'asia-northeast1' }, async request => {
+export const executeGameReset = onCall(CALLABLE_OPTIONS, async request => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Authentication is required.', { reason: 'UNAUTHENTICATED' });
   }

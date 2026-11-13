@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 import { createMissionCompletionId } from '../lib/functions/src/mission/missionService.js';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
@@ -65,6 +66,7 @@ async function callMission(token, missionId, expectedSessionId = currentSessionI
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...APP_CHECK_HEADERS,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ data: { missionId, expectedSessionId } }),
@@ -227,6 +229,7 @@ async function callCapture(token, targetId, extra = {}) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...APP_CHECK_HEADERS,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ data: { targetId, expectedSessionId: currentSessionId, ...extra } }),
@@ -426,6 +429,7 @@ async function callPowerup(token, data = {}) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...APP_CHECK_HEADERS,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ data: { expectedSessionId: currentSessionId, ...data } }),

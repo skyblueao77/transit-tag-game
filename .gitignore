@@ -39,6 +39,8 @@ repomix-output.xml
 .env
 .env.*
 !.env.example
+functions/.env
+functions/.secret.local
 
 # Cloud Functions build output
 /functions/lib

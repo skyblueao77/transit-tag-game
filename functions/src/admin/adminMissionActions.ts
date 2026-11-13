@@ -4,6 +4,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import type { CallableRequest } from 'firebase-functions/v2/https';
+import { CALLABLE_OPTIONS } from '../shared/callableOptions';
 import {
   administerMissionForAdmin,
   AdminMissionServiceError,
@@ -105,14 +106,14 @@ async function handle(request: CallableRequest<unknown>, action: AdminMissionAct
 }
 
 export const setMissionMode = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   request => handle(request, 'setMissionMode'),
 );
 export const assignMissions = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   request => handle(request, 'assignMissions'),
 );
 export const syncMissionCatalog = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   request => handle(request, 'syncMissionCatalog'),
 );

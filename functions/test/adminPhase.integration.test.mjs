@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 const projectId=process.env.GCLOUD_PROJECT||process.env.GOOGLE_CLOUD_PROJECT||'demo-no-project';
 const db=`http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
 const authUrl='http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts';
@@ -13,7 +14,7 @@ async function seed(path,data){const r=await fetch(`${db}/${path}`,{method:'PATC
 async function clearFinalCatalog(){for(const n of ['01','02','03','04'])await fetch(`${db}/missions/final_${n}`,{method:'DELETE',headers:{Authorization:'Bearer owner'}});}
 async function read(path){const r=await fetch(`${db}/${path}`,{headers:{Authorization:'Bearer owner'}});if(!r.ok)return null;const body=await r.json();return Object.fromEntries(Object.entries(body.fields||{}).map(([k,v])=>[k,dec(v)]));}
 async function admin(){const a=await user();await seed(`admins/${a.localId}`,{active:true});return a;}
-async function call(data,token){const r=await fetch(fn,{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify({data})});return{status:r.status,body:await r.json()};}
+async function call(data,token){const r=await fetch(fn,{method:'POST',headers:{'Content-Type':'application/json',...APP_CHECK_HEADERS,...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify({data})});return{status:r.status,body:await r.json()};}
 function id(){seq++;return`123e4567-e89b-42d3-a456-${String(seq).padStart(12,'0')}`;}
 function intent(action,requestId=id()){return{action,requestId,expectedSessionId:SESSION_ID};}
 async function config(gameStatus){await seed('game_config/current',{gameSessionId:SESSION_ID,sessionStartedAt:Date.now(),sessionSchemaVersion:2,gameStatus,day:1,startTime:100,isGameOver:false,isFinalMissionActive:false,activeFinalMissionId:null,finalMissionEndTime:0,logs:[],unchanged:'value'});}

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
@@ -60,6 +61,7 @@ async function call(name, token, data = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...APP_CHECK_HEADERS,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ data: data !== null && typeof data === 'object' && !Array.isArray(data)

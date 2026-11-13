@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { before, describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 import { createMissionCompletionId } from '../lib/functions/src/mission/missionService.js';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
@@ -108,7 +109,7 @@ async function clientPatch(token, path, data) {
 async function call(name, data, token) {
   const response = await fetch(`${functionsUrl}/${name}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { 'Content-Type': 'application/json', ...APP_CHECK_HEADERS, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ data }),
   });
   return { status: response.status, body: await response.json() };
