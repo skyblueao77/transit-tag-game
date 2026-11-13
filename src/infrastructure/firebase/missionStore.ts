@@ -1,36 +1,14 @@
 import {
   deleteDoc,
   doc,
-  getDoc,
   increment,
   runTransaction,
   serverTimestamp,
   setDoc,
 } from 'firebase/firestore';
 import type { Mission } from '../../../types';
-import { auth, db } from './firebaseClient';
-
-function createSecureLogId(): string {
-  if (typeof crypto !== 'undefined') {
-    if (typeof crypto.randomUUID === 'function') {
-      return `log_${crypto.randomUUID()}`;
-    }
-    if (typeof crypto.getRandomValues === 'function') {
-      const bytes = new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-      return `log_${hex}`;
-    }
-  }
-  throw new Error('Secure random generator is not available in this runtime.');
-}
-
-async function assertAdmin(): Promise<void> {
-  const uid = auth.currentUser?.uid;
-  if (!uid) throw new Error('UNAUTHENTICATED');
-  const adminSnap = await getDoc(doc(db, 'admins', uid));
-  if (!adminSnap.exists()) throw new Error('PERMISSION_DENIED');
-}
+import { db } from './firebaseClient';
+import { appendToConfigLogs, assertAdmin, createLogId } from './gateways/shared';
 
 /**
  * 管理者が新しいミッションを追加または既存のミッションを更新します。
@@ -111,7 +89,7 @@ export async function awardMissionCompletionByAdmin(input: AwardMissionInput): P
     const completionId = `${input.team}_${input.expectedSessionId}_${input.missionId}`;
     const completionRef = doc(db, 'missionCompletions', completionId);
     const configRef = doc(db, 'game_config', 'current');
-    const logId = createSecureLogId();
+    const logId = createLogId();
 
     await runTransaction(db, async transaction => {
       const completionSnap = await transaction.get(completionRef);
@@ -129,20 +107,12 @@ export async function awardMissionCompletionByAdmin(input: AwardMissionInput): P
 
       const scoreField = input.team === 'A' ? 'teamAScore' : 'teamBScore';
       const now = Date.now();
-      const timeStr = new Date(now).toLocaleTimeString('ja-JP', {
-        timeZone: 'Asia/Tokyo',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-      const newLog = {
+      const updatedLogs = appendToConfigLogs(configData.logs, {
         id: logId,
-        timestamp: now,
-        message: `${timeStr} 【運営承認】Team ${input.team} が「${input.title.trim()}」を達成！(+${input.points}pt)`,
-        type: 'MISSION' as const,
-      };
-
-      const existingLogs = Array.isArray(configData.logs) ? configData.logs : [];
-      const updatedLogs = [newLog, ...existingLogs].slice(0, 200);
+        now,
+        message: `【運営承認】Team ${input.team} が「${input.title.trim()}」を達成！(+${input.points}pt)`,
+        type: 'MISSION',
+      });
 
       transaction.update(configRef, {
         [scoreField]: increment(input.points),

@@ -43,6 +43,7 @@ import {
   determineGameWinner,
   getPlayerRole,
   getRoleForTeam,
+  INVINCIBILITY_DURATION_MS,
   isGamePaused,
 } from './src/game';
 
@@ -71,6 +72,8 @@ import useAuthUser from './src/hooks/useAuthUser';
 import useGameSubscriptions from './src/hooks/useGameSubscriptions';
 import useConfirmDialog from './src/hooks/useConfirmDialog';
 import useOnlineStatus from './src/hooks/useOnlineStatus';
+import usePlayerAutoExpose from './src/hooks/usePlayerAutoExpose';
+import useWaitingAutoResume from './src/hooks/useWaitingAutoResume';
 import ConfirmDialog from './src/components/ui/ConfirmDialog';
 import LoadingSpinner from './src/components/ui/LoadingSpinner';
 
@@ -174,85 +177,14 @@ const App: React.FC = () => {
 
   useEffect(() => () => emergencyHeartbeat.current.stop(), []);
 
-  // 管理者による全体公開、チーム別公開、またはペナルティ公開を検知した場合に自己位置を自動投影
-  useEffect(() => {
-    if (!isOnline || !currentUser || isAdmin || !gameConfig.gameSessionId) return;
-    if (currentUser.status === 'EMERGENCY' || currentUser.status === 'RETIRED') return;
-    if (!canRevealLocation(gameConfig.gameStatus)) return;
-    if (!privateLocation || privateLocation.gameSessionId !== gameConfig.gameSessionId) return;
-
-    const now = Date.now();
-    let activeScope: 'PENALTY' | 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | null = null;
-    let targetUntil = 0;
-
-    const penaltyUntil = typeof currentUser.penaltyRevealUntil === 'number' ? currentUser.penaltyRevealUntil : 0;
-    const globalUntil = typeof gameConfig.locationRevealUntil === 'number' ? gameConfig.locationRevealUntil : 0;
-    const teamAUntil = typeof gameConfig.teamARevealUntil === 'number' ? gameConfig.teamARevealUntil : 0;
-    const teamBUntil = typeof gameConfig.teamBRevealUntil === 'number' ? gameConfig.teamBRevealUntil : 0;
-
-    if (penaltyUntil > now) {
-      activeScope = 'PENALTY';
-      targetUntil = penaltyUntil;
-    } else if (globalUntil > now) {
-      activeScope = 'GLOBAL';
-      targetUntil = globalUntil;
-    } else if (currentUser.team === 'A' && teamAUntil > now) {
-      activeScope = 'TEAM_A';
-      targetUntil = teamAUntil;
-    } else if (currentUser.team === 'B' && teamBUntil > now) {
-      activeScope = 'TEAM_B';
-      targetUntil = teamBUntil;
-    }
-
-    if (!activeScope || targetUntil <= now) return;
-
-    const maxDurationMs = 60 * 60 * 1000;
-    const duration = Math.min(targetUntil - now, maxDurationMs);
-    if (duration <= 0) return;
-
-    const existing = exposedLocations[currentUser.id];
-    if (
-      existing
-      && existing.gameSessionId === gameConfig.gameSessionId
-      && existing.revealScope === activeScope
-    ) {
-      const remainingValidMs = existing.expiresAt - now;
-      const isExpiresAligned =
-        Math.abs(existing.expiresAt - targetUntil) < 5000 ||
-        (targetUntil - now > maxDurationMs && remainingValidMs > 30 * 60 * 1000);
-
-      const hasMoved =
-        activeScope === 'PENALTY' && (
-          Math.abs(existing.latitude - privateLocation.latitude) > 0.0001 ||
-          Math.abs(existing.longitude - privateLocation.longitude) > 0.0001
-        );
-
-      if (isExpiresAligned && !hasMoved) {
-        return;
-      }
-    }
-
-    void exposeLocation({
-      playerId: currentUser.id,
-      expectedSessionId: gameConfig.gameSessionId,
-      privateLocation,
-      phase: gameConfig.gameStatus,
-      now,
-      duration,
-      revealScope: activeScope,
-    }, firebaseExposedLocationStore);
-  }, [
+  usePlayerAutoExpose({
     isOnline,
     currentUser,
     isAdmin,
-    gameConfig.gameSessionId,
-    gameConfig.gameStatus,
-    gameConfig.locationRevealUntil,
-    gameConfig.teamARevealUntil,
-    gameConfig.teamBRevealUntil,
+    gameConfig,
     privateLocation,
     exposedLocations,
-  ]);
+  });
 
   // 位置公開（スナップショット方式）
   // 押した瞬間のprivate locationをスナップショットとして5分間表示。
@@ -344,11 +276,16 @@ const App: React.FC = () => {
     }
   }, [confirm, currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
 
-  const handleUpdateLastStation = useCallback(async (stationName: string): Promise<void> => {
+  const handleUpdateLastStation = useCallback(async (
+    stationName: string,
+    options?: { silentToast?: boolean },
+  ): Promise<void> => {
     if (!currentUser) return;
     try {
       await updatePlayerLastStation(currentUser.id, stationName);
-      toast.success(`現在地を「${stationName}」に更新しました`);
+      if (!options?.silentToast) {
+        toast.success(`現在地を「${stationName}」に更新しました`);
+      }
     } catch (error) {
       console.error('Failed to update player last station:', error);
       toast.error('現在地の更新に失敗しました');
@@ -465,9 +402,10 @@ const App: React.FC = () => {
   const handleActivateInvincibility = useCallback(async (): Promise<void> => {
     if (!currentUser) return;
 
+    const invincibilityMinutes = Math.round(INVINCIBILITY_DURATION_MS / 60000);
     const confirmed = await confirm({
       title: '無敵カード使用',
-      description: '無敵カードを使いますか？（30分間有効）',
+      description: `無敵カードを使いますか？（${invincibilityMinutes}分間有効）`,
       confirmLabel: '使用する',
       variant: 'primary',
     });
@@ -564,30 +502,12 @@ const App: React.FC = () => {
     }
   }, [currentUser]);
 
-  // 待機モードの自動復帰（Cloud Functions Cron不要化: Sparkプラン対応）
-  useEffect(() => {
-    if (currentUser?.status !== 'WAITING' || !currentUser.waitingUntil) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-
-    const attempt = (delay: number) => {
-      timer = setTimeout(async () => {
-        if (cancelled) return;
-        if (!gameConfig.gameSessionId) return;
-        const result = await resumeWaiting({ expectedSessionId: gameConfig.gameSessionId }, firebaseWaitingGateway);
-        if (!cancelled && result.ok === false) {
-          console.warn('Waiting resume retry scheduled:', result.reason);
-          attempt(5000);
-        }
-      }, Math.max(0, delay));
-    };
-
-    attempt(currentUser.waitingUntil - Date.now());
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [currentUser?.status, currentUser?.waitingUntil, gameConfig.gameSessionId]);
+  useWaitingAutoResume({
+    isOnline,
+    status: currentUser?.status,
+    waitingUntil: currentUser?.waitingUntil,
+    gameSessionId: gameConfig.gameSessionId,
+  });
 
   // ---- 画面分岐 ----
 

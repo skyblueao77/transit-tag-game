@@ -10,9 +10,7 @@ import {
   getPlayerRole,
   isActiveUntil,
   isGameActive,
-  isGamePaused,
   resolveLocationVisibility,
-  isWaitingActive,
   ONI_INITIAL_LOCK_DURATION_MS,
   remainingSeconds,
   shouldThrottleLocationUpdate,
@@ -22,6 +20,7 @@ import L from '../src/lib/leafletSetup';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
 import useWakeLock from '../src/hooks/useWakeLock';
 import useOnlineStatus from '../src/hooks/useOnlineStatus';
+import useMapTimers from '../src/hooks/useMapTimers';
 
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -51,7 +50,7 @@ interface Props {
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
   onResumeWaiting?: () => Promise<void>;
-  onUpdateLastStation?: (stationName: string) => Promise<void>;
+  onUpdateLastStation?: (stationName: string, options?: { silentToast?: boolean }) => Promise<void>;
   onUpdateProtectionZone?: (zone: ProtectionZoneType) => Promise<void>;
   onStartShinkansen?: () => Promise<void>;
   onIncrementShinkansenSegment?: () => Promise<void>;
@@ -64,9 +63,6 @@ const MapView: React.FC<Props> = ({
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<Record<string, L.CircleMarker>>({});
-  const [timeLeft, setTimeLeft] = useState({
-    waiting: 0, invincible: 0, nextReveal: 0, final: 0, oniLock: 0, shinkansenRemaining: 0, forceReveal: 0, teamSearchRemaining: 0, penaltyRemaining: 0
-  });
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
   const isOnline = useOnlineStatus();
@@ -135,9 +131,10 @@ const MapView: React.FC<Props> = ({
   // Phase 3: 自動反映（オートチェックイン）ロジック
   const stableSuggestionRef = useRef<{ text: string; count: number }>({ text: '', count: 0 });
   const lastAutoUpdatedKey = useRef<string | null>(null);
+  const isAutoUpdatingRef = useRef(false);
 
   useEffect(() => {
-    if (!isAutoUpdateEnabled || !transitSuggestion || !onUpdateLastStation) {
+    if (!isOnline || !isAutoUpdateEnabled || !transitSuggestion || !onUpdateLastStation || isAutoUpdatingRef.current) {
       return;
     }
 
@@ -157,18 +154,23 @@ const MapView: React.FC<Props> = ({
     }
 
     if (stableSuggestionRef.current.count >= 2) {
-      lastAutoUpdatedKey.current = currentTarget;
-      onUpdateLastStation(currentTarget)
+      isAutoUpdatingRef.current = true;
+      onUpdateLastStation(currentTarget, { silentToast: true })
         .then(() => {
+          lastAutoUpdatedKey.current = currentTarget;
           toast.success(`現在地を自動更新しました: ${currentTarget}`, {
             duration: 3500,
           });
         })
         .catch(err => {
           console.error('Failed to auto update station:', err);
+          stableSuggestionRef.current = { text: currentTarget, count: 0 };
+        })
+        .finally(() => {
+          isAutoUpdatingRef.current = false;
         });
     }
-  }, [transitSuggestion, isAutoUpdateEnabled, currentUser.lastStation, onUpdateLastStation]);
+  }, [isOnline, transitSuggestion, isAutoUpdateEnabled, currentUser.lastStation, onUpdateLastStation]);
 
   const handleConfirmStation = async (stationName: string) => {
     if (!onUpdateLastStation) return;
@@ -187,14 +189,23 @@ const MapView: React.FC<Props> = ({
   useWakeLock(true);
 
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
-  const captureCandidates = currentRole === 'ONI'
-    ? users.filter(user => (
-      user.id !== currentUser.id &&
-      user.status === 'ACTIVE' &&
-      getPlayerRole(user, gameConfig) === 'RUNNER' &&
-      !isActiveUntil(user.invincibleUntil, Date.now())
-    ))
-    : [];
+  const { timeLeft, nowMs } = useMapTimers(currentUser, gameConfig, currentRole);
+  const isOniLocked = timeLeft.oniLock > 0;
+  const invincibilityEpochMs = Math.floor(nowMs / 5000) * 5000;
+
+  const captureCandidates = useMemo(
+    () => (
+      currentRole === 'ONI'
+        ? users.filter(user => (
+          user.id !== currentUser.id &&
+          user.status === 'ACTIVE' &&
+          getPlayerRole(user, gameConfig) === 'RUNNER' &&
+          !isActiveUntil(user.invincibleUntil, invincibilityEpochMs)
+        ))
+        : []
+    ),
+    [currentRole, users, currentUser.id, gameConfig, invincibilityEpochMs],
+  );
 
   useEffect(() => {
     if (!captureCandidates.some(user => user.id === selectedTargetId)) {
@@ -202,9 +213,11 @@ const MapView: React.FC<Props> = ({
     }
   }, [captureCandidates, selectedTargetId]);
 
+  const currentUserId = currentUser.id;
+
   // 位置情報更新 (30m 移動 または 5分間隔フォールバックによるBaaS書き込みクォータ保護)
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
-    if (!currentUser || !gameConfig.gameSessionId || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
+    if (!currentUserId || !gameConfig.gameSessionId || !canUpdatePrivateLocation(gameConfig.gameStatus)) return;
     if (!navigator.onLine) return;
 
     const now = Date.now();
@@ -225,7 +238,7 @@ const MapView: React.FC<Props> = ({
 
     try {
       const result = await onUpdatePrivateLocation({
-        playerId: currentUser.id,
+        playerId: currentUserId,
         expectedSessionId: gameConfig.gameSessionId,
         latitude: currentCoords.latitude,
         longitude: currentCoords.longitude,
@@ -239,17 +252,24 @@ const MapView: React.FC<Props> = ({
     } catch (error) {
       console.error('Failed to update location:', error);
     }
-  }, [currentUser, gameConfig.gameStatus, gameConfig.gameSessionId, onUpdatePrivateLocation]);
+  }, [currentUserId, gameConfig.gameStatus, gameConfig.gameSessionId, onUpdatePrivateLocation]);
+
+  const updateLocationRef = useRef(updateLocation);
+  useEffect(() => {
+    updateLocationRef.current = updateLocation;
+  }, [updateLocation]);
 
   // watchPosition with Page Visibility optimization (Battery saving when app/tab is backgrounded)
   useEffect(() => {
-    if (!currentUser || !('geolocation' in navigator)) return;
+    if (!currentUserId || !('geolocation' in navigator)) return;
 
     const startWatching = () => {
-      if (watchId.current) navigator.geolocation.clearWatch(watchId.current);
+      if (watchId.current !== null) {
+        navigator.geolocation.clearWatch(watchId.current);
+      }
       watchId.current = navigator.geolocation.watchPosition(
         position => {
-          updateLocation(position);
+          void updateLocationRef.current(position);
         },
         error => console.error('Geolocation watch error:', error),
         { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
@@ -257,7 +277,7 @@ const MapView: React.FC<Props> = ({
     };
 
     const stopWatching = () => {
-      if (watchId.current) {
+      if (watchId.current !== null) {
         navigator.geolocation.clearWatch(watchId.current);
         watchId.current = null;
       }
@@ -280,54 +300,7 @@ const MapView: React.FC<Props> = ({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopWatching();
     };
-  }, [currentUser, updateLocation]);
-
-  // タイマー
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = Date.now();
-      if (isGamePaused(gameConfig.gameStatus)) {
-        const waiting = isWaitingActive(currentUser.status, currentUser.waitingUntil, now)
-          ? remainingSeconds(currentUser.waitingUntil, now)
-          : 0;
-        setTimeLeft(previous => ({ ...previous, waiting }));
-        return;
-      }
-
-      // 管理者強制開示の残り時間を計算
-      const forceReveal = remainingSeconds(gameConfig.locationRevealUntil, now);
-
-      const myTeamRevealUntil = currentUser.team === 'A'
-        ? gameConfig.teamARevealUntil
-        : gameConfig.teamBRevealUntil;
-      const teamSearchRemaining = remainingSeconds(myTeamRevealUntil, now);
-      const waiting = isWaitingActive(currentUser.status, currentUser.waitingUntil, now)
-        ? remainingSeconds(currentUser.waitingUntil, now)
-        : 0;
-      const invincible = remainingSeconds(currentUser.invincibleUntil, now);
-      const final = gameConfig.isFinalMissionActive
-        ? remainingSeconds(gameConfig.finalMissionEndTime, now)
-        : 0;
-
-      const oniLockTime = (gameConfig.startTime || 0) + ONI_INITIAL_LOCK_DURATION_MS;
-      const oniLock = currentRole === 'ONI' ? remainingSeconds(oniLockTime, now) : 0;
-      const nextReveal = remainingSeconds(gameConfig.nextRevealTime, now);
-
-      const shinkansenLimitMinutes = gameConfig.shinkansenMaxMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxMinutes;
-      let shinkansenRemaining = Infinity;
-      if (shinkansenLimitMinutes > 0) {
-        const shinkansenLimitMs = shinkansenLimitMinutes * 60 * 1000;
-        const shinkansenUntil = currentUser.shinkansenStartTime
-          ? currentUser.shinkansenStartTime + shinkansenLimitMs
-          : undefined;
-        shinkansenRemaining = remainingSeconds(shinkansenUntil, now);
-      }
-      const penaltyRemaining = remainingSeconds(currentUser.penaltyRevealUntil, now);
-
-      setTimeLeft({ waiting, invincible, nextReveal, final, oniLock, shinkansenRemaining, forceReveal, teamSearchRemaining, penaltyRemaining });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [currentUser, gameConfig, currentRole]);
+  }, [currentUserId]);
 
   // チーム同一行動の距離判定（規定: チームメンバーと1.5km以上離れた場合は警告）
   const teammateDistances = useMemo(() => {
@@ -353,11 +326,10 @@ const MapView: React.FC<Props> = ({
 
   const isTeamSplitAlert = maxTeammateDistance > 1500;
 
-
-  // 地図初期化（GPS更新のたびに破棄・再生成しないよう oniLock のみに依存）
+  // 地図初期化（GPS更新や毎秒カウントダウンのたびに破棄・再生成しないよう isOniLocked のみに依存）
   // biome-ignore lint/correctness/useExhaustiveDependencies: initial map coordinates only, not recreated on GPS updates
   useEffect(() => {
-    if (!containerRef.current || timeLeft.oniLock > 0) return;
+    if (!containerRef.current || isOniLocked) return;
     if (!mapRef.current) {
       const map = L.map(containerRef.current).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13
@@ -367,26 +339,21 @@ const MapView: React.FC<Props> = ({
     }
 
     return () => {
-      // Map cleanup on unmount
+      markersRef.current = {};
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
     };
-  }, [timeLeft.oniLock]);
+  }, [isOniLocked]);
 
-// ── マーカー描画（強制共有・チーム別サーチ対応版） ────────────────────────
+// ── マーカー描画（強制共有・チーム別サーチ対応版：差分更新） ──────────────────
   useEffect(() => {
     const currentMap = mapRef.current;
-    if (!currentMap) return;
-
-    // 既存マーカーを全削除
-    Object.values(markersRef.current).forEach((m: L.CircleMarker) => {
-      m.remove();
-    });
-    markersRef.current = {};
+    if (!currentMap || isOniLocked) return;
 
     const now = Date.now();
+    const visibleIds = new Set<string>();
 
     users.forEach(user => {
       const visibility = resolveLocationVisibility({
@@ -410,13 +377,16 @@ const MapView: React.FC<Props> = ({
 
       if (visibility.mode === 'HIDDEN' || visibility.latitude === undefined || visibility.longitude === undefined) return;
 
+      visibleIds.add(user.id);
+
       const isSelf = visibility.mode === 'SELF_PRIVATE';
       const isTeamSearchActive = visibility.mode === 'TEAM_SNAPSHOT';
       const isGlobalForceReveal = visibility.mode === 'GLOBAL_SNAPSHOT';
       const isPenaltyActive = visibility.mode === 'PENALTY_SNAPSHOT';
       const isInvincible = isActiveUntil(user.invincibleUntil, now);
 
-      const marker = L.circleMarker([visibility.latitude, visibility.longitude], {
+      const latLng: [number, number] = [visibility.latitude, visibility.longitude];
+      const markerStyle: L.CircleMarkerOptions = {
         radius: isSelf ? 10 : 8,
         fillColor: isPenaltyActive
           ? '#dc2626'
@@ -429,7 +399,7 @@ const MapView: React.FC<Props> = ({
         weight: isPenaltyActive || isInvincible ? 4 : 3,
         opacity: 1,
         fillOpacity: isSelf ? 0.95 : isTeamSearchActive || isPenaltyActive ? 0.95 : 0.7,
-      }).addTo(currentMap);
+      };
 
       let popupVariant: PlayerMapPopupVariant;
       let remainingTime: string | undefined;
@@ -449,21 +419,43 @@ const MapView: React.FC<Props> = ({
         remainingTime = formatTime(remainSec);
       }
 
-      marker.bindPopup(createPlayerMapPopup(document, user, popupVariant, remainingTime));
-      markersRef.current[user.id] = marker;
+      const popupContent = createPlayerMapPopup(document, user, popupVariant, remainingTime);
+      const existingMarker = markersRef.current[user.id];
+
+      if (existingMarker) {
+        existingMarker.setLatLng(latLng);
+        existingMarker.setStyle(markerStyle);
+        if (existingMarker.getPopup()) {
+          existingMarker.setPopupContent(popupContent);
+        } else {
+          existingMarker.bindPopup(popupContent);
+        }
+      } else {
+        const marker = L.circleMarker(latLng, markerStyle).addTo(currentMap);
+        marker.bindPopup(popupContent);
+        markersRef.current[user.id] = marker;
+      }
+    });
+
+    Object.entries(markersRef.current).forEach(([id, marker]) => {
+      if (!visibleIds.has(id)) {
+        marker.remove();
+        delete markersRef.current[id];
+      }
     });
   }, [
-    users, 
+    isOniLocked,
+    users,
     currentUser,
     privateLocation,
     exposedLocations,
-    gameConfig.locationRevealUntil, 
-    gameConfig.teamARevealUntil, 
+    gameConfig.locationRevealUntil,
+    gameConfig.teamARevealUntil,
     gameConfig.teamBRevealUntil,
     gameConfig.gameStatus,
-  ]); // 依存配列にチーム別の開示期限を追加
-  
-  if (timeLeft.oniLock > 0) {
+  ]); // 依存配列にチーム別の開示期限とON/OFFロック状態を追加
+
+  if (isOniLocked) {
     return (
       <div className="h-full bg-slate-900 flex flex-col items-center justify-center p-6 text-center text-white">
         <div className="w-24 h-24 bg-red-600/20 rounded-full flex items-center justify-center mb-8 border-4 border-red-600/30 animate-pulse">
@@ -471,7 +463,7 @@ const MapView: React.FC<Props> = ({
         </div>
         <h2 className="text-3xl font-black mb-2 italic tracking-tighter uppercase">ONI WAITING...</h2>
         <p className="text-slate-400 font-bold mb-12 uppercase tracking-widest text-xs leading-relaxed">
-          逃走者の移動開始から30分間は、<br />鬼は待機しなければなりません。
+          逃走者の移動開始から{Math.round(ONI_INITIAL_LOCK_DURATION_MS / 60000)}分間は、<br />鬼は待機しなければなりません。
         </p>
         <div className="bg-slate-800 px-10 py-6 rounded-3xl border border-slate-700 shadow-2xl">
           <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Time to Release</div>
@@ -721,7 +713,7 @@ const MapView: React.FC<Props> = ({
                     >
                       +1区間
                     </button>
-                    {onResetShinkansen && (Date.now() - currentUser.shinkansenStartTime <= 60_000 && (currentUser.shinkansenSegmentCount ?? 0) === 0) && (
+                    {onResetShinkansen && (nowMs - currentUser.shinkansenStartTime <= 60_000 && (currentUser.shinkansenSegmentCount ?? 0) === 0) && (
                       <button
                         type="button"
                         onClick={async () => {
