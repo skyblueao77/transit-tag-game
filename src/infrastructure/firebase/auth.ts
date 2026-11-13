@@ -1,5 +1,6 @@
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
@@ -107,9 +108,11 @@ export async function setupInitialAdmin(
 
   const email = toSyntheticEmail(identifier);
   let uid: string;
+  let createdNewUser = false;
   try {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     uid = cred.user.uid;
+    createdNewUser = true;
   } catch (err: unknown) {
     const errorCode = (err as { code?: string })?.code;
     if (errorCode === 'auth/email-already-in-use') {
@@ -120,17 +123,24 @@ export async function setupInitialAdmin(
     }
   }
 
-  // アトミックに初期管理者ブートストラップと管理者ドキュメントを作成
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'system', 'admin_bootstrap'), {
-    initializedBy: uid,
-    initializedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'admins', uid), {
-    role: 'admin',
-    createdAt: serverTimestamp(),
-  });
-  await batch.commit();
+  try {
+    // アトミックに初期管理者ブートストラップと管理者ドキュメントを作成
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'system', 'admin_bootstrap'), {
+      initializedBy: uid,
+      initializedAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'admins', uid), {
+      role: 'admin',
+      createdAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (err) {
+    if (createdNewUser && auth.currentUser?.uid === uid) {
+      await deleteUser(auth.currentUser).catch(() => {});
+    }
+    throw err;
+  }
 
   return true;
 }

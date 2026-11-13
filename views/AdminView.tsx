@@ -45,6 +45,8 @@ import {
 } from '../src/infrastructure/firebase/subscriptions';
 import type { EmergencyLocationProjection } from '../types';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
+import useConfirmDialog from '../src/hooks/useConfirmDialog';
+import ConfirmDialog from '../src/components/ui/ConfirmDialog';
 
 interface Props {
   config: GameConfig;
@@ -53,6 +55,7 @@ interface Props {
 }
 
 const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
+  const { confirm, dialogProps } = useConfirmDialog();
   // 認証関連（メール不要のユーザーID・パスワード）
   const [adminIdInput, setAdminIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -316,7 +319,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       END_GAME: '🏁 ゲーム終了・結果発表',
     };
 
-    if (!confirm(`フェーズ操作「${actionLabels[action] || action}」を実行しますか？`)) return;
+    const confirmed = await confirm({
+      title: 'フェーズ操作の確認',
+      description: `フェーズ操作「${actionLabels[action] || action}」を実行しますか？`,
+      confirmLabel: '実行する',
+      variant: action === 'END_GAME' ? 'danger' : 'primary',
+    });
+    if (!confirmed) return;
     setIsProcessing(true);
     try {
       const result = await transitionGamePhase({ action, requestId: crypto.randomUUID(), expectedSessionId }, firebaseAdminPhaseGateway);
@@ -334,7 +343,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     if (roleSwapBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!confirm('Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※新・鬼側は30分間の待機状態になります。')) return;
+    const confirmed = await confirm({
+      title: '強制攻守交代の確認',
+      description: 'Team A と Team B の役割（鬼・逃走者）を強制的に入れ替えますか？\n※新・鬼側は30分間の待機状態になります。',
+      confirmLabel: '入れ替える',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
 
     roleSwapBusyRef.current = true;
     setIsProcessing(true);
@@ -358,7 +373,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     if (resumeBusyRef.current.has(user.id)) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!confirm(`${user.name} をすべての待機状態から復帰させますか？`)) return;
+    const confirmed = await confirm({
+      title: 'プレイヤー復帰の確認',
+      description: `${user.name} をすべての待機状態から復帰させますか？`,
+      confirmLabel: '復帰させる',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     resumeBusyRef.current.add(user.id);
     setResumingPlayerIds(new Set(resumeBusyRef.current));
@@ -380,7 +401,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
     const target = scope === 'GLOBAL' ? '全員' : `Team ${scope === 'TEAM_A' ? 'A' : 'B'}`;
-    if (!confirm(`${target}の最新位置を ${searchDuration} 分間、スナップショット公開しますか？`)) return;
+    const confirmed = await confirm({
+      title: '強制位置公開の確認',
+      description: `${target}の最新位置を ${searchDuration} 分間、スナップショット公開しますか？`,
+      confirmLabel: '公開する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     revealBusyRef.current = true;
     setIsProcessing(true);
@@ -414,7 +441,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     const reasonLabels: Record<ScoreAdjustmentReasonCode, string> = {
       CORRECTION: 'スコア訂正', BONUS: '運営ボーナス', PENALTY: '運営ペナルティ', OTHER: 'その他の運営調整',
     };
-    if (!confirm(`Team ${scoreTeam} を ${delta > 0 ? '+' : ''}${delta}pt 補正しますか？\n理由: ${reasonLabels[scoreReasonCode]}`)) return;
+    const confirmed = await confirm({
+      title: 'スコア補正の確認',
+      description: `Team ${scoreTeam} を ${delta > 0 ? '+' : ''}${delta}pt 補正しますか？\n理由: ${reasonLabels[scoreReasonCode]}`,
+      confirmLabel: '補正する',
+      variant: delta < 0 ? 'danger' : 'primary',
+    });
+    if (!confirmed) return;
     const key = `${scoreTeam}:${delta}:${scoreReasonCode}`;
     const requestId = pendingScoreRequestRef.current?.key === key
       ? pendingScoreRequestRef.current.requestId
@@ -476,7 +509,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       toast.error('ミッションを選択してください');
       return;
     }
-    if (!confirm(`Team ${targetTeam} に指定ミッションを配信しますか？`)) return;
+    const confirmed = await confirm({
+      title: 'ミッション手動配信',
+      description: `Team ${targetTeam} に指定ミッションを配信しますか？`,
+      confirmLabel: '配信する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     const target = targetTeam === 'A' ? 'TEAM_A' : 'TEAM_B';
     const key = `manual:${target}:${missionIdToAssign}`;
@@ -503,7 +542,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     if (missionBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
     if (!expectedSessionId) return;
-    if (!confirm('ミッションをランダムに選定して両チームへ配信しますか？')) return;
+    const confirmed = await confirm({
+      title: 'ミッションランダム配信',
+      description: 'ミッションをランダムに選定して両チームへ配信しますか？',
+      confirmLabel: '配信する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
     const key = 'random-assignment';
     missionBusyRef.current = true;
     setIsProcessing(true);
@@ -524,7 +569,14 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   const handleSyncMissionCatalog = async (): Promise<void> => {
     if (missionBusyRef.current || isProcessing) return;
     const expectedSessionId = requireSessionId();
-    if (!expectedSessionId || !confirm('36件の標準ミッションをFirestoreに同期・初期登録しますか？')) return;
+    if (!expectedSessionId) return;
+    const confirmed = await confirm({
+      title: '標準ミッション同期',
+      description: '36件の標準ミッションをFirestoreに同期・初期登録しますか？',
+      confirmLabel: '同期する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
     const key = 'catalog-sync';
     missionBusyRef.current = true;
     setIsProcessing(true);
@@ -557,7 +609,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
 
   // ミッション削除
   const handleDeleteMission = async (mission: Mission): Promise<void> => {
-    if (!confirm(`ミッション「${mission.title}」を削除しますか？`)) return;
+    const confirmed = await confirm({
+      title: 'ミッション削除',
+      description: `ミッション「${mission.title}」を削除しますか？`,
+      confirmLabel: '削除する',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     try {
       await deleteMission(mission.id);
       toast.success('削除しました');
@@ -577,7 +635,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     const targetMission = allMissionsList.find(m => m.id === manualAwardMissionId);
     if (!targetMission) return;
 
-    if (!confirm(`Team ${manualAwardTeam} のミッション「${targetMission.title}」達成を承認し、+${targetMission.points}pt 加算しますか？`)) return;
+    const confirmed = await confirm({
+      title: 'ミッション達成の手動承認',
+      description: `Team ${manualAwardTeam} のミッション「${targetMission.title}」達成を承認し、+${targetMission.points}pt 加算しますか？`,
+      confirmLabel: '承認する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
 
     setIsProcessing(true);
     try {
@@ -672,9 +736,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
       return;
     }
 
-    if (!confirm(`プレイヤー「${targetUser.name}」に${penaltyDurationMinutes}分間のペナルティ（位置常時開示）を発動しますか？`)) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'ペナルティ位置開示の発動',
+      description: `プレイヤー「${targetUser.name}」に${penaltyDurationMinutes}分間のペナルティ（位置常時開示）を発動しますか？`,
+      confirmLabel: '発動する',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
 
     setIsApplyingPenalty(true);
     try {
@@ -700,7 +768,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   // プレイヤーチーム変更
   const handleChangePlayerTeam = async (user: User): Promise<void> => {
     const nextTeam = user.team === 'A' ? 'B' : 'A';
-    if (!confirm(`${user.name} のチームを TEAM ${nextTeam} に変更しますか？`)) return;
+    const confirmed = await confirm({
+      title: 'チーム変更の確認',
+      description: `${user.name} のチームを TEAM ${nextTeam} に変更しますか？`,
+      confirmLabel: '変更する',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
     setModifyingPlayerIds(prev => new Set(prev).add(user.id));
     try {
       await adminChangePlayerTeam(user.id, nextTeam);
@@ -719,7 +793,13 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
 
   // プレイヤー削除
   const handleDeletePlayer = async (user: User): Promise<void> => {
-    if (!confirm(`本当にプレイヤー「${user.name}」を削除しますか？\n（位置情報や参加データも同時に削除されます）`)) return;
+    const confirmed = await confirm({
+      title: 'プレイヤー削除の確認',
+      description: `本当にプレイヤー「${user.name}」を削除しますか？\n（位置情報や参加データも同時に削除されます）`,
+      confirmLabel: '削除する',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
     setModifyingPlayerIds(prev => new Set(prev).add(user.id));
     try {
       await adminDeletePlayer(user.id);
@@ -2097,6 +2177,8 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
           onClose={() => { setIsMissionModalOpen(false); setEditingMission(null); }}
         />
       )}
+
+      <ConfirmDialog {...dialogProps} />
     </div>
   );
 };

@@ -227,6 +227,7 @@ describe('capture result', () => {
     const result = resolveCapture(input);
 
     assert.equal(result.allowed, true);
+    assert.equal(result.nextRevealTime, undefined);
     assert.deepEqual(result.teamRoles, roles); // Roles remain unchanged!
     assert.deepEqual(result.reward, { team: 'A', scoreDelta: CAPTURE_REWARD_POINTS });
     assert.deepEqual(result.playerChanges, [

@@ -37,6 +37,7 @@ import {
   firebasePrivateLocationStore,
 } from './src/infrastructure/firebase/locationStores';
 
+import { DEFAULT_DYNAMIC_RULE_SETTINGS } from './constants';
 import {
   canRevealLocation,
   determineGameWinner,
@@ -115,7 +116,6 @@ const App: React.FC = () => {
   const [isAdminPath, setIsAdminPath] = useState<boolean>(() =>
     typeof window !== 'undefined' && (
       window.location.pathname === '/admin' ||
-      window.location.hash.includes('admin-tk-2026-secret') ||
       window.location.hash.includes('/admin')
     ),
   );
@@ -125,7 +125,6 @@ const App: React.FC = () => {
     const syncPath = () => {
       setIsAdminPath(
         window.location.pathname === '/admin' ||
-        window.location.hash.includes('admin-tk-2026-secret') ||
         window.location.hash.includes('/admin'),
       );
     };
@@ -177,7 +176,7 @@ const App: React.FC = () => {
 
   // 管理者による全体公開、チーム別公開、またはペナルティ公開を検知した場合に自己位置を自動投影
   useEffect(() => {
-    if (!currentUser || isAdmin || !gameConfig.gameSessionId) return;
+    if (!isOnline || !currentUser || isAdmin || !gameConfig.gameSessionId) return;
     if (currentUser.status === 'EMERGENCY' || currentUser.status === 'RETIRED') return;
     if (!canRevealLocation(gameConfig.gameStatus)) return;
     if (!privateLocation || privateLocation.gameSessionId !== gameConfig.gameSessionId) return;
@@ -223,8 +222,10 @@ const App: React.FC = () => {
         (targetUntil - now > maxDurationMs && remainingValidMs > 30 * 60 * 1000);
 
       const hasMoved =
-        Math.abs(existing.latitude - privateLocation.latitude) > 0.0001 ||
-        Math.abs(existing.longitude - privateLocation.longitude) > 0.0001;
+        activeScope === 'PENALTY' && (
+          Math.abs(existing.latitude - privateLocation.latitude) > 0.0001 ||
+          Math.abs(existing.longitude - privateLocation.longitude) > 0.0001
+        );
 
       if (isExpiresAligned && !hasMoved) {
         return;
@@ -241,6 +242,7 @@ const App: React.FC = () => {
       revealScope: activeScope,
     }, firebaseExposedLocationStore);
   }, [
+    isOnline,
     currentUser,
     isAdmin,
     gameConfig.gameSessionId,
@@ -490,9 +492,10 @@ const App: React.FC = () => {
   const handleStartShinkansenWait = useCallback(async (): Promise<void> => {
     if (!currentUser) return;
 
+    const waitMinutes = gameConfig.postShinkansenWaitMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.postShinkansenWaitMinutes;
     const confirmed = await confirm({
       title: '待機開始',
-      description: '新幹線移動（1時間待機）を開始しますか？',
+      description: `新幹線移動（${waitMinutes}分待機）を開始しますか？`,
       confirmLabel: '開始する',
       variant: 'primary',
     });
@@ -509,7 +512,7 @@ const App: React.FC = () => {
       return;
     }
     toast.success('待機モードに入りました。お疲れ様でした。');
-  }, [confirm, currentUser, gameConfig.gameSessionId]);
+  }, [confirm, currentUser, gameConfig.gameSessionId, gameConfig.postShinkansenWaitMinutes]);
 
   const handleResumeWaiting = useCallback(async (): Promise<void> => {
     if (!gameConfig.gameSessionId) return;
@@ -625,10 +628,6 @@ const App: React.FC = () => {
         <div className="flex flex-col h-screen max-w-md mx-auto bg-slate-50 shadow-2xl overflow-hidden relative font-sans">
           <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
             <Routes>
-              <Route
-                path="/admin-tk-2026-secret"
-                element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
-              />
               <Route
                 path="/admin"
                 element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
@@ -863,16 +862,6 @@ const App: React.FC = () => {
                       onComplete={handleScoreUpdate}
                       onExposeLocation={handleUpdateLocation}
                       user={currentUser}
-                      missions={missions}
-                    />
-                  }
-                />
-                <Route
-                  path="/admin-tk-2026-secret"
-                  element={
-                    <AdminView
-                      config={gameConfig}
-                      users={allUsers}
                       missions={missions}
                     />
                   }

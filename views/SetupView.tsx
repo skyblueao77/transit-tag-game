@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { deleteUser } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { toast } from 'sonner';
 import type { User } from '../types';
@@ -8,7 +9,7 @@ import { TEAM_COLORS } from '../constants';
 import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle } from 'lucide-react';
 import { registerWithUserId, signInWithUserId } from '../src/infrastructure/firebase/auth';
 import { createPlayerWithPrivateLocation } from '../src/infrastructure/firebase/playerStore';
-import { db, isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
+import { auth, db, isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
 import { firebasePrivateLocationStore } from '../src/infrastructure/firebase/locationStores';
 
 interface Props {
@@ -73,18 +74,29 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
     }
 
     setIsSubmitting(true);
+    let createdAuthUid: string | null = null;
     try {
-      const id = await registerWithUserId(userId, password);
-
       let activeSessionId = gameSessionId;
       if (!activeSessionId) {
         const configSnap = await getDoc(doc(db, 'game_config', 'current'));
-        activeSessionId = configSnap.data()?.gameSessionId;
+        const configData = configSnap.data();
+        if (
+          typeof configData?.gameSessionId === 'string' &&
+          configData.gameSessionId.trim().length > 0 &&
+          typeof configData?.sessionStartedAt === 'number' &&
+          typeof configData?.sessionSchemaVersion === 'number' &&
+          configData.sessionSchemaVersion >= 2
+        ) {
+          activeSessionId = configData.gameSessionId;
+        }
       }
       if (!activeSessionId) {
         toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
         return;
       }
+
+      const id = await registerWithUserId(userId, password);
+      createdAuthUid = id;
 
       const color: string = team === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
 
@@ -106,8 +118,12 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
         longitude: posToSave.lng,
       }, activeSessionId);
 
+      createdAuthUid = null;
       onComplete(newUser);
     } catch (err: unknown) {
+      if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
+        await deleteUser(auth.currentUser).catch(() => {});
+      }
       console.error('Registration error:', err);
       toast.error(getFriendlyAuthError(err));
     } finally {

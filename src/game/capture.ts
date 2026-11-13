@@ -59,7 +59,7 @@ export interface CaptureSuccess {
   reward: { team: string; scoreDelta: 50 };
   teamRoles: TeamRoles;
   playerChanges: CapturePlayerChange[];
-  nextRevealTime: number;
+  nextRevealTime?: number;
   waitingDuration: number;
   event: { type: 'CAPTURE'; captorId: string; targetId: string };
 }
@@ -134,7 +134,6 @@ export function resolveCapture(input: CaptureInput): CaptureResult {
       reward: { team: validation.captor.team, scoreDelta: CAPTURE_REWARD_POINTS },
       teamRoles: input.teamRoles,
       playerChanges,
-      nextRevealTime: input.now,
       waitingDuration: 0,
       event: {
         type: 'CAPTURE',

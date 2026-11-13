@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { User, PrivateLocation, ExposedLocation, LocationLog, GameConfig, Role, ProtectionZoneType } from '../types';
+import { DEFAULT_DYNAMIC_RULE_SETTINGS } from '../constants';
 import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
 import {
   canUpdatePrivateLocation,
@@ -312,7 +313,7 @@ const MapView: React.FC<Props> = ({
       const oniLock = currentRole === 'ONI' ? remainingSeconds(oniLockTime, now) : 0;
       const nextReveal = remainingSeconds(gameConfig.nextRevealTime, now);
 
-      const shinkansenLimitMinutes = gameConfig.shinkansenMaxMinutes ?? 120;
+      const shinkansenLimitMinutes = gameConfig.shinkansenMaxMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxMinutes;
       let shinkansenRemaining = Infinity;
       if (shinkansenLimitMinutes > 0) {
         const shinkansenLimitMs = shinkansenLimitMinutes * 60 * 1000;
@@ -509,7 +510,7 @@ const MapView: React.FC<Props> = ({
 
   ) : timeLeft.nextReveal > 0 ? (
     <div className="z-[1001] px-4 py-2 bg-indigo-600 text-white text-center text-xs font-black flex items-center justify-center gap-2">
-      <Clock size={14} /> 次の位置公開まで {formatTime(timeLeft.nextReveal)}（開示: {gameConfig.periodicRevealDurationMinutes ?? 5}分間 / 間隔: {gameConfig.periodicRevealIntervalMinutes ?? 15}分）
+      <Clock size={14} /> 次の位置公開まで {formatTime(timeLeft.nextReveal)}（開示: {gameConfig.periodicRevealDurationMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealDurationMinutes}分間 / 間隔: {gameConfig.periodicRevealIntervalMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes}分）
     </div>
 
   ) : gameConfig.isFinalMissionActive ? (
@@ -684,8 +685,8 @@ const MapView: React.FC<Props> = ({
             {currentUser.shinkansenStartTime ? (
               <div className="flex flex-col gap-2 w-full">
                 {(() => {
-                  const maxMinutes = gameConfig.shinkansenMaxMinutes ?? 120;
-                  const maxSegments = gameConfig.shinkansenMaxSegments ?? 0;
+                  const maxMinutes = gameConfig.shinkansenMaxMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxMinutes;
+                  const maxSegments = gameConfig.shinkansenMaxSegments ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxSegments;
                   const isTimeReached = maxMinutes > 0 && timeLeft.shinkansenRemaining <= 0;
                   const isSegmentReached = maxSegments > 0 && (currentUser.shinkansenSegmentCount ?? 0) >= maxSegments;
                   if (!isTimeReached && !isSegmentReached) return null;
@@ -701,9 +702,9 @@ const MapView: React.FC<Props> = ({
                     <div>
                       <div className="text-[10px] font-bold text-slate-400">🚄 新幹線乗車中</div>
                       <div className="text-xs font-black">
-                        残り: <span className="font-mono text-amber-400">{(gameConfig.shinkansenMaxMinutes ?? 120) > 0 ? formatTime(timeLeft.shinkansenRemaining) : '無制限'}</span>
+                        残り: <span className="font-mono text-amber-400">{(gameConfig.shinkansenMaxMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxMinutes) > 0 ? formatTime(timeLeft.shinkansenRemaining) : '無制限'}</span>
                         {' / '}
-                        <span>{currentUser.shinkansenSegmentCount ?? 0} / {(gameConfig.shinkansenMaxSegments ?? 0) > 0 ? `${gameConfig.shinkansenMaxSegments} 区間` : '無制限'}</span>
+                        <span>{currentUser.shinkansenSegmentCount ?? 0} / {(gameConfig.shinkansenMaxSegments ?? DEFAULT_DYNAMIC_RULE_SETTINGS.shinkansenMaxSegments) > 0 ? `${gameConfig.shinkansenMaxSegments} 区間` : '無制限'}</span>
                       </div>
                     </div>
                   </div>
@@ -764,7 +765,7 @@ const MapView: React.FC<Props> = ({
                     disabled={isProcessing || currentUser.status !== 'ACTIVE'}
                     className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm shadow-xl active:scale-95 transition-all"
                   >
-                    下車待機（{gameConfig.postShinkansenWaitMinutes ?? 30}分）開始
+                    下車待機（{gameConfig.postShinkansenWaitMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.postShinkansenWaitMinutes}分）開始
                   </button>
                 </div>
               </div>

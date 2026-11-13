@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { resolveAdminRevealPlan } from '../../src/game/adminReveal.ts';
+import { resolveAdminRevealPlan, resolveAdminRevealSchedule } from '../../src/game/adminReveal.ts';
 import { EMERGENCY_LOCATION_FRESHNESS_MS } from '../../src/game/emergencyLocationProjection.ts';
 
 const now = 1_800_000_000_000;
@@ -127,5 +127,63 @@ describe('Admin Reveal Core', () => {
     const before = structuredClone(input);
     resolveAdminRevealPlan(input);
     assert.deepEqual(input, before);
+  });
+
+  test('resolveAdminRevealSchedule resolves schedule without requiring private locations', () => {
+    const result = resolveAdminRevealSchedule({
+      scope: 'GLOBAL',
+      durationMinutes: 5,
+      roster: [
+        player('a', 'A', 'ACTIVE'),
+        player('b', 'B', 'WAITING'),
+        player('em', 'A', 'EMERGENCY'),
+        player('ret', 'B', 'RETIRED'),
+        player('admin', 'ADMIN', 'ACTIVE'),
+      ],
+      now,
+    });
+    assert.deepEqual(result, {
+      allowed: true,
+      scope: 'GLOBAL',
+      audience: 'AUTHENTICATED_PARTICIPANTS_AND_ADMIN',
+      configField: 'locationRevealUntil',
+      durationMilliseconds: 300_000,
+      expiresAt: now + 300_000,
+      targetPlayerIds: ['a', 'b'],
+      skippedPlayerIds: ['em', 'ret'],
+    });
+  });
+
+  test('resolveAdminRevealSchedule scopes TEAM_A / TEAM_B and rejects invalid inputs', () => {
+    const teamA = resolveAdminRevealSchedule({
+      scope: 'TEAM_A',
+      durationMinutes: 3,
+      roster: [player('a', 'A'), player('b', 'B')],
+      now,
+    });
+    assert.equal(teamA.allowed, true);
+    assert.equal(teamA.configField, 'teamARevealUntil');
+    assert.deepEqual(teamA.targetPlayerIds, ['a']);
+
+    assert.deepEqual(resolveAdminRevealSchedule({
+      scope: 'GLOBAL',
+      durationMinutes: 0,
+      roster: [player('a')],
+      now,
+    }), { allowed: false, reason: 'INVALID_DURATION' });
+
+    assert.deepEqual(resolveAdminRevealSchedule({
+      scope: 'ALL',
+      durationMinutes: 5,
+      roster: [player('a')],
+      now,
+    }), { allowed: false, reason: 'INVALID_SCOPE' });
+
+    assert.deepEqual(resolveAdminRevealSchedule({
+      scope: 'GLOBAL',
+      durationMinutes: 5,
+      roster: [player('em', 'A', 'EMERGENCY')],
+      now,
+    }), { allowed: false, reason: 'ZERO_ELIGIBLE_PLAYERS' });
   });
 });
