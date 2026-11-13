@@ -67,11 +67,11 @@ const MapRunnerControls: React.FC<MapRunnerControlsProps> = ({
   };
 
   return (
-    <div className="w-full max-w-sm flex flex-col items-center gap-2">
+    <div className="w-full max-w-sm sm:max-w-md flex flex-col items-center gap-2">
       {/* 特例保護エリア切り替えセレクター */}
-      <div className="w-full flex items-center justify-between gap-1.5 bg-white/95 backdrop-blur-md px-3 py-2 rounded-2xl border border-slate-200 shadow-xl">
+      <div className="w-full flex flex-wrap items-center justify-between gap-1.5 bg-white/95 backdrop-blur-md px-3 py-2 rounded-2xl border border-slate-200 shadow-xl">
         <span className="text-[10px] font-black text-slate-500 shrink-0">特例保護:</span>
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           <button
             type="button"
             disabled={isProcessing || !isRunnerReady}
@@ -119,10 +119,10 @@ const MapRunnerControls: React.FC<MapRunnerControlsProps> = ({
               ⚠️ 新幹線利用上限（{maxMinutes > 0 ? `最長${maxMinutes}分` : '時間無制限'}{maxSegments > 0 ? ` / 最大${maxSegments}区間` : ''}）に達しました！速やかに下車してください。
             </div>
           )}
-          <div className="bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl flex items-center justify-between shadow-xl border border-slate-700">
-            <div className="flex items-center gap-2">
-              <Train size={20} className="text-blue-400 animate-pulse" />
-              <div>
+          <div className="bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl flex items-center justify-between gap-2 shadow-xl border border-slate-700">
+            <div className="flex items-center gap-2 min-w-0">
+              <Train size={20} className="text-blue-400 animate-pulse shrink-0" />
+              <div className="min-w-0">
                 <div className="text-[10px] font-bold text-slate-400">🚄 新幹線乗車中</div>
                 <div className="text-xs font-black">
                   残り: <span className="font-mono text-amber-400">{maxMinutes > 0 ? formatTime(timeLeft.shinkansenRemaining) : '無制限'}</span>
@@ -131,7 +131,7 @@ const MapRunnerControls: React.FC<MapRunnerControlsProps> = ({
                 </div>
               </div>
             </div>
-            <div className="flex gap-1.5">
+            <div className="flex gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => { void handleAction(onIncrementShinkansenSegment); }}
@@ -153,7 +153,7 @@ const MapRunnerControls: React.FC<MapRunnerControlsProps> = ({
               )}
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => { void handleAction(onActivateInvincibility, true); }}
@@ -173,7 +173,7 @@ const MapRunnerControls: React.FC<MapRunnerControlsProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex gap-2 w-full justify-center">
+        <div className="flex flex-wrap gap-2 w-full justify-center">
           <button
             type="button"
             onClick={() => { void handleAction(onActivateInvincibility, true); }}

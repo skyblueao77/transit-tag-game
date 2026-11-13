@@ -31,9 +31,10 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({
   }, [initialSetupMode]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 p-4 font-sans text-white">
+    <div className="flex flex-col items-center min-h-[100dvh] bg-slate-900 p-4 py-8 font-sans text-white">
+      <div className="w-full max-w-md my-auto">
       {isFirebaseMisconfigured && (
-        <div className="w-full max-w-sm mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
+        <div className="w-full mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
           <AlertTriangle size={20} className="shrink-0 text-amber-300 mt-0.5" />
           <div>
             <div className="font-black text-amber-200 mb-0.5">Firebase環境設定エラー</div>
@@ -42,7 +43,7 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({
         </div>
       )}
 
-      <div className="w-full max-w-sm bg-slate-800 p-8 rounded-3xl text-center shadow-2xl border border-slate-700 relative overflow-hidden">
+      <div className="w-full bg-slate-800 p-8 rounded-3xl text-center shadow-2xl border border-slate-700 relative overflow-hidden">
         <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-blue-500/30">
           <Lock size={32} className="text-blue-400" />
         </div>
@@ -219,6 +220,7 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({
             </div>
           </form>
         )}
+      </div>
       </div>
     </div>
   );

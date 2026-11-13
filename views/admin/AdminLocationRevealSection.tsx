@@ -88,11 +88,11 @@ const AdminLocationRevealSection: React.FC<AdminLocationRevealSectionProps> = ({
           <p className="text-[10px] text-amber-100 mb-2 leading-relaxed">
             ミッション不参加や禁止交通機関利用などの違反者に対して、指定時間位置情報を常時開示します。
           </p>
-          <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
             <select
               value={penaltyTargetPlayerId}
               onChange={e => onChangePenaltyTargetPlayerId(e.target.value)}
-              className="flex-1 bg-white text-slate-800 text-xs font-bold p-2.5 rounded-xl border border-amber-300"
+              className="flex-1 min-w-[180px] bg-white text-slate-800 text-xs font-bold p-2.5 rounded-xl border border-amber-300"
             >
               <option value="">対象プレイヤーを選択...</option>
               {participants.map(u => {

@@ -9,8 +9,8 @@ interface SafetyActionDialogProps {
 }
 
 const SafetyActionDialog: React.FC<SafetyActionDialogProps> = ({ busy, onClose, onChoose }) => (
-  <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-950/80 p-5" role="dialog" aria-modal="true" aria-label="Safety Action">
-    <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+  <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-950/80 p-5 overflow-y-auto" role="dialog" aria-modal="true" aria-label="Safety Action">
+    <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-black text-slate-900">緊急連絡 / リタイア</h2>
         <button type="button" onClick={onClose} disabled={busy} aria-label="閉じる" className="rounded-lg p-2 text-slate-500 disabled:opacity-50">

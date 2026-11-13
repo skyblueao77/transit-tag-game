@@ -114,7 +114,7 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
       <p className="mb-4 text-xs text-slate-600">
         SOS時の正確な位置です。位置更新から2分で表示期限が切れます。
       </p>
-      <div ref={containerRef} className="h-72 w-full overflow-hidden rounded-2xl bg-slate-100" />
+      <div ref={containerRef} className="h-72 lg:h-96 w-full overflow-hidden rounded-2xl bg-slate-100" />
       {activeProjections.length === 0 && (
         <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">有効なEmergency位置はありません。</p>
       )}

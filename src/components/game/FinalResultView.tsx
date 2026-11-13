@@ -29,12 +29,12 @@ const FinalResultView: React.FC<FinalResultViewProps> = ({
   onChooseSafetyAction,
   onSignOutAndReload,
 }) => (
-  <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
+  <div className="min-h-[100dvh] bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
     <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
     <h1 className="text-4xl font-black italic mb-2">FINAL RESULT</h1>
     <p className="text-slate-400 font-bold mb-12 uppercase tracking-widest">全行程終了！お疲れ様でした</p>
 
-    <div className="w-full max-w-md bg-slate-800 rounded-3xl p-8 border-2 border-slate-700 shadow-2xl mb-8">
+    <div className="w-full max-w-2xl bg-slate-800 rounded-3xl p-8 border-2 border-slate-700 shadow-2xl mb-8">
       <div className="text-center mb-8">
         <div className="text-xs font-black text-slate-500 uppercase mb-2">Winner</div>
         <div className={`text-6xl font-black ${winner === 'A' ? 'text-red-500' : winner === 'B' ? 'text-blue-500' : 'text-white'}`}>
@@ -53,7 +53,7 @@ const FinalResultView: React.FC<FinalResultViewProps> = ({
       </div>
     </div>
 
-    <div className="w-full max-w-md bg-slate-800/50 rounded-3xl p-6 border border-slate-700">
+    <div className="w-full max-w-2xl bg-slate-800/50 rounded-3xl p-6 border border-slate-700">
       <h3 className="flex items-center gap-2 font-black text-slate-400 mb-4 uppercase tracking-widest text-sm">
         <History size={18} /> Game History
       </h3>
