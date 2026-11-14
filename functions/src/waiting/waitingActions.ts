@@ -4,6 +4,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { CALLABLE_OPTIONS } from '../shared/callableOptions';
 import {
   processWaitingLifecycle,
   resumeWaitingForPlayer,
@@ -81,7 +82,7 @@ function expectedSessionRequest(data: unknown): unknown {
 }
 
 export const startWaiting = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   async request => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication is required.', {
@@ -105,7 +106,7 @@ export const startWaiting = onCall(
 );
 
 export const resumeWaiting = onCall(
-  { region: 'asia-northeast1' },
+  CALLABLE_OPTIONS,
   async request => {
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication is required.', {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const documents = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
@@ -81,7 +82,7 @@ async function makePlayer(team, status = 'ACTIVE') {
 
 async function call(name, data, token) {
   const response = await fetch(`${functionsUrl}/${name}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...APP_CHECK_HEADERS, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ data }),
   });
   return { status: response.status, body: await response.json() };

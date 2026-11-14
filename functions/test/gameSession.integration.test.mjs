@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, test } from 'node:test';
+import { APP_CHECK_HEADERS } from './helpers/appCheckHeader.mjs';
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'demo-no-project';
 const firestoreBase = `http://127.0.0.1:8080/v1/projects/${projectId}/databases/(default)/documents`;
@@ -82,7 +83,7 @@ function value(document, name) {
 }
 
 async function call(token, requestId) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', ...APP_CHECK_HEADERS };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(callableUrl, {
     method: 'POST',

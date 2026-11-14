@@ -45,7 +45,21 @@ jobs:
         run: npm run test:integration
 
       - name: Build production bundle
+        env:
+          VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: ${{ vars.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY || secrets.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY }}
+          VITE_APPCHECK_DEBUG_TOKEN: ""
         run: npm run build
+
+      - name: Verify production bundle excludes debug token and secret keys
+        run: |
+          if grep -rnE "VITE_APPCHECK_DEBUG_TOKEN|RECAPTCHA_SECRET_KEY" dist/; then
+            echo "Error: Debug token env or secret key reference found in production bundle!"
+            exit 1
+          fi
+          if grep -rn "FIREBASE_APPCHECK_DEBUG_TOKEN" dist/assets/index-*.js; then
+            echo "Error: App Check debug token initialization found in app bundle!"
+            exit 1
+          fi
 
       - name: Audit production dependencies
         run: npm audit --omit=dev

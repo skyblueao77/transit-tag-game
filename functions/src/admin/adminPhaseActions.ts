@@ -3,6 +3,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/logger';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { CALLABLE_OPTIONS } from '../shared/callableOptions';
 import { AdminPhaseServiceError, transitionGamePhaseForAdmin } from './adminPhaseService';
 import type { AdminPhaseStore, AdminPhaseTransaction, AdminPhaseReceipt } from './adminPhaseService';
 
@@ -21,7 +22,7 @@ function code(reason: string): HttpsError['code'] { switch (reason) {
   case 'UNAUTHENTICATED': return 'unauthenticated'; case 'PERMISSION_DENIED': return 'permission-denied'; case 'INVALID_ARGUMENT': return 'invalid-argument'; case 'SESSION_CHANGED': return 'failed-precondition';
   case 'CONFIG_NOT_FOUND': case 'FINAL_MISSION_NOT_FOUND': return 'not-found'; case 'INVALID_CONFIG': case 'TRANSITION_NOT_ALLOWED': return 'failed-precondition'; default: return 'internal';
 } }
-export const transitionGamePhase = onCall({ region: 'asia-northeast1' }, async request => {
+export const transitionGamePhase = onCall(CALLABLE_OPTIONS, async request => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Authentication is required.', { reason: 'UNAUTHENTICATED' });
   try { return await transitionGamePhaseForAdmin(request.auth.uid, request.data, store, { now: Date.now, random: Math.random, createId: randomUUID }); }
   catch (error) {

@@ -169,3 +169,12 @@ Repositoryから確認できたdeploy command（いずれも未実行）:
 - Browser offline/reconnect、実HTTP response-loss、staging Trigger latency/smoke、rollback rehearsalは未実施。Emergency Projectionは運営向けlocation-sharing aidであり、即時deliveryやemergency serviceへの通知を保証しない。
 
 **Automated release hardening: CONDITIONAL PASS. Production rollout: NO-GO.** General release前にstaging project smokeと実deployed Trigger latency測定、browser offline/reconnect、response-loss replay、rollback rehearsalを完了する。
+
+## Firebase App Check (reCAPTCHA Enterprise) 手動コンソール設定チェックリスト
+
+公開リポジトリ運用に伴い、ボット対策は独自シークレットキー検証を排し **Firebase App Check（reCAPTCHA Enterprise）** および全 `onCall` Functions の `enforceAppCheck: true` に一本化している。デプロイ前に以下を手動確認すること：
+
+- [ ] **reCAPTCHA Enterprise Web キー（Google Cloud Console）**: Fraud Defense / reCAPTCHA Enterprise で Web キーを作成し、許可ドメインに**本番ドメインのみ**を設定済み（`localhost` は絶対に追加しない）。公開サイトキーを GitHub Actions の `VITE_RECAPTCHA_ENTERPRISE_SITE_KEY`（`vars` または `secrets`）に設定し、`VITE_APPCHECK_DEBUG_TOKEN` が本番ビルドに設定されていないこと。
+- [ ] **Firebase Web API キー制限（Google Cloud Console）**: 「API とサービス > 認証情報」でブラウザ用 API キーに **HTTP リファラー制限**（本番ドメインのみ）を設定済み。
+- [ ] **App Check 登録および強制（Firebase Console）**: Firebase Console > App Check に reCAPTCHA Enterprise サイトキーを登録し、メトリクスで正当なリクエストの通過を確認後、**Cloud Firestore / Cloud Functions / Firebase Authentication** の強制（Enforcement）を有効化済み。
+- [ ] **ローカル開発デバッグトークン手順**: ローカル開発時は `.env.local` に `VITE_APPCHECK_DEBUG_TOKEN=true` を設定し、ブラウザコンソールに出力されるデバッグトークンを Firebase Console の「デバッグ トークンを管理」に登録して動作確認すること。
