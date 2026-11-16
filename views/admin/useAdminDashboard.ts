@@ -738,6 +738,8 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   };
 
   const handleChangePlayerTeam = async (user: User): Promise<void> => {
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
     const nextTeam = user.team === 'A' ? 'B' : 'A';
     const nextRole = getRoleForTeam(nextTeam, config);
     const confirmed = await confirm({
@@ -749,7 +751,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     if (!confirmed) return;
     setModifyingPlayerIds(prev => new Set(prev).add(user.id));
     try {
-      await adminChangePlayerTeam(user.id, nextTeam, nextRole);
+      await adminChangePlayerTeam(user.id, nextTeam, nextRole, expectedSessionId);
       toast.success(`${user.name} を TEAM ${nextTeam} に変更しました`);
     } catch (err) {
       console.error('Change team error:', err);
