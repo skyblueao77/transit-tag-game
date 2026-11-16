@@ -2,9 +2,14 @@ const MAX_PENDING_WRITE_AGE_MS = 30_000;
 
 let serverTimeOffsetMs = 0;
 let pendingWriteStartedClientMs: number | null = null;
+let serverClockCalibrated = false;
 
 export function getServerTimeOffsetMs(): number {
   return serverTimeOffsetMs;
+}
+
+export function isServerClockCalibrated(): boolean {
+  return serverClockCalibrated;
 }
 
 export function getServerNowMs(clientNowMs = Date.now()): number {
@@ -43,14 +48,17 @@ export function recordConfirmedServerTimestamp(
   const midpointClientMs = Math.round((pendingWriteStartedClientMs + receivedClientMs) / 2);
   serverTimeOffsetMs = serverTimestampMs - midpointClientMs;
   pendingWriteStartedClientMs = null;
+  serverClockCalibrated = true;
   return true;
 }
 
 export function setServerTimeOffsetMsForTest(offsetMs: number): void {
   serverTimeOffsetMs = Number.isFinite(offsetMs) ? offsetMs : 0;
+  serverClockCalibrated = true;
 }
 
 export function resetServerClockForTest(): void {
   serverTimeOffsetMs = 0;
   pendingWriteStartedClientMs = null;
+  serverClockCalibrated = false;
 }

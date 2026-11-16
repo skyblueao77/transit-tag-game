@@ -1,7 +1,7 @@
 import type React from 'react';
 import { useEffect, useRef, useState, useMemo } from 'react';
 import type { User, PrivateLocation, ExposedLocation, GameConfig, Role, ProtectionZoneType } from '../types';
-import type { Coordinates, UpdatePrivateLocationResult } from '../src/application';
+import type { Coordinates } from '../src/application';
 import {
   computeTeammateSplitMetrics,
   findCandidateTransitSuggestions,
@@ -39,7 +39,6 @@ interface Props {
   privateLocation: PrivateLocation | null;
   exposedLocations: Record<string, ExposedLocation>;
   gameConfig: GameConfig;
-  onUpdatePrivateLocation: (input: Coordinates & { playerId: string; expectedSessionId: string }) => Promise<UpdatePrivateLocationResult>;
   onCapture: (runnerId: string) => Promise<void>;
   onActivateInvincibility: () => Promise<void>;
   onStartShinkansenWait: () => Promise<void>;
@@ -56,7 +55,6 @@ const MapView: React.FC<Props> = ({
   privateLocation,
   exposedLocations,
   gameConfig,
-  onUpdatePrivateLocation,
   onCapture,
   onActivateInvincibility,
   onStartShinkansenWait,
@@ -256,7 +254,7 @@ const MapView: React.FC<Props> = ({
     const currentMap = mapRef.current;
     if (!currentMap || isOniLocked) return;
 
-    const now = nowMs;
+    const now = epoch5sMs;
     const visibleIds = new Set<string>();
 
     users.forEach(user => {
@@ -355,6 +353,7 @@ const MapView: React.FC<Props> = ({
     gameConfig.teamARevealUntil,
     gameConfig.teamBRevealUntil,
     gameConfig.gameStatus,
+    epoch5sMs,
   ]);
 
   if (isOniLocked) {

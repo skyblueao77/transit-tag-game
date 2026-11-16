@@ -160,7 +160,11 @@ describe('Admin Game State service', () => {
       assert.equal(state.users.get(id).shinkansenStartTime, null);
       assert.equal(state.users.get(id).invincibleUntil, 0);
     }
-    for (const id of ['emergency', 'retired', 'captured', 'admin-user']) {
+    assert.deepEqual(state.users.get('captured'), {
+      ...before.find(([id]) => id === 'captured')[1],
+      status: 'ACTIVE', waitingUntil: 0, shinkansenStartTime: null,
+    });
+    for (const id of ['emergency', 'retired', 'admin-user']) {
       assert.deepEqual(state.users.get(id), before.find(([beforeId]) => beforeId === id)[1]);
     }
     assert.equal(state.users.get('a-active').invincibleCards, 2);

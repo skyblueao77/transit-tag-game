@@ -6,9 +6,22 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, serverTimestamp, writeBatch, type Unsubscribe } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  getDocFromServer,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+  writeBatch,
+  type Unsubscribe,
+} from 'firebase/firestore';
 import { auth, db } from './firebaseClient';
-import { markServerTimestampWriteSent } from './serverClock';
+import {
+  isServerClockCalibrated,
+  markServerTimestampWriteSent,
+  recordConfirmedServerTimestamp,
+} from './serverClock';
 
 /**
  * 初回管理者が既に初期化済みかどうかを確認します。
@@ -169,6 +182,27 @@ export function subscribeCurrentAuthUserAdmin(
       onError?.(error);
     },
   );
+}
+
+export async function calibrateAdminServerClock(): Promise<void> {
+  if (isServerClockCalibrated()) return;
+  const uid = getCurrentAuthUserId();
+  if (!uid) return;
+  try {
+    const probeRef = doc(db, 'admins', uid, 'clockSync', 'probe');
+    markServerTimestampWriteSent();
+    await setDoc(probeRef, { updatedAt: serverTimestamp() });
+    const snap = await getDocFromServer(probeRef);
+    const updatedAt = snap.data()?.updatedAt;
+    if (updatedAt && typeof updatedAt === 'object' && 'toMillis' in updatedAt && typeof updatedAt.toMillis === 'function') {
+      recordConfirmedServerTimestamp(updatedAt.toMillis(), {
+        hasPendingWrites: snap.metadata.hasPendingWrites,
+        fromCache: snap.metadata.fromCache,
+      });
+    }
+  } catch (error) {
+    console.warn('Admin server clock calibration skipped:', error);
+  }
 }
 
 export async function signOutCurrentUser(): Promise<void> {

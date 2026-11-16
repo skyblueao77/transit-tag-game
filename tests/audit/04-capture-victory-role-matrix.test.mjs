@@ -9,7 +9,6 @@ import {
   setServerTimeOffsetMsForTest,
 } from '../../src/infrastructure/firebase/serverClock.ts';
 import {
-  RulePermissionError,
   createActiveParticipantDb,
   incrementSentinel,
 } from './helpers/rulesContractHarness.mjs';

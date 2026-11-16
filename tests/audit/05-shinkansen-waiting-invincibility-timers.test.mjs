@@ -125,7 +125,7 @@ describe('Audit 05: Shinkansen Tracker, Waiting Auto-Resume, Invincibility & Map
     }, RulePermissionError);
 
     assert.ok(
-      waitingAutoResumeSource.includes('serverTimeOffset'),
+      waitingAutoResumeSource.includes('getServerNowMs()'),
       '[AUDIT-BUG] useWaitingAutoResume uses raw client Date.now() instead of server-synced clock offset, so any client clock even 1s ahead triggers PERMISSION_DENIED every 5s when waiting expires!',
     );
   });

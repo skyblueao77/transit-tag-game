@@ -745,7 +745,6 @@ const App: React.FC = () => {
                       privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
                       exposedLocations={exposedLocations}
                       gameConfig={gameConfig}
-                      onUpdatePrivateLocation={handleUpdatePrivateLocation}
                       onCapture={handleCapture}
                       onActivateInvincibility={handleActivateInvincibility}
                       onStartShinkansenWait={handleStartShinkansenWait}
