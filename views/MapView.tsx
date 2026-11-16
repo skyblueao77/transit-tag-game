@@ -135,7 +135,17 @@ const MapView: React.FC<Props> = ({
   const isAutoUpdatingRef = useRef(false);
 
   useEffect(() => {
-    if (!isOnline || !isAutoUpdateEnabled || !transitSuggestion || !onUpdateLastStation || isAutoUpdatingRef.current) {
+    if (
+      !isOnline
+      || !isAutoUpdateEnabled
+      || !transitSuggestion
+      || !onUpdateLastStation
+      || currentUser.status === 'RETIRED'
+    ) {
+      stableSuggestionRef.current = { text: '', count: 0 };
+      return;
+    }
+    if (isAutoUpdatingRef.current) {
       return;
     }
 
@@ -168,7 +178,7 @@ const MapView: React.FC<Props> = ({
           isAutoUpdatingRef.current = false;
         });
     }
-  }, [isOnline, transitSuggestion, isAutoUpdateEnabled, currentUser.lastStation, onUpdateLastStation]);
+  }, [isOnline, transitSuggestion, isAutoUpdateEnabled, currentUser.lastStation, currentUser.status, onUpdateLastStation]);
 
   const handleConfirmStation = async (stationName: string) => {
     if (!onUpdateLastStation) return;

@@ -25,6 +25,7 @@ export function useGameSubscriptions(
   onBroadcast?: (message: string) => void,
   onConfigError?: (error: Error) => void,
   canSubscribeParticipants: boolean = Boolean(authUserId),
+  onSubscriptionError?: (source: 'players' | 'missions' | 'exposedLocations', error: Error) => void,
 ): UseGameSubscriptionsResult {
   const [rawUsers, setRawUsers] = useState<User[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -63,9 +64,12 @@ export function useGameSubscriptions(
     }
     return subscribePlayers(
       setRawUsers,
-      error => console.error('Error fetching users data:', error),
+      error => {
+        console.error('Error fetching users data:', error);
+        onSubscriptionError?.('players', error);
+      },
     );
-  }, [authUserId, canSubscribeParticipants]);
+  }, [authUserId, canSubscribeParticipants, onSubscriptionError]);
 
   useEffect(() => {
     if (!authUserId || !gameConfig.gameSessionId) {
@@ -92,7 +96,10 @@ export function useGameSubscriptions(
     const subscriber = createExposedLocationsSubscriber(
       gameConfig.gameSessionId ?? '',
       setExposedLocations,
-      error => console.error('Error fetching exposed locations:', error),
+      error => {
+        console.error('Error fetching exposed locations:', error);
+        onSubscriptionError?.('exposedLocations', error);
+      },
     );
     exposedSubscriberRef.current = subscriber;
     subscriber.setPlayerIds(exposedPlayerIdsRef.current);
@@ -102,7 +109,7 @@ export function useGameSubscriptions(
       }
       subscriber.dispose();
     };
-  }, [authUserId, gameConfig.gameSessionId]);
+  }, [authUserId, gameConfig.gameSessionId, onSubscriptionError]);
 
   useEffect(() => {
     if (!authUserId) return;
@@ -114,12 +121,18 @@ export function useGameSubscriptions(
   }, [authUserId, exposedPlayerIdsKey]);
 
   useEffect(() => {
-    if (!authUserId) return;
+    if (!authUserId) {
+      setMissions([]);
+      return;
+    }
     return subscribeMissions(
       setMissions,
-      error => console.error('Error fetching missions data:', error),
+      error => {
+        console.error('Error fetching missions data:', error);
+        onSubscriptionError?.('missions', error);
+      },
     );
-  }, [authUserId]);
+  }, [authUserId, onSubscriptionError]);
 
   useEffect(() => {
     if (!authUserId) {

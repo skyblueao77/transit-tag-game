@@ -10,6 +10,9 @@ import {
 } from '../../src/game/waitingLifecycle.ts';
 import {
   getServerNowMs,
+  isServerClockCalibrated,
+  markServerTimestampWriteSent,
+  recordConfirmedServerTimestamp,
   resetServerClockForTest,
   setServerTimeOffsetMsForTest,
 } from '../../src/infrastructure/firebase/serverClock.ts';
@@ -284,5 +287,28 @@ describe('Audit 05: Shinkansen Tracker, Waiting Auto-Resume, Invincibility & Map
       { type: 'update', path: 'game_config/current', data: { logs: [{ id: 'i3', timestamp: db.serverNowMs, message: 'Inv 3', type: 'SYSTEM' }, ...db.rawGet('game_config/current').logs] } },
     ], rAuth);
     assert.equal(db.rawGet('users/r1').invincibleCards, 0);
+  });
+
+  test('serverClock calibration tracks confirmed server timestamps and resets cleanly', () => {
+    resetServerClockForTest();
+    try {
+      assert.equal(isServerClockCalibrated(), false);
+      const sentAt = 1_750_000_000_000;
+      markServerTimestampWriteSent(sentAt);
+      const recorded = recordConfirmedServerTimestamp(sentAt + 5_000, { clientNowMs: sentAt + 100 });
+      assert.equal(recorded, true);
+      assert.equal(isServerClockCalibrated(), true);
+      assert.ok(getServerNowMs(sentAt + 100) > sentAt + 4_000);
+
+      resetServerClockForTest();
+      assert.equal(isServerClockCalibrated(), false);
+    } finally {
+      resetServerClockForTest();
+    }
+  });
+
+  test('useWaitingAutoResume bounds retries even when resumeWaiting returns ok: true, resumed: false', () => {
+    assert.match(waitingAutoResumeSource, /MAX_AUTO_RESUME_ATTEMPTS/);
+    assert.match(waitingAutoResumeSource, /!result\.resumed && attemptCount < MAX_AUTO_RESUME_ATTEMPTS/);
   });
 });
