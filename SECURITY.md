@@ -6,8 +6,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.1.x   | :white_check_mark: |
-| < 1.1   | :x:                |
+| 1.2.x   | :white_check_mark: |
+| < 1.2   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -29,7 +29,9 @@
 
 ## 公開リポジトリ運用・Firebase App Check セキュリティ設定
 
-本リポジトリは公開リポジトリであるため、reCAPTCHA のシークレットキーや実環境の認証情報をリポジトリおよび `.env` に保持しません。ボット対策・不正リクエスト防止は **Firebase App Check（reCAPTCHA Enterprise プロバイダ）** と Cloud Functions 側の `enforceAppCheck: true` に一本化しています。
+本リポジトリは公開リポジトリであるため、reCAPTCHA のシークレットキーや実環境の認証情報をリポジトリおよび `.env` に保持しません。ボット対策・不正リクエスト防止は **Firebase App Check（reCAPTCHA Enterprise プロバイダ）** に一本化しています。
+
+> **アーキテクチャ補足**: v1.2 以降の標準本番構成は **Firebase Spark プラン（Cloud Functions 未使用・クライアントトランザクション + `firestore.rules` 強制）** です。`functions/` 配下のコードは互換・参照用パッケージとして保持されており、Cloud Functions をデプロイする構成（Blaze プラン）では各 `onCall` に設定済みの `enforceAppCheck: true` が有効になります。
 
 本番環境およびローカル開発環境を運用する際は、以下の手動コンソール設定を必ず実施してください：
 

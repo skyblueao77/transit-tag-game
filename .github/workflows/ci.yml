@@ -21,13 +21,15 @@ jobs:
           cache: npm
 
       - name: Setup Java (for Firebase emulator)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm --prefix functions ci
 
       - name: Lint and format check
         run: npm run lint
@@ -37,6 +39,12 @@ jobs:
 
       - name: Run unit & integration tests
         run: npm test
+
+      - name: Run audit regression tests
+        run: npm run test:audit
+
+      - name: Run functions unit tests
+        run: npm --prefix functions run test:unit
 
       - name: Run Firestore security rules tests
         run: npm run test:rules
@@ -62,4 +70,6 @@ jobs:
           fi
 
       - name: Audit production dependencies
-        run: npm audit --omit=dev
+        run: |
+          npm audit --omit=dev
+          npm --prefix functions audit --omit=dev
