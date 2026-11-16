@@ -650,19 +650,11 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
 
       const remainingBudget = RESET_MAX_ESTIMATED_WRITES - coreWrites;
-      let mainBatchCompletions = completionsSnap.docs;
-      if (completionsSnap.docs.length > remainingBudget) {
-        const overflowCount = completionsSnap.docs.length - remainingBudget;
-        const overflowDocs = completionsSnap.docs.slice(0, overflowCount);
-        mainBatchCompletions = completionsSnap.docs.slice(overflowCount);
-        for (let i = 0; i < overflowDocs.length; i += 400) {
-          const chunkBatch = writeBatch(db);
-          for (const d of overflowDocs.slice(i, i + 400)) {
-            chunkBatch.delete(doc(db, 'missionCompletions', d.id));
-          }
-          await chunkBatch.commit();
-        }
-      }
+      const overflowCount = completionsSnap.docs.length > remainingBudget
+        ? completionsSnap.docs.length - remainingBudget
+        : 0;
+      const overflowDocs = overflowCount > 0 ? completionsSnap.docs.slice(0, overflowCount) : [];
+      const mainBatchCompletions = overflowCount > 0 ? completionsSnap.docs.slice(overflowCount) : completionsSnap.docs;
 
       const batch = writeBatch(db);
 
@@ -747,6 +739,16 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       });
 
       await batch.commit();
+
+      if (overflowDocs.length > 0) {
+        for (let i = 0; i < overflowDocs.length; i += 400) {
+          const chunkBatch = writeBatch(db);
+          for (const d of overflowDocs.slice(i, i + 400)) {
+            chunkBatch.delete(doc(db, 'missionCompletions', d.id));
+          }
+          await chunkBatch.commit();
+        }
+      }
 
       return {
         ok: true,

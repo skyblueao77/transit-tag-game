@@ -41,6 +41,9 @@ export async function createOrUpdateMission(mission: Mission): Promise<void> {
     points: Math.max(1, Math.min(100, Math.round(mission.points))),
     type: mission.type,
   };
+  if (typeof mission.isFinalMission === 'boolean') {
+    data.isFinalMission = mission.isFinalMission;
+  }
   if (typeof mission.lat === 'number' && Number.isFinite(mission.lat) && mission.lat >= -90 && mission.lat <= 90) {
     data.lat = mission.lat;
   }

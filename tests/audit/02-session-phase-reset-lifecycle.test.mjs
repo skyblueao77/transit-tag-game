@@ -303,4 +303,15 @@ describe('Audit 02: Session Initialization, Phase Transition Matrix & Master Res
     assert.equal(res.allowed, false);
     assert.equal(res.reason, 'ONI_INITIAL_LOCK');
   });
+
+  test('executeGameReset deletes overflow missionCompletions only after main batch commit succeeds', () => {
+    const mainCommitIndex = adminSessionGatewaySource.indexOf('await batch.commit();');
+    const overflowCommitIndex = adminSessionGatewaySource.indexOf('await chunkBatch.commit();');
+    assert.ok(mainCommitIndex > 0, 'main batch.commit() must exist');
+    assert.ok(overflowCommitIndex > 0, 'overflow chunkBatch.commit() must exist');
+    assert.ok(
+      overflowCommitIndex > mainCommitIndex,
+      'overflow missionCompletions must not be deleted before the main atomic reset batch commits',
+    );
+  });
 });

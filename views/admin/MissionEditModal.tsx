@@ -28,7 +28,10 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
       points: Number(points) || 20,
       type,
       area: area || 'ALL',
-      region: 'ALL',
+      region: initialMission?.region || 'ALL',
+      ...(typeof initialMission?.lat === 'number' ? { lat: initialMission.lat } : {}),
+      ...(typeof initialMission?.lng === 'number' ? { lng: initialMission.lng } : {}),
+      ...(initialMission?.isFinalMission !== undefined ? { isFinalMission: initialMission.isFinalMission } : {}),
     };
     try {
       await onSave(mission);

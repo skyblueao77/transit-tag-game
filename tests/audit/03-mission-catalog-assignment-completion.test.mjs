@@ -325,4 +325,25 @@ describe('Audit 03: Mission Catalog Sync, Assignment, Custom Missions & Completi
     assert.match(adminOpsSource, /resolveMissionAssignment/);
     assert.match(adminOpsSource, /FINAL_MISSIONS/);
   });
+
+  test('clientAdminMissionGateway enforces requestId receipts and syncMissionCatalog computes unchangedCount', () => {
+    assert.match(adminOpsSource, /missionRequests/);
+    assert.match(adminOpsSource, /mode_\$\{input\.requestId\}/);
+    assert.match(adminOpsSource, /assign_\$\{input\.requestId\}/);
+    assert.match(adminOpsSource, /sync_\$\{input\.requestId\}/);
+    assert.match(adminOpsSource, /unchangedCount \+= 1/);
+  });
+
+  test('missionStore and MissionEditModal preserve isFinalMission flag on mission edits', () => {
+    const missionStoreSource = readFileSync(
+      new URL('../../src/infrastructure/firebase/missionStore.ts', import.meta.url),
+      'utf8',
+    );
+    const modalSource = readFileSync(
+      new URL('../../views/admin/MissionEditModal.tsx', import.meta.url),
+      'utf8',
+    );
+    assert.match(missionStoreSource, /isFinalMission/);
+    assert.match(modalSource, /isFinalMission/);
+  });
 });

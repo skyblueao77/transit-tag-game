@@ -1,10 +1,11 @@
-import { doc, increment, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { doc, increment, runTransaction, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 import type { ProtectionZoneType } from '../../game/types';
+import { isValidGameSessionId } from '../../game/gameSession';
 import { getUtf8ByteLength, truncateToUtf8Bytes } from '../../game/utf8';
 import { TEAM_COLORS } from '../../../constants';
-import { assertAdmin, assertSignedInPlayer } from './gateways/shared';
+import { appendToConfigLogs, assertAdmin, assertSignedInPlayer, createLogId } from './gateways/shared';
 import { getServerNowMs, markServerTimestampWriteSent } from './serverClock';
 
 interface Coordinates {
@@ -55,17 +56,49 @@ export async function adminChangePlayerTeam(
   playerId: string,
   newTeam: 'A' | 'B',
   newRole?: 'ONI' | 'RUNNER',
+  expectedSessionId?: string,
 ): Promise<void> {
   await assertAdmin();
   if (typeof playerId !== 'string' || playerId.trim().length === 0 || (newTeam !== 'A' && newTeam !== 'B')) {
     throw new Error('INVALID_ARGUMENT');
   }
+  if (expectedSessionId !== undefined && !isValidGameSessionId(expectedSessionId)) {
+    throw new Error('SESSION_CHANGED');
+  }
+
   const userRef = doc(db, 'users', playerId);
+  const configRef = doc(db, 'game_config', 'current');
   const color = newTeam === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
-  await updateDoc(userRef, {
-    team: newTeam,
-    color,
-    ...(newRole === 'ONI' || newRole === 'RUNNER' ? { role: newRole } : {}),
+  const now = getServerNowMs();
+  const logId = createLogId();
+
+  await runTransaction(db, async transaction => {
+    const [userSnap, configSnap] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(configRef),
+    ]);
+    if (!userSnap.exists()) throw new Error('PLAYER_NOT_FOUND');
+    if (!configSnap.exists()) throw new Error('CONFIG_NOT_FOUND');
+
+    const userData = userSnap.data();
+    const configData = configSnap.data();
+    if (expectedSessionId !== undefined && (configData.gameSessionId !== expectedSessionId || userData.gameSessionId !== expectedSessionId)) {
+      throw new Error('SESSION_CHANGED');
+    }
+
+    const logs = appendToConfigLogs(configData.logs, {
+      id: logId,
+      now,
+      message: `【運営操作】${userData.name ?? 'Player'} のチームを TEAM ${newTeam} に変更しました`,
+      type: 'SYSTEM',
+    });
+
+    transaction.update(userRef, {
+      team: newTeam,
+      color,
+      ...(newRole === 'ONI' || newRole === 'RUNNER' ? { role: newRole } : {}),
+    });
+    transaction.update(configRef, { logs });
   });
 }
 

@@ -271,6 +271,24 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+      if (!input.requestId || typeof input.requestId !== 'string') {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
+      }
+
+      const receiptRef = doc(db, 'admins', uid, 'missionRequests', `mode_${input.requestId}`);
+      const receiptSnap = await getDoc(receiptRef);
+      if (receiptSnap.exists()) {
+        const rData = receiptSnap.data();
+        return {
+          ok: true,
+          action: 'setMissionMode',
+          mode: rData.mode,
+          changed: rData.changed ?? false,
+          duplicate: true,
+        };
+      }
+
+      const now = getServerNowMs();
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
@@ -284,14 +302,26 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
         const decision = resolveMissionModeChange(configData.missionMode, input.mode);
         if (decision.allowed === false) return { ok: false, reason: 'INVALID_ARGUMENT' };
 
-        transaction.update(configRef, { missionMode: decision.mode });
-        return {
+        if (decision.changed) {
+          transaction.update(configRef, { missionMode: decision.mode });
+        }
+
+        const result: SetMissionModeResult = {
           ok: true,
           action: 'setMissionMode',
           mode: decision.mode,
           changed: decision.changed,
           duplicate: false,
         };
+
+        transaction.set(receiptRef, {
+          ...result,
+          requestId: input.requestId,
+          gameSessionId: sessionValidation.gameSessionId,
+          createdAt: now,
+        });
+
+        return result;
       });
     } catch (error) {
       console.error('clientAdminMissionGateway setMissionMode error:', error);
@@ -304,9 +334,29 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+      if (!input.requestId || typeof input.requestId !== 'string') {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
+      }
+
+      const receiptRef = doc(db, 'admins', uid, 'missionRequests', `assign_${input.requestId}`);
+      const receiptSnap = await getDoc(receiptRef);
+      if (receiptSnap.exists()) {
+        const rData = receiptSnap.data();
+        return {
+          ok: true,
+          action: 'assignMissions',
+          strategy: rData.strategy,
+          target: rData.target,
+          activeMissionA: rData.activeMissionA,
+          activeMissionB: rData.activeMissionB,
+          selectedMissionIds: Array.isArray(rData.selectedMissionIds) ? rData.selectedMissionIds : [],
+          duplicate: true,
+        };
+      }
 
       const missionsSnap = await getDocs(collection(db, 'missions'));
       const catalog = missionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const now = getServerNowMs();
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
@@ -345,7 +395,7 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
 
         transaction.update(configRef, updates);
 
-        return {
+        const result: AssignMissionsResult = {
           ok: true,
           action: 'assignMissions',
           strategy: decision.strategy,
@@ -355,6 +405,15 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
           selectedMissionIds: decision.selectedMissionIds,
           duplicate: false,
         };
+
+        transaction.set(receiptRef, {
+          ...result,
+          requestId: input.requestId,
+          gameSessionId: sessionValidation.gameSessionId,
+          createdAt: now,
+        });
+
+        return result;
       });
     } catch (error) {
       console.error('clientAdminMissionGateway assignMissions error:', error);
@@ -362,32 +421,96 @@ export const clientAdminMissionGateway: AdminMissionGateway = {
     }
   },
 
-  async syncMissionCatalog(_input: SyncMissionCatalogInput): Promise<SyncMissionCatalogResult> {
+  async syncMissionCatalog(input: SyncMissionCatalogInput): Promise<SyncMissionCatalogResult> {
     try {
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+      if (!input.requestId || typeof input.requestId !== 'string') {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
+      }
 
+      const receiptRef = doc(db, 'admins', uid, 'missionRequests', `sync_${input.requestId}`);
+      const receiptSnap = await getDoc(receiptRef);
+      if (receiptSnap.exists()) {
+        const rData = receiptSnap.data();
+        return {
+          ok: true,
+          action: 'syncMissionCatalog',
+          createdCount: rData.createdCount ?? 0,
+          updatedCount: rData.updatedCount ?? 0,
+          unchangedCount: rData.unchangedCount ?? 0,
+          totalManagedCount: rData.totalManagedCount ?? (MISSIONS.length + FINAL_MISSIONS.length),
+          duplicate: true,
+        };
+      }
+
+      const configSnap = await getDoc(doc(db, 'game_config', 'current'));
+      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+      const configData = configSnap.data();
+      const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
+      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
+
+      const existingSnap = await getDocs(collection(db, 'missions'));
+      const existingById = new Map<string, Record<string, unknown>>();
+      for (const d of existingSnap.docs) {
+        existingById.set(d.id, d.data());
+      }
+
+      const managedCatalog: Array<Mission & { isFinalMission?: boolean }> = [
+        ...MISSIONS,
+        ...FINAL_MISSIONS.map(fm => ({ ...fm, isFinalMission: true })),
+      ];
+
+      let createdCount = 0;
+      let updatedCount = 0;
+      let unchangedCount = 0;
       const batch = writeBatch(db);
-      for (const m of MISSIONS) {
-        const mRef = doc(db, 'missions', m.id);
-        batch.set(mRef, m, { merge: true });
-      }
-      for (const fm of FINAL_MISSIONS) {
-        const fmRef = doc(db, 'missions', fm.id);
-        batch.set(fmRef, { ...fm, isFinalMission: true }, { merge: true });
-      }
-      await batch.commit();
 
-      return {
+      for (const item of managedCatalog) {
+        const current = existingById.get(item.id);
+        if (!current) {
+          createdCount += 1;
+          batch.set(doc(db, 'missions', item.id), item, { merge: true });
+          continue;
+        }
+        const isSame =
+          current.id === item.id
+          && current.title === item.title
+          && current.description === item.description
+          && current.points === item.points
+          && current.type === item.type
+          && (current.area ?? 'ALL') === (item.area ?? 'ALL')
+          && (current.region ?? 'ALL') === (item.region ?? 'ALL')
+          && Boolean(current.isFinalMission) === Boolean(item.isFinalMission);
+        if (isSame) {
+          unchangedCount += 1;
+        } else {
+          updatedCount += 1;
+          batch.set(doc(db, 'missions', item.id), item, { merge: true });
+        }
+      }
+
+      const result: SyncMissionCatalogResult = {
         ok: true,
         action: 'syncMissionCatalog',
-        createdCount: MISSIONS.length + FINAL_MISSIONS.length,
-        updatedCount: 0,
-        unchangedCount: 0,
-        totalManagedCount: MISSIONS.length + FINAL_MISSIONS.length,
+        createdCount,
+        updatedCount,
+        unchangedCount,
+        totalManagedCount: managedCatalog.length,
         duplicate: false,
       };
+
+      batch.set(receiptRef, {
+        ...result,
+        requestId: input.requestId,
+        gameSessionId: sessionValidation.gameSessionId,
+        createdAt: getServerNowMs(),
+      });
+
+      await batch.commit();
+
+      return result;
     } catch (error) {
       console.error('clientAdminMissionGateway syncMissionCatalog error:', error);
       return { ok: false, reason: 'PERSISTENCE_ERROR' };
