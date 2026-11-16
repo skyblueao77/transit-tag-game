@@ -4,7 +4,7 @@
 [![Release](https://github.com/skyblueao77/transit-tag-game/actions/workflows/release.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/release.yml)
 ![Version](https://img.shields.io/badge/Release-v1.2.0-blue)
 ![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Hardened%20%26%20Zero--Trust%20Enforced-success)
-![Tests](https://img.shields.io/badge/Tests-269%20Unit%20%7C%20229%20Audit%20%7C%2028%20Rules%20%7C%202%20Integration-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-269%20Unit%20%7C%20234%20Audit%20%7C%20131%20Functions%20%7C%2028%20Rules%20%7C%202%20Integration-brightgreen)
 ![100-Pattern Matrix](https://img.shields.io/badge/100--Pattern%20Matrix-100%25%20Verified-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue)
 ![Biome](https://img.shields.io/badge/Lint-Biome%20A11y%20Strict-purple)
@@ -318,10 +318,12 @@ GitHub Actions を利用した**タグプッシュ連動の全自動リリース
    - Node.js 環境セットアップ & 依存関係インストール (`npm ci`)
    - 静的解析・リンター (`npm run lint` - Biome)
    - 型チェック (`npm run typecheck` - TypeScript strict)
-   - 単体テスト全件実行 (`npm test` - 267 テスト)
+   - 単体テスト全件実行 (`npm test` - 269 テスト)
+   - 監査リグレッションテスト実行 (`npm run test:audit` - 234 テスト)
+   - Functions 単体テスト実行 (`npm --prefix functions run test:unit` - 131 テスト)
    - Firestore セキュリティルール & 統合テスト実行 (`npm run test:rules`, `npm run test:integration` - 計 30 テスト)
    - 本番ビルド検証 (`npm run build` - PWA アセット生成)
-   - 脆弱性監査 (`npm audit --omit=dev`)
+   - 脆弱性監査 (`npm audit --omit=dev`, `npm --prefix functions audit --omit=dev`)
    - 直前タグからのコミットログ自動抽出 & GitHub Release 発行（タグ名・リリースノート・tgzソースアーカイブ自動添付）
 
 ---
@@ -334,7 +336,7 @@ GitHub Actions を利用した**タグプッシュ連動の全自動リリース
 - `src/infrastructure/`: Firebase クライアント、トランザクションゲートウェイ、差分購読サブスクライバー、心拍同期
 - `src/hooks/`: React カスタムフック（認証状態、マップタイマー、位置監視、自動投影、Wake Lock、オンライン監視）
 - `views/`: 画面ビュー（`MapView.tsx` + `views/map/*`、`AdminView.tsx` + `views/admin/*`、`MissionView.tsx`、`SetupView.tsx`）
-- `tests/`: 単体テスト（Node native test runner + Vite SSR コンポーネント検証）、Firestore ルールテスト、エミュレータ結合テスト
+- `tests/`: 単体テスト（Node native test runner + Vite SSR コンポーネント検証）、監査リグレッションテスト（`tests/audit/`）、Firestore ルールテスト、エミュレータ結合テスト
 
 ### 必要環境
 - **Node.js**: `v22` 以上（LTS 推奨）
@@ -345,6 +347,7 @@ GitHub Actions を利用した**タグプッシュ連動の全自動リリース
 ```bash
 # 依存関係のインストール
 npm ci
+npm --prefix functions ci
 
 # 開発サーバー起動 (http://localhost:3000)
 npm run dev
@@ -355,8 +358,14 @@ npm run typecheck
 # 静的解析・Lint (Biome)
 npm run lint
 
-# 単体テストの実行 (全267テスト)
+# 単体テストの実行 (全269テスト)
 npm test
+
+# 監査リグレッションテストの実行 (全234テスト)
+npm run test:audit
+
+# Functions 単体テストの実行 (全131テスト)
+npm --prefix functions run test:unit
 
 # Firestore セキュリティルールのエミュレータ検証 (全28テスト)
 npm run test:rules
@@ -366,6 +375,7 @@ npm run test:integration
 
 # 本番依存の脆弱性監査
 npm audit --omit=dev
+npm --prefix functions audit --omit=dev
 
 # 本番ビルドの確認 (PWA Service Worker生成)
 npm run build
