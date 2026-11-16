@@ -5,7 +5,11 @@ import { MISSIONS } from '../../constants';
 import { toast } from 'sonner';
 import QRCode from 'qrcode-svg';
 import { getRoleForTeam } from '../../src/game';
-import { isAdminBootstrapCompleted, isCurrentAuthUserAdmin } from '../../src/infrastructure/firebase/auth';
+import {
+  calibrateAdminServerClock,
+  isAdminBootstrapCompleted,
+  isCurrentAuthUserAdmin,
+} from '../../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../../src/application/adminReveal';
 import type { AdminRevealScope } from '../../src/game/adminReveal';
@@ -194,6 +198,11 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
       err => console.error('Error subscribing mission completions:', err),
     );
   }, [isAuthorized, config.gameSessionId]);
+
+  useEffect(() => {
+    if (!isAuthorized) return;
+    void calibrateAdminServerClock();
+  }, [isAuthorized]);
 
   useEffect(() => {
     let mounted = true;

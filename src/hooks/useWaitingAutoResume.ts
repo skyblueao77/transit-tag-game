@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { resumeWaiting } from '../application';
-import { getServerNowMs, getServerTimeOffsetMs } from '../infrastructure/firebase/serverClock';
+import { getServerNowMs } from '../infrastructure/firebase/serverClock';
 import { firebaseWaitingGateway } from '../infrastructure/firebase/waitingActions';
 
 interface UseWaitingAutoResumeParams {
@@ -9,6 +9,8 @@ interface UseWaitingAutoResumeParams {
   waitingUntil: number | undefined;
   gameSessionId: string | undefined;
 }
+
+const MAX_AUTO_RESUME_ATTEMPTS = 12;
 
 /**
  * 待機モードの自動復帰（Cloud Functions Cron不要化: Sparkプラン対応）。
@@ -33,15 +35,19 @@ export default function useWaitingAutoResume({
         if (!gameSessionId) return;
         attemptCount += 1;
         const result = await resumeWaiting({ expectedSessionId: gameSessionId }, firebaseWaitingGateway);
-        if (!cancelled && navigator.onLine && result.ok === false) {
-          console.warn('Waiting resume retry scheduled:', result.reason);
-          attempt(Math.min(30000, 5000 * attemptCount));
+        if (cancelled || !navigator.onLine) return;
+        if (result.ok === false) {
+          if (attemptCount < MAX_AUTO_RESUME_ATTEMPTS) {
+            console.warn('Waiting resume retry scheduled:', result.reason);
+            attempt(Math.min(30000, 5000 * attemptCount));
+          }
+        } else if (!result.resumed && attemptCount < MAX_AUTO_RESUME_ATTEMPTS) {
+          attempt(Math.min(15000, 2000 * attemptCount));
         }
       }, Math.max(0, delay));
     };
 
-    const serverTimeOffset = getServerTimeOffsetMs();
-    attempt(waitingUntil - getServerNowMs(Date.now() + serverTimeOffset - serverTimeOffset));
+    attempt(waitingUntil - getServerNowMs());
     return () => {
       cancelled = true;
       clearTimeout(timer);
