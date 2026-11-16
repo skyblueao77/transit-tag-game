@@ -321,5 +321,19 @@ describe('Audit 04: Capture Mechanics, Victory Modes, Role Swaps & Clock Skew', 
       a1Change,
       '[AUDIT-BUG] resolveAdminRoleSwap ignores CAPTURED players (`status !== ACTIVE && status !== WAITING`), so after switching from SURVIVAL to SCORE_SWAP or forcing role swap, previously CAPTURED Team A players become ONI team members stuck in CAPTURED status!',
     );
+    assert.equal(a1Change.status, 'WAITING');
+
+    const swapBack = resolveAdminRoleSwap({
+      teamRoles: { teamARole: 'ONI', teamBRole: 'RUNNER' },
+      players: [
+        { id: 'a1', team: 'A', status: 'CAPTURED' },
+        { id: 'b1', team: 'B', status: 'ACTIVE' },
+      ],
+      now: 1_750_000_000_000,
+    });
+    assert.equal(swapBack.allowed, true);
+    const a1Back = swapBack.playerChanges.find(c => c.playerId === 'a1');
+    assert.equal(a1Back?.status, 'ACTIVE');
+    assert.equal(a1Back?.waitingUntil, 0);
   });
 });
