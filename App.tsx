@@ -83,7 +83,25 @@ const MapView = lazy(() => import('./views/MapView'));
 const MissionView = lazy(() => import('./views/MissionView'));
 const AdminView = lazy(() => import('./views/AdminView'));
 
+function normalizeDirectAdminPath(): void {
+  if (typeof window !== 'undefined' && window.location.pathname === '/admin' && !window.location.hash) {
+    window.history.replaceState(null, '', '/#/admin');
+  }
+}
+
 const App: React.FC = () => {
+  normalizeDirectAdminPath();
+
+  return (
+    <HashRouter>
+      <AppContent />
+    </HashRouter>
+  );
+};
+
+const AppContent: React.FC = () => {
+  const location = useLocation();
+  const isAdminPath = location.pathname === '/admin';
   const { authUserId, authReady, currentUser, isAuthAdmin, userLoading, setCurrentUser } = useAuthUser();
   const authUserIdRef = useRef(authUserId);
   useEffect(() => {
@@ -132,28 +150,6 @@ const App: React.FC = () => {
   const [safetyDialogOpen, setSafetyDialogOpen] = useState(false);
   const [safetyActionBusy, setSafetyActionBusy] = useState(false);
   const safetyActionBusyRef = useRef(false);
-  const [isAdminPath, setIsAdminPath] = useState<boolean>(() =>
-    typeof window !== 'undefined' && (
-      window.location.pathname === '/admin' ||
-      window.location.hash.includes('/admin')
-    ),
-  );
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const syncPath = () => {
-      setIsAdminPath(
-        window.location.pathname === '/admin' ||
-        window.location.hash.includes('/admin'),
-      );
-    };
-    window.addEventListener('hashchange', syncPath);
-    window.addEventListener('popstate', syncPath);
-    return () => {
-      window.removeEventListener('hashchange', syncPath);
-      window.removeEventListener('popstate', syncPath);
-    };
-  }, []);
 
   const myRole = useMemo((): Role => {
     if (!currentUser) return isAdmin ? 'ONI' : 'RUNNER';
@@ -561,7 +557,7 @@ const App: React.FC = () => {
 
 
   return (
-    <HashRouter>
+    <>
       <Toaster position="top-center" richColors />
       <ConfirmDialog {...dialogProps} />
 
@@ -586,7 +582,11 @@ const App: React.FC = () => {
         </div>
       ) : !activeViewUser ? (
         <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
-          <SetupView onComplete={setCurrentUser} gameSessionId={gameConfig.gameSessionId} />
+          <SetupView
+            onComplete={setCurrentUser}
+            gameSessionId={gameConfig.gameSessionId}
+            isAuthenticated={Boolean(authUserId)}
+          />
         </Suspense>
       ) : (!isAdmin && (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver)) ? (
         <FinalResultView
@@ -802,7 +802,7 @@ const App: React.FC = () => {
         </nav>
       </div>
       )}
-    </HashRouter>
+    </>
   );
 };
 

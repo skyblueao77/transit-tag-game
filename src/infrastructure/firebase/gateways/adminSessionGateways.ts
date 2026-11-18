@@ -449,7 +449,10 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
           shinkansenStartTime: null,
           invincibleUntil: 0,
         });
-        transaction.update(configRef, { logs });
+        transaction.update(configRef, {
+          logs,
+          ...(configData.lastCaptureTargetId === input.targetId ? { lastCaptureTargetId: null } : {}),
+        });
 
         // 緊急位置プロジェクションのクリーンアップ
         const projRef = doc(db, 'emergencyLocationProjections', input.targetId);
@@ -485,15 +488,16 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
       if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
-      const [usersSnap, locsSnap, exposedSnap, projSnap] = await Promise.all([
+      // firestore.rules ではプライバシー保護のため管理者による privateLocations の読み取りを禁止し、削除のみ許可している。
+      // そのため privateLocations は一覧取得せず、参加者UIDから削除対象を見積もる。
+      const [usersSnap, exposedSnap, projSnap] = await Promise.all([
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
-        getDocs(collection(db, 'privateLocations')),
         getDocs(collection(db, 'exposedLocations')),
         getDocs(collection(db, 'emergencyLocationProjections')),
       ]);
 
       const participants: ResetParticipantDocument[] = usersSnap.docs.map(d => ({ id: d.id, team: d.data().team }));
-      const privateLocations: ResetDocumentIdentity[] = locsSnap.docs.map(d => ({ id: d.id }));
+      const privateLocations: ResetDocumentIdentity[] = participants.map(p => ({ id: p.id }));
       const exposedLocations: ResetDocumentIdentity[] = exposedSnap.docs.map(d => ({ id: d.id }));
       const emergencyProjections: ResetDocumentIdentity[] = projSnap.docs.map(d => ({ id: d.id }));
 
@@ -598,10 +602,9 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
 
       const configRef = doc(db, 'game_config', 'current');
-      const [configSnap, usersSnap, privateSnap, exposedSnap, projSnap, completionsSnap] = await Promise.all([
+      const [configSnap, usersSnap, exposedSnap, projSnap, completionsSnap] = await Promise.all([
         getDoc(configRef),
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
-        getDocs(collection(db, 'privateLocations')),
         getDocs(collection(db, 'exposedLocations')),
         getDocs(collection(db, 'emergencyLocationProjections')),
         getDocs(collection(db, 'missionCompletions')),
@@ -612,10 +615,13 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
       if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
+      const participants = usersSnap.docs.map(d => ({ id: d.id, team: d.data().team }));
+      const privateLocationIds = participants.map(p => ({ id: p.id }));
+
       const actualPlan = planGameResetPreview({
         config: configData,
-        participants: usersSnap.docs.map(d => ({ id: d.id, team: d.data().team })),
-        privateLocations: privateSnap.docs.map(d => ({ id: d.id })),
+        participants,
+        privateLocations: privateLocationIds,
         exposedLocations: exposedSnap.docs.map(d => ({ id: d.id })),
         emergencyProjections: projSnap.docs.map(d => ({ id: d.id })),
       });
@@ -644,7 +650,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
 
       // 1 config + N users + private + exposed + projections + conf update + receipt set
-      const coreWrites = 1 + usersSnap.docs.length + privateSnap.docs.length + exposedSnap.docs.length + projSnap.docs.length + 2;
+      const coreWrites = 1 + usersSnap.docs.length + privateLocationIds.length + exposedSnap.docs.length + projSnap.docs.length + 2;
       if (coreWrites > RESET_MAX_ESTIMATED_WRITES) {
         return { ok: false, reason: 'RESET_TOO_LARGE' };
       }
@@ -706,7 +712,8 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
 
       // 3. プライベート位置情報、公開位置スナップショット、緊急プロジェクション、ミッション履歴を削除
-      for (const d of privateSnap.docs) {
+      // privateLocations は allow read: if isOwner(userId) のため一覧取得せず、参加者UIDごとに削除する
+      for (const d of privateLocationIds) {
         batch.delete(doc(db, 'privateLocations', d.id));
       }
       for (const d of exposedSnap.docs) {

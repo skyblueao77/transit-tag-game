@@ -6,7 +6,7 @@
 
 ## 1. 本番スモークテスト（デプロイ直後 5〜10分以内）
 
-公開 URL（`https://tekkenkobe26haru.web.app`）にアクセスし、以下を最短ルートで確認します。
+公開 URL（`https://<your-project-id>.web.app`）にアクセスし、以下を最短ルートで確認します。
 
 - [ ] **配信 & PWA 更新確認**
   - トップ画面（`/#/`）が HTTP 200 で表示され、コンソールに未処理エラー（赤いエラー）が出ていないこと。
@@ -24,7 +24,7 @@
 
 ## 2. Firebase Spark プラン監視 & クォータ確認
 
-Firebase Console (`tekkenkobe26haru`) で本番稼働中のリソース消費とエラーを監視します。
+Firebase Console (`<your-project-id>`) で本番稼働中のリソース消費とエラーを監視します。
 
 | 監視対象 | Spark プラン無料枠（日次目安） | 確認場所 |
 | :--- | :--- | :--- |
@@ -44,7 +44,7 @@ Firebase Console (`tekkenkobe26haru`) で本番稼働中のリソース消費と
 公開 Web アプリとしてクォータ枯渇や不正アクセスを防ぐための推奨設定です。
 
 - [ ] **Firebase API キーの HTTP リファラ制限（Google Cloud Console）**
-  - Google Cloud Console →「API とサービス」→「認証情報」→ ブラウザキーに対し、許可リファラを本番ドメイン（`https://tekkenkobe26haru.web.app/*`, `https://tekkenkobe26haru.firebaseapp.com/*` 等）に制限する。
+  - Google Cloud Console →「API とサービス」→「認証情報」→ ブラウザキーに対し、許可リファラを本番ドメイン（`https://<your-project-id>.web.app/*`, `https://<your-project-id>.firebaseapp.com/*` 等）に制限する。
 - [ ] **Firebase App Check の導入検討**
   - 本番ドメイン・正当なブラウザからのリクエストのみ Firestore / Auth にアクセスを許可する場合、reCAPTCHA v3 / Enterprise を用いた App Check の有効化を検討する。
 - [ ] **依存関係の脆弱性監査**

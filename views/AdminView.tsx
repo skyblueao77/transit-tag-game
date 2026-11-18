@@ -1,4 +1,5 @@
 import type React from 'react';
+import { Link } from 'react-router-dom';
 import type { GameConfig, User, Mission } from '../types';
 import { Shield, QrCode, Map as MapIcon, Target } from 'lucide-react';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
@@ -55,18 +56,18 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <a
-              href="#/map"
+            <Link
+              to="/map"
               className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 transition-all"
             >
               <MapIcon size={14} /> マップ確認
-            </a>
-            <a
-              href="#/mission"
+            </Link>
+            <Link
+              to="/mission"
               className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-1.5 transition-all"
             >
               <Target size={14} /> ミッション確認
-            </a>
+            </Link>
             <button
               type="button"
               onClick={() => dashboard.setShowQrModal(true)}

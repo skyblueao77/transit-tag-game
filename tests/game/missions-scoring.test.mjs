@@ -96,5 +96,17 @@ describe('determineGameWinner', () => {
       teamAScore: 0, teamBScore: 999, teamARole: 'ONI', teamBRole: 'RUNNER', players,
     }), 'A'); // Team A captured all runners!
   });
+
+  test('SURVIVAL mode: derives runners strictly from teamARole/teamBRole even when player.role is stale', () => {
+    // After role swap, Team B became RUNNER while player docs still carry initial role: 'ONI'
+    const players = [
+      { id: 'team-b-1', team: 'B', status: 'ACTIVE', role: 'ONI' },
+      { id: 'team-a-1', team: 'A', status: 'ACTIVE', role: 'RUNNER' },
+    ];
+    assert.equal(determineGameWinner({
+      victoryMode: 'SURVIVAL',
+      teamAScore: 999, teamBScore: 0, teamARole: 'ONI', teamBRole: 'RUNNER', players,
+    }), 'B');
+  });
 });
 

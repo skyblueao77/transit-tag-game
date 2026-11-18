@@ -314,4 +314,31 @@ describe('Audit 02: Session Initialization, Phase Transition Matrix & Master Res
       'overflow missionCompletions must not be deleted before the main atomic reset batch commits',
     );
   });
+
+  test('prepareGameReset and executeGameReset never list privateLocations collection (forbidden by Firestore rules)', () => {
+    assert.equal(
+      adminSessionGatewaySource.includes("getDocs(collection(db, 'privateLocations'))"),
+      false,
+      'Admin gateways must not call getDocs(collection(db, "privateLocations")) because privateLocations read is owner-only',
+    );
+  });
+
+  test('resumePlayer clears lastCaptureTargetId when resuming the last captured player', () => {
+    assert.ok(
+      adminSessionGatewaySource.includes('configData.lastCaptureTargetId === input.targetId')
+        && adminSessionGatewaySource.includes('lastCaptureTargetId: null'),
+      'resumePlayer must clear lastCaptureTargetId on game_config/current to avoid SURVIVAL recapture deadlock',
+    );
+  });
+
+  test('useAdminDashboard builds inviteUrl from origin root hash without leaking /admin pathname', () => {
+    const dashboardSource = readFileSync(
+      new URL('../../views/admin/useAdminDashboard.ts', import.meta.url),
+      'utf8',
+    );
+    assert.ok(
+      dashboardSource.includes('`${window.location.origin}/#/`'),
+      'inviteUrl should be built from ${window.location.origin}/#/ so direct /admin visits do not corrupt QR URLs',
+    );
+  });
 });
