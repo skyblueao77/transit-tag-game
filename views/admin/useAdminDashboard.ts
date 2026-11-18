@@ -121,7 +121,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   const inviteUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    return `${window.location.origin}${window.location.pathname}#/`;
+    return `${window.location.origin}/#/`;
   }, []);
 
   const qrDataUri = useMemo(() => {

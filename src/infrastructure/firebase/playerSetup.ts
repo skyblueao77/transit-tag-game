@@ -41,17 +41,13 @@ export async function registerPlayerAccount(input: {
   location: { latitude: number; longitude: number };
   fallbackSessionId?: string;
 }): Promise<RegisterPlayerResult> {
-  const activeSessionId = await resolveActiveGameSessionId(input.fallbackSessionId);
-  if (!activeSessionId) {
-    return { ok: false, reason: 'SESSION_NOT_INITIALIZED' };
-  }
-
   const normalizedName = truncateToUtf8Bytes(input.name.trim(), 80);
   if (!normalizedName) {
     throw new Error('INVALID_ARGUMENT');
   }
 
   let createdAuthUid: string | null = null;
+  let signedInExistingUid: string | null = null;
   try {
     let id: string;
     try {
@@ -66,6 +62,7 @@ export async function registerPlayerAccount(input: {
       let existingUid: string;
       try {
         existingUid = await signInWithUserId(input.userId, input.password);
+        signedInExistingUid = existingUid;
       } catch (signInErr: unknown) {
         const signInCode = (signInErr as { code?: string })?.code;
         if (signInCode === 'auth/wrong-password' || signInCode === 'auth/invalid-credential') {
@@ -77,21 +74,25 @@ export async function registerPlayerAccount(input: {
         getDoc(doc(db, 'users', existingUid)),
         getDoc(doc(db, 'admins', existingUid)),
       ]);
-      if (adminSnap.exists()) {
+      if (adminSnap.exists() || userSnap.exists()) {
         await signOutCurrentUser().catch(() => {});
-        throw authErr;
-      }
-      if (userSnap.exists()) {
-        const existingData = userSnap.data();
-        if (existingData?.gameSessionId === activeSessionId) {
-          await signOutCurrentUser().catch(() => {});
-          throw authErr;
-        }
-        // 前セッションの残留レコードが存在する場合は上書きできないためサインアウトして案内する
-        await signOutCurrentUser().catch(() => {});
+        signedInExistingUid = null;
         throw authErr;
       }
       id = existingUid;
+    }
+
+    // Firestore ルールで game_config/current の読み取りには signedIn() が必須のため、認証完了後にセッションIDを解決する
+    const activeSessionId = await resolveActiveGameSessionId(input.fallbackSessionId);
+    if (!activeSessionId) {
+      if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
+        await deleteUser(auth.currentUser).catch(() => {});
+        createdAuthUid = null;
+      } else if (signedInExistingUid && auth.currentUser?.uid === signedInExistingUid) {
+        await signOutCurrentUser().catch(() => {});
+        signedInExistingUid = null;
+      }
+      return { ok: false, reason: 'SESSION_NOT_INITIALIZED' };
     }
 
     const color: string = input.team === 'A' ? TEAM_COLORS[0] : TEAM_COLORS[1];
@@ -109,10 +110,13 @@ export async function registerPlayerAccount(input: {
 
     await createPlayerWithPrivateLocation(newUser, input.location, activeSessionId);
     createdAuthUid = null;
+    signedInExistingUid = null;
     return { ok: true, user: newUser };
   } catch (err) {
     if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
       await deleteUser(auth.currentUser).catch(() => {});
+    } else if (signedInExistingUid && auth.currentUser?.uid === signedInExistingUid) {
+      await signOutCurrentUser().catch(() => {});
     }
     throw err;
   }

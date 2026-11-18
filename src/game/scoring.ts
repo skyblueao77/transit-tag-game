@@ -40,7 +40,7 @@ export function determineGameWinner(input: DetermineWinnerInput): 'A' | 'B' | 'D
   if (input.victoryMode === 'SURVIVAL') {
     const runnerTeam = input.teamARole === 'RUNNER' ? 'A' : 'B';
     const oniTeam = input.teamARole === 'ONI' ? 'A' : 'B';
-    const runners = input.players.filter(p => p.team === runnerTeam && p.role !== 'ONI');
+    const runners = input.players.filter(p => p.team === runnerTeam);
     const survivingRunners = runners.filter(
       p => p.status === 'ACTIVE' || p.status === 'WAITING',
     );

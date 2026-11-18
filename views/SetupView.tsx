@@ -11,9 +11,10 @@ import { getUtf8ByteLength } from '../src/game/utf8';
 interface Props {
   onComplete: (user: User) => void;
   gameSessionId?: string;
+  isAuthenticated?: boolean;
 }
 
-const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
+const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated = false }) => {
   const [mode, setMode] = useState<'REGISTER' | 'LOGIN'>('REGISTER');
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
@@ -343,7 +344,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId }) => {
           </form>
         )}
 
-        {!gameSessionId && (
+        {isAuthenticated && !gameSessionId && (
           <p className="mt-4 text-center text-xs font-bold text-amber-600 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
             ⏳ ゲームセッション初期化待ちです。<br />管理者が初期化すると参加可能になります。
           </p>

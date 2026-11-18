@@ -325,4 +325,18 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
     assert.throws(() => db.getDoc('privateLocations/p1', outsider), RulePermissionError);
     assert.throws(() => db.getDoc('emergencyLocationProjections/p1', outsider), RulePermissionError);
   });
+
+  test('registerPlayerAccount authenticates before reading game_config/current and SetupView gates session banner on isAuthenticated', () => {
+    const authIdx = playerSetupSource.indexOf('await registerWithUserId(');
+    const resolveIdx = playerSetupSource.indexOf('await resolveActiveGameSessionId(');
+    assert.ok(authIdx > 0 && resolveIdx > 0, 'Expected registerWithUserId and resolveActiveGameSessionId calls');
+    assert.ok(
+      authIdx < resolveIdx,
+      'registerPlayerAccount must authenticate BEFORE reading game_config/current to avoid unauthenticated PERMISSION_DENIED',
+    );
+    assert.ok(
+      setupViewSource.includes('isAuthenticated && !gameSessionId'),
+      'SetupView should only display session-initialization banner when authenticated',
+    );
+  });
 });
