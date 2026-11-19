@@ -12,6 +12,7 @@ export function mapUserDocument(id: string, data: Record<string, unknown>): User
     if (Object.hasOwn(data, field)) user[field] = data[field];
   }
   if (isValidGameSessionId(data.gameSessionId)) user.gameSessionId = data.gameSessionId;
+  if (typeof data.joinCode === 'string' && data.joinCode.length > 0) user.joinCode = data.joinCode;
   return user as unknown as User;
 }
 
@@ -173,6 +174,13 @@ export function mapGameConfigDocument(
     if (value === undefined) continue;
     const timestamp = firestoreTimestampMillis(value);
     config[field] = timestamp ?? (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  }
+
+  if (typeof data.currentJoinCode === 'string' && data.currentJoinCode.length > 0) {
+    config.currentJoinCode = data.currentJoinCode;
+  }
+  if (typeof data.registrationOpen === 'boolean') {
+    config.registrationOpen = data.registrationOpen;
   }
 
   const session = validateGameSession({

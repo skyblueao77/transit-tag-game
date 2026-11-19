@@ -1,6 +1,5 @@
 import {
   createUserWithEmailAndPassword,
-  deleteUser,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
@@ -13,7 +12,6 @@ import {
   onSnapshot,
   serverTimestamp,
   setDoc,
-  writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { auth, db } from './firebaseClient';
@@ -22,14 +20,6 @@ import {
   markServerTimestampWriteSent,
   recordConfirmedServerTimestamp,
 } from './serverClock';
-
-/**
- * 初回管理者が既に初期化済みかどうかを確認します。
- */
-export async function isAdminBootstrapCompleted(): Promise<boolean> {
-  const bootstrapDoc = await getDoc(doc(db, 'system', 'admin_bootstrap'));
-  return bootstrapDoc.exists();
-}
 
 /**
  * ユーザーIDをFirebase Auth用の内部ドメインアドレスに変換します。
@@ -101,65 +91,6 @@ export async function signInAdmin(
 
   await signOut(auth);
   return false;
-}
-
-/**
- * 初回管理者アカウント作成（プログラミング・Firebase Console操作不要）。
- * 最初の1回のみ system/admin_bootstrap と admins/{uid} をアトミックに作成します。
- */
-export async function setupInitialAdmin(
-  identifier: string,
-  password: string,
-): Promise<boolean> {
-  if (password.length < 8) {
-    throw new Error('ADMIN_PASSWORD_TOO_SHORT');
-  }
-
-  const isCompleted = await isAdminBootstrapCompleted();
-  if (isCompleted) {
-    throw new Error('ADMIN_ALREADY_INITIALIZED');
-  }
-
-  const email = toSyntheticEmail(identifier);
-  let uid: string;
-  let createdNewUser = false;
-  try {
-    const cred = await createUserWithEmailAndPassword(auth, email, password);
-    uid = cred.user.uid;
-    createdNewUser = true;
-  } catch (err: unknown) {
-    const errorCode = (err as { code?: string })?.code;
-    if (errorCode === 'auth/email-already-in-use') {
-      const cred = await signInWithEmailAndPassword(auth, email, password);
-      uid = cred.user.uid;
-    } else {
-      throw err;
-    }
-  }
-
-  try {
-    // アトミックに初期管理者ブートストラップと管理者ドキュメントを作成
-    const batch = writeBatch(db);
-    batch.set(doc(db, 'system', 'admin_bootstrap'), {
-      initializedBy: uid,
-      initializedAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'admins', uid), {
-      role: 'admin',
-      createdAt: serverTimestamp(),
-    });
-    markServerTimestampWriteSent();
-    await batch.commit();
-  } catch (err) {
-    if (createdNewUser && auth.currentUser?.uid === uid) {
-      await deleteUser(auth.currentUser).catch(() => {});
-    } else if (auth.currentUser?.uid === uid) {
-      await signOut(auth).catch(() => {});
-    }
-    throw err;
-  }
-
-  return true;
 }
 
 export async function isCurrentAuthUserAdmin(): Promise<boolean> {

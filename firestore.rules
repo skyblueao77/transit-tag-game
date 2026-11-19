@@ -30,25 +30,35 @@ service cloud.firestore {
       ]);
     }
 
+    function validJoinCodeFormat(code) {
+      return code is string && code.matches('^[A-Za-z0-9_-]{16,128}$');
+    }
+
     function validPlayerCreate(uid) {
       let configPath = /databases/$(database)/documents/game_config/current;
       let data = request.resource.data;
-      return signedIn()
+      let cfg = get(configPath).data;
+      let jcPath = /databases/$(database)/documents/joinCodes/$(data.joinCode);
+      return isPasswordUser()
         && !isAdmin()
         && request.auth.uid == uid
         && hasCurrentGameSession()
+        && cfg.gameStatus != 'GAME_OVER'
+        && (cfg.gameStatus == 'PRE_GAME'
+          || (cfg.keys().hasAny(['registrationOpen']) && cfg.registrationOpen == true))
         && data.keys().hasOnly([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards', 'lastCompletionId', 'lastStation',
+          'gameSessionId', 'invincibleCards', 'joinCode', 'lastCompletionId', 'lastStation',
           'protectionZone', 'shinkansenSegmentCount', 'penaltyRevealUntil'
         ])
         && (!data.keys().hasAny(['lastStation']) || (data.lastStation is string && data.lastStation.size() <= 250))
+        && (!data.keys().hasAny(['lastCompletionId']) || (data.lastCompletionId is string && data.lastCompletionId.size() <= 200))
         && (!data.keys().hasAny(['protectionZone']) || data.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE'])
         && (!data.keys().hasAny(['shinkansenSegmentCount']) || (data.shinkansenSegmentCount is int && data.shinkansenSegmentCount >= 0))
         && (!data.keys().hasAny(['penaltyRevealUntil']) || (data.penaltyRevealUntil is int && data.penaltyRevealUntil >= 0))
         && data.keys().hasAll([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards'
+          'gameSessionId', 'invincibleCards', 'joinCode'
         ])
         && data.id == uid
         && data.name is string
@@ -57,12 +67,18 @@ service cloud.firestore {
         && data.role == 'RUNNER'
         && data.team in ['A', 'B']
         && data.color is string
+        && data.color.size() > 0
+        && data.color.size() <= 32
         && data.status == 'ACTIVE'
         && data.score is int
         && data.score == 0
         && data.invincibleCards is int
         && data.invincibleCards == 0
-        && data.gameSessionId == get(configPath).data.gameSessionId;
+        && validJoinCodeFormat(data.joinCode)
+        && exists(jcPath)
+        && get(jcPath).data.active == true
+        && get(jcPath).data.gameSessionId == cfg.gameSessionId
+        && data.gameSessionId == cfg.gameSessionId;
     }
 
     function isCurrentParticipant(uid) {
@@ -89,32 +105,21 @@ service cloud.firestore {
         || (deadline is int && exp.toMillis() <= deadline + 60000);
     }
 
+    match /joinCodes/{code} {
+      allow get: if isPasswordUser();
+      allow list, create, update, delete: if isAdmin();
+    }
+
     match /system/admin_bootstrap {
-      allow read: if true;
-      allow create: if isPasswordUser()
-        && !exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && !exists(/databases/$(database)/documents/system/admin_bootstrap)
-        && request.resource.data.keys().hasOnly(['initializedBy', 'initializedAt'])
-        && request.resource.data.initializedBy == request.auth.uid
-        && request.resource.data.initializedAt is timestamp;
-      allow update, delete: if false;
+      allow read, write: if false;
     }
 
     match /admins/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
-      allow create: if (isPasswordUser()
-        && request.auth.uid == uid
-        && !exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && !exists(/databases/$(database)/documents/system/admin_bootstrap)
-        && existsAfter(/databases/$(database)/documents/system/admin_bootstrap)
-        && getAfter(/databases/$(database)/documents/system/admin_bootstrap).data.initializedBy == request.auth.uid
+      allow create: if isAdmin()
         && request.resource.data.keys().hasOnly(['role', 'createdAt'])
         && request.resource.data.role == 'admin'
-        && request.resource.data.createdAt is timestamp)
-        || (isAdmin()
-          && request.resource.data.keys().hasOnly(['role', 'createdAt'])
-          && request.resource.data.role == 'admin'
-          && request.resource.data.createdAt is timestamp);
+        && request.resource.data.createdAt == request.time;
       allow update, delete: if false;
 
       match /{subCollection=**} {
@@ -127,6 +132,11 @@ service cloud.firestore {
       allow create, update: if signedIn()
         && request.auth.uid == uid
         && hasCurrentGameSession()
+        && (isCurrentParticipant(uid)
+          || (existsAfter(/databases/$(database)/documents/users/$(uid))
+            && getAfter(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
+            && getAfter(/databases/$(database)/documents/users/$(uid)).data.gameSessionId
+              == get(/databases/$(database)/documents/game_config/current).data.gameSessionId))
         && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
         && request.resource.data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
         && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
@@ -136,7 +146,7 @@ service cloud.firestore {
         && request.resource.data.longitude is number
         && request.resource.data.longitude >= -180
         && request.resource.data.longitude <= 180
-        && request.resource.data.updatedAt is timestamp;
+        && request.resource.data.updatedAt == request.time;
       allow delete: if isAdmin();
     }
 
@@ -194,7 +204,7 @@ service cloud.firestore {
         && data.longitude is number
         && data.longitude >= -180
         && data.longitude <= 180
-        && data.capturedAt is timestamp
+        && data.capturedAt == request.time
         && data.expiresAt is timestamp
         && request.time < data.expiresAt
         && validExposedLocationScope(data, uid)
@@ -232,6 +242,8 @@ service cloud.firestore {
             || resource == null
             || (hasCurrentGameSession()
               && resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+              && resource.data.expiresAt is timestamp
+              && resource.data.expiresAt > request.time
               && get(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY'
               && get(/databases/$(database)/documents/users/$(uid)).data.status != 'RETIRED')));
       allow list: if isAdmin();
@@ -240,12 +252,15 @@ service cloud.firestore {
       allow delete: if isAdmin()
         || (signedIn()
           && request.auth.uid == uid
-          && existsAfter(/databases/$(database)/documents/users/$(uid))
-          && getAfter(/databases/$(database)/documents/users/$(uid)).data.status in ['EMERGENCY', 'RETIRED']);
+          && ((existsAfter(/databases/$(database)/documents/users/$(uid))
+              && getAfter(/databases/$(database)/documents/users/$(uid)).data.status in ['EMERGENCY', 'RETIRED'])
+            || (resource != null
+              && resource.data.expiresAt is timestamp
+              && resource.data.expiresAt <= request.time)));
     }
 
     function validEmergencyProjectionWrite(uid) {
-      return signedIn()
+      return isCurrentParticipant(uid)
         && request.auth.uid == uid
         && hasCurrentGameSession()
         && request.resource.data.keys().hasOnly([
@@ -268,8 +283,9 @@ service cloud.firestore {
         && request.resource.data.longitude is number
         && request.resource.data.longitude >= -180
         && request.resource.data.longitude <= 180
-        && request.resource.data.projectedAt is timestamp
+        && request.resource.data.projectedAt == request.time
         && request.resource.data.sourceLocationUpdatedAt is timestamp
+        && request.resource.data.sourceLocationUpdatedAt <= request.time
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
         && request.resource.data.expiresAt <= request.time + duration.value(3, 'm');
@@ -284,6 +300,38 @@ service cloud.firestore {
           && request.auth.uid == uid
           && existsAfter(/databases/$(database)/documents/users/$(uid))
           && getAfter(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY');
+    }
+
+    function expectedPostShinkansenWaitMs(cfg) {
+      return (cfg.keys().hasAny(['postShinkansenWaitMinutes'])
+        && cfg.postShinkansenWaitMinutes is int
+        && cfg.postShinkansenWaitMinutes >= 1
+        && cfg.postShinkansenWaitMinutes <= 180)
+        ? cfg.postShinkansenWaitMinutes * 60000
+        : 3600000;
+    }
+
+    function validPostShinkansenWaitingBound(cfg, targetTimeMs, nowMs) {
+      let waitMs = expectedPostShinkansenWaitMs(cfg);
+      return targetTimeMs is int
+        && targetTimeMs >= nowMs + waitMs - 60000
+        && targetTimeMs <= nowMs + waitMs + 60000;
+    }
+
+    function expectedCaptureWaitMs(cfg) {
+      return (cfg.keys().hasAny(['captureWaitMinutes'])
+        && cfg.captureWaitMinutes is int
+        && cfg.captureWaitMinutes >= 1
+        && cfg.captureWaitMinutes <= 120)
+        ? cfg.captureWaitMinutes * 60000
+        : 1800000;
+    }
+
+    function validCaptureWaitingBound(cfg, targetTimeMs, nowMs) {
+      let waitMs = expectedCaptureWaitMs(cfg);
+      return targetTimeMs is int
+        && targetTimeMs >= nowMs + waitMs - 60000
+        && targetTimeMs <= nowMs + waitMs + 60000;
     }
 
     function validMissionRewardUpdate(uid, b, a, diff) {
@@ -315,13 +363,14 @@ service cloud.firestore {
       let hasCfg = hasCurrentGameSession();
       let isActivePhase = hasCfg && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION'];
       let myRole = hasCfg ? (b.team == 'A' ? cfg.teamARole : cfg.teamBRole) : '';
-      return signedIn()
+      return isCurrentParticipant(uid)
         && request.auth.uid == uid
         && hasNoCoordinates(a)
         && a.id == b.id
         && a.team == b.team
         && a.role == b.role
         && a.gameSessionId == b.gameSessionId
+        && (!b.keys().hasAny(['joinCode']) || (a.keys().hasAny(['joinCode']) && a.joinCode == b.joinCode))
         && (
           // 1. Profile name or lastStation update
           (diff.hasOnly(['name']) && a.name is string && a.name.size() > 0 && a.name.size() <= 80)
@@ -385,21 +434,14 @@ service cloud.firestore {
               && b.waitingUntil is int && b.waitingUntil <= nowMs
               && a.waitingUntil == 0
               && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0))
-          // 3. Manual waiting start (60 min default or postShinkansenWaitMinutes + 60s tolerance)
+          // 3. Manual waiting start (strict ±60s bound around postShinkansenWaitMinutes or default 60 min)
           || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
               && isActivePhase
               && myRole == 'RUNNER'
               && b.status == 'ACTIVE' && a.status == 'WAITING'
               && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0)
-              && a.waitingUntil is int && a.waitingUntil > nowMs
-              && (a.waitingUntil <= nowMs + 3660000
-                || (cfg.keys().hasAny(['postShinkansenWaitMinutes'])
-                    && cfg.postShinkansenWaitMinutes is int
-                    && cfg.postShinkansenWaitMinutes >= 1
-                    && cfg.postShinkansenWaitMinutes <= 180
-                    && a.waitingUntil <= nowMs + cfg.postShinkansenWaitMinutes * 60000 + 60000))
-              && a.waitingUntil <= nowMs + 10860000)
-          // 4. Powerup invincibility card use (30 min max duration + 60s tolerance)
+              && validPostShinkansenWaitingBound(cfg, a.waitingUntil, nowMs))
+          // 4. Powerup invincibility card use (30 min ±60s tolerance)
           || (diff.hasOnly(['invincibleCards', 'invincibleUntil'])
               && isActivePhase
               && myRole == 'RUNNER'
@@ -407,7 +449,8 @@ service cloud.firestore {
               && (!b.keys().hasAny(['invincibleUntil']) || !(b.invincibleUntil is int) || b.invincibleUntil <= nowMs)
               && b.invincibleCards is int && b.invincibleCards >= 1
               && a.invincibleCards == b.invincibleCards - 1
-              && a.invincibleUntil is int && a.invincibleUntil > nowMs
+              && a.invincibleUntil is int
+              && a.invincibleUntil >= nowMs + 1740000
               && a.invincibleUntil <= nowMs + 1860000)
           // 5. Safety action: Emergency or Retire
           || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'invincibleUntil'])
@@ -419,18 +462,6 @@ service cloud.firestore {
           // 6. Mission completion reward: only evaluated if diff has 'score'
           || (diff.hasAny(['score']) && validMissionRewardUpdate(uid, b, a, diff))
         );
-    }
-
-    function validCaptureWaitingBound(cfg, targetTimeMs, nowMs) {
-      return targetTimeMs is int
-        && targetTimeMs > nowMs
-        && targetTimeMs <= nowMs + 7260000
-        && (targetTimeMs <= nowMs + 1860000
-          || (cfg.keys().hasAny(['captureWaitMinutes'])
-            && cfg.captureWaitMinutes is int
-            && cfg.captureWaitMinutes >= 1
-            && cfg.captureWaitMinutes <= 120
-            && targetTimeMs <= nowMs + cfg.captureWaitMinutes * 60000 + 60000));
     }
 
     function validParticipantCaptureUpdate(uid) {
@@ -455,6 +486,7 @@ service cloud.firestore {
         && a.gameSessionId == b.gameSessionId
         && a.gameSessionId == curConfig.gameSessionId
         && (!b.keys().hasAny(['color']) || a.color == b.color)
+        && (!b.keys().hasAny(['joinCode']) || (a.keys().hasAny(['joinCode']) && a.joinCode == b.joinCode))
         && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
         && myRole == 'ONI'
         && me.status == 'ACTIVE'
@@ -476,20 +508,12 @@ service cloud.firestore {
            && a.waitingUntil == 0
            && a.invincibleUntil == 0)
           // Branch A: Captured side (opposing team b.team != me.team)
-          // All players transition to WAITING (capped at 30 min + 60s or captureWaitMinutes) with invincibility cleared
+          // All players transition to WAITING (strict ±60s bound around captureWaitMinutes) with invincibility cleared
           || (!isSurvival
               && b.team != me.team
               && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
               && a.status == 'WAITING'
-              && a.waitingUntil is int
-              && a.waitingUntil > nowMs
-              && (a.waitingUntil <= nowMs + 1860000
-                || (curConfig.keys().hasAny(['captureWaitMinutes'])
-                  && curConfig.captureWaitMinutes is int
-                  && curConfig.captureWaitMinutes >= 1
-                  && curConfig.captureWaitMinutes <= 120
-                  && a.waitingUntil <= nowMs + curConfig.captureWaitMinutes * 60000 + 60000))
-              && a.waitingUntil <= nowMs + 7260000
+              && validCaptureWaitingBound(curConfig, a.waitingUntil, nowMs)
               && a.invincibleUntil == 0)
           // Branch B: Capturing side (own team b.team == me.team, including captor)
           // All players transition to ACTIVE, clear waiting, and receive exactly +1 invincibleCard
@@ -513,7 +537,7 @@ service cloud.firestore {
     }
 
     match /missions/{missionId} {
-      allow read: if signedIn();
+      allow read: if isAdmin() || isCurrentParticipant(request.auth.uid);
       allow write: if isAdmin();
     }
 
@@ -554,13 +578,18 @@ service cloud.firestore {
           || (data.isFinalMission == false
             && config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
             && (
-              (!config.keys().hasAny(['activeMissionA']) && !config.keys().hasAny(['activeMissionB']))
-              || (data.team == 'A' && (!config.keys().hasAny(['activeMissionA']) || config.activeMissionA == data.missionId))
-              || (data.team == 'B' && (!config.keys().hasAny(['activeMissionB']) || config.activeMissionB == data.missionId))
+              (data.team == 'A'
+                && config.keys().hasAny(['activeMissionA'])
+                && config.activeMissionA is string
+                && config.activeMissionA == data.missionId)
+              || (data.team == 'B'
+                && config.keys().hasAny(['activeMissionB'])
+                && config.activeMissionB is string
+                && config.activeMissionB == data.missionId)
             ))
         )
         && (!data.keys().hasAny(['luckyReward']) || data.luckyReward is bool)
-        && data.completedAt is timestamp
+        && data.completedAt == request.time
         && completionId == data.team + '_' + data.gameSessionId + '_' + data.missionId;
     }
 
@@ -571,6 +600,7 @@ service cloud.firestore {
     }
 
     function validLogEntry(entry, allowedTypes) {
+      let nowMs = request.time.toMillis();
       return entry is map
         && entry.keys().hasOnly(['id', 'timestamp', 'message', 'type'])
         && entry.keys().hasAll(['id', 'timestamp', 'message', 'type'])
@@ -578,6 +608,8 @@ service cloud.firestore {
         && entry.id.size() > 0
         && entry.id.size() <= 100
         && entry.timestamp is int
+        && entry.timestamp >= nowMs - 300000
+        && entry.timestamp <= nowMs + 60000
         && entry.message is string
         && entry.message.size() > 0
         && entry.message.size() <= 300
@@ -591,13 +623,25 @@ service cloud.firestore {
         && newData.logs.size() <= 200
         && newData.logs.size() == (prevLogs.size() >= 200 ? 200 : prevLogs.size() + 1)
         && validLogEntry(newData.logs[0], allowedTypes)
-        && (prevLogs.size() == 0 || newData.logs[1] == prevLogs[0]);
+        && (prevLogs.size() == 0
+          || newData.logs[1:newData.logs.size()] == prevLogs[0:(newData.logs.size() - 1)]);
     }
 
     function validLogOnlyConfigUpdate(currentData, newData, diff) {
+      let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let safetyChange = exists(mePath)
+        && existsAfter(mePath)
+        && get(mePath).data.status != getAfter(mePath).data.status
+        && getAfter(mePath).data.status in ['EMERGENCY', 'RETIRED'];
+      let gameplayStateChange = exists(mePath)
+        && existsAfter(mePath)
+        && ((get(mePath).data.status != getAfter(mePath).data.status
+            && getAfter(mePath).data.status in ['ACTIVE', 'WAITING'])
+          || (getAfter(mePath).data.invincibleCards < get(mePath).data.invincibleCards));
       return diff.hasOnly(['logs'])
         && diff.size() == 1
-        && validPrependedLogs(currentData, newData, ['SYSTEM', 'EMERGENCY'])
+        && ((safetyChange && validPrependedLogs(currentData, newData, ['EMERGENCY']))
+          || (gameplayStateChange && validPrependedLogs(currentData, newData, ['SYSTEM'])))
         && newData.teamARole == currentData.teamARole
         && newData.teamBRole == currentData.teamBRole
         && newData.teamAScore == currentData.teamAScore
@@ -665,15 +709,7 @@ service cloud.firestore {
                    ? (newData.teamAScore == currentData.teamAScore + 50 && newData.teamBScore == currentData.teamBScore)
                    : (newData.teamBScore == currentData.teamBScore + 50 && newData.teamAScore == currentData.teamAScore)))
             : (getAfter(targetPath).data.status == 'WAITING'
-               && getAfter(targetPath).data.waitingUntil is int
-               && getAfter(targetPath).data.waitingUntil > nowMs
-               && (getAfter(targetPath).data.waitingUntil <= nowMs + 1860000
-                 || (currentData.keys().hasAny(['captureWaitMinutes'])
-                   && currentData.captureWaitMinutes is int
-                   && currentData.captureWaitMinutes >= 1
-                   && currentData.captureWaitMinutes <= 120
-                   && getAfter(targetPath).data.waitingUntil <= nowMs + currentData.captureWaitMinutes * 60000 + 60000))
-               && getAfter(targetPath).data.waitingUntil <= nowMs + 7260000
+               && validCaptureWaitingBound(currentData, getAfter(targetPath).data.waitingUntil, nowMs)
                && (get(mePath).data.team == 'A'
                    ? (currentData.teamARole == 'ONI'
                       && newData.teamARole == 'RUNNER'
@@ -711,7 +747,7 @@ service cloud.firestore {
     }
 
     match /game_config/{configId} {
-      allow read: if signedIn();
+      allow read: if isAdmin() || isCurrentParticipant(request.auth.uid);
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || validParticipantConfigUpdate(configId);
     }

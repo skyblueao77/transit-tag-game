@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 interface InviteQrModalProps {
   qrDataUri: string;
   copiedLink: boolean;
+  currentJoinCode?: string;
   onCopyInviteUrl: () => void;
   onClose: () => void;
 }
@@ -11,6 +12,7 @@ interface InviteQrModalProps {
 const InviteQrModal: React.FC<InviteQrModalProps> = ({
   qrDataUri,
   copiedLink,
+  currentJoinCode,
   onCopyInviteUrl,
   onClose,
 }) => (
@@ -28,6 +30,13 @@ const InviteQrModal: React.FC<InviteQrModalProps> = ({
           <img src={qrDataUri} alt="参加用QRコード" className="w-44 h-44" />
         )}
       </div>
+
+      {currentJoinCode && (
+        <div className="mb-3 rounded-xl bg-slate-100 px-3 py-2 text-left">
+          <span className="block text-[10px] font-black text-slate-500 uppercase">招待コード（手入力用）</span>
+          <code className="text-xs font-mono font-bold text-slate-800 break-all">{currentJoinCode}</code>
+        </div>
+      )}
 
       <p className="text-xs font-bold text-slate-600 mb-4">
         参加者のスマートフォンでこのQRコードを読み取ってください。<br />

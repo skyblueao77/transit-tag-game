@@ -114,17 +114,31 @@ const AppContent: React.FC = () => {
     toast.info(`【運営からの通知】\n\n${message}`, { duration: 10000 });
   }, []);
 
-  const onConfigError = useCallback((error: Error) => {
-    console.error('Error fetching game config data:', error);
-    toast.error('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
-  }, []);
-
   // この値は既存UIの表示用。Firestore権限はAuthenticationとRulesで強制する。
   const isAdmin = useMemo(
     () => isAuthAdmin || currentUser?.team === 'ADMIN',
     [isAuthAdmin, currentUser],
   );
+
+  const onConfigError = useCallback((error: Error) => {
+    console.error('Error fetching game config data:', error);
+    const code = (error as { code?: string })?.code;
+    if (!isAdmin && code === 'permission-denied') {
+      void signOutCurrentUser();
+      setCurrentUser(null);
+      toast.error('前回のセッションが終了したためログアウトしました。新しい招待QRまたは招待コードから再参加してください。');
+      return;
+    }
+    toast.error('ゲーム設定の取得中にエラーが発生しました。通信環境をご確認ください。');
+  }, [isAdmin, setCurrentUser]);
+
   const [activeSessionIdForSubs, setActiveSessionIdForSubs] = useState<string | undefined>(undefined);
+  const canSubscribeConfig = Boolean(
+    authUserId && (
+      isAdmin
+      || ((currentUser?.team === 'A' || currentUser?.team === 'B') && Boolean(currentUser?.gameSessionId))
+    ),
+  );
   const canSubscribeParticipants = Boolean(
     authUserId && (
       isAdmin
@@ -138,7 +152,14 @@ const AppContent: React.FC = () => {
     gameConfig,
     privateLocation,
     exposedLocations,
-  } = useGameSubscriptions(authUserId, onBroadcast, onConfigError, canSubscribeParticipants);
+  } = useGameSubscriptions(
+    authUserId,
+    onBroadcast,
+    onConfigError,
+    canSubscribeParticipants,
+    undefined,
+    canSubscribeConfig,
+  );
 
   useEffect(() => {
     setActiveSessionIdForSubs(gameConfig.gameSessionId);

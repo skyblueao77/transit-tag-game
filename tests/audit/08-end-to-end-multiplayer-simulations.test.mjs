@@ -25,13 +25,12 @@ describe('Audit 08: Full Multiplayer 2-Day Lifecycle & Remaining Runtime Edge Ca
     const adminAuth = { uid: 'admin-main', signInProvider: 'password' };
     const sessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-    // 1. Bootstrap admin
-    db.commitBatch([
-      { type: 'set', path: 'system/admin_bootstrap', data: { initializedBy: 'admin-main', initializedAt: SERVER_TIMESTAMP_SENTINEL }, merge: false },
-      { type: 'set', path: 'admins/admin-main', data: { role: 'admin', createdAt: SERVER_TIMESTAMP_SENTINEL }, merge: false },
-    ], adminAuth);
+    const joinCode = 'AUDIT08_JOIN_CODE_123456';
 
-    // 2. Initialize game session + sync normal missions
+    // 1. Seed initial Console admin
+    db.seed('admins/admin-main', { role: 'admin', createdAt: FsTimestamp.fromMillis(db.serverNowMs) });
+
+    // 2. Initialize game session + joinCode + sync normal missions
     db.commitBatch([
       {
         type: 'set',
@@ -53,8 +52,16 @@ describe('Audit 08: Full Multiplayer 2-Day Lifecycle & Remaining Runtime Edge Ca
           teamBScore: 0,
           captureWaitMinutes: 30,
           postShinkansenWaitMinutes: 60,
+          currentJoinCode: joinCode,
+          registrationOpen: true,
           logs: [],
         },
+        merge: false,
+      },
+      {
+        type: 'set',
+        path: `joinCodes/${joinCode}`,
+        data: { code: joinCode, gameSessionId: sessionId, active: true, createdAt: db.serverNowMs },
         merge: false,
       },
       ...MISSIONS.slice(0, 6).map(m => ({ type: 'set', path: `missions/${m.id}`, data: m, merge: true })),
@@ -76,7 +83,7 @@ describe('Audit 08: Full Multiplayer 2-Day Lifecycle & Remaining Runtime Edge Ca
           data: {
             id: p.id, name: p.name, role: 'RUNNER', team: p.team,
             color: p.team === 'A' ? '#ef4444' : '#3b82f6',
-            score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0,
+            score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0, joinCode,
           },
           merge: false,
         },

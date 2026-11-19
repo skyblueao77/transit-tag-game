@@ -31,6 +31,7 @@ export interface User {
   protectionZone?: ProtectionZoneType;
   shinkansenSegmentCount?: number;
   penaltyRevealUntil?: number;
+  joinCode?: string;
 }
 
 export interface PrivateLocation {
@@ -131,6 +132,8 @@ export interface GameConfig {
   gameSessionId?: string;
   sessionStartedAt?: number;
   sessionSchemaVersion?: number;
+  currentJoinCode?: string;
+  registrationOpen?: boolean;
 }
 
 

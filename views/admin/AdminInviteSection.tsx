@@ -1,5 +1,5 @@
 import type React from 'react';
-import { Check, Copy, QrCode, Users } from 'lucide-react';
+import { Check, Copy, Lock, LockOpen, QrCode, RefreshCw, Users } from 'lucide-react';
 import type { User } from '../../types';
 
 interface AdminInviteSectionProps {
@@ -7,9 +7,15 @@ interface AdminInviteSectionProps {
   inviteUrl: string;
   copiedLink: boolean;
   copiedText: boolean;
+  currentJoinCode?: string;
+  registrationOpen?: boolean;
+  isRotatingJoinCode?: boolean;
+  isTogglingRegistration?: boolean;
   onCopyInviteUrl: () => void;
   onCopyInviteMessage: () => void;
   onOpenQrModal: () => void;
+  onRotateJoinCode?: () => void;
+  onToggleRegistrationOpen?: () => void;
 }
 
 const AdminInviteSection: React.FC<AdminInviteSectionProps> = ({
@@ -17,13 +23,21 @@ const AdminInviteSection: React.FC<AdminInviteSectionProps> = ({
   inviteUrl,
   copiedLink,
   copiedText,
+  currentJoinCode,
+  registrationOpen,
+  isRotatingJoinCode = false,
+  isTogglingRegistration = false,
   onCopyInviteUrl,
   onCopyInviteMessage,
   onOpenQrModal,
+  onRotateJoinCode,
+  onToggleRegistrationOpen,
 }) => {
+  const isRegOpen = registrationOpen !== false;
+
   return (
     <section className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
-      <div className="flex justify-between items-center mb-3">
+      <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
         <h3 className="font-black text-slate-800 flex items-center gap-2 text-sm uppercase">
           <Users size={18} className="text-blue-600" />
           参加者の招待（{users.length}名 登録中）
@@ -32,6 +46,20 @@ const AdminInviteSection: React.FC<AdminInviteSectionProps> = ({
           A: {users.filter(u => u.team === 'A').length}名 / B: {users.filter(u => u.team === 'B').length}名
         </span>
       </div>
+
+      {currentJoinCode && (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-blue-50/70 border border-blue-200 rounded-xl px-3 py-2 mb-3">
+          <div className="min-w-0">
+            <span className="text-[10px] font-black text-blue-700 uppercase tracking-wider block">現在の招待コード</span>
+            <code className="text-xs font-mono font-bold text-slate-800 break-all">{currentJoinCode}</code>
+          </div>
+          <span className={`text-[10px] font-black px-2 py-1 rounded-full shrink-0 ${
+            isRegOpen ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+          }`}>
+            {isRegOpen ? '参加受付中' : '参加受付停止中'}
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 mb-3">
         <input
@@ -68,6 +96,37 @@ const AdminInviteSection: React.FC<AdminInviteSectionProps> = ({
           QRコードを拡大表示
         </button>
       </div>
+
+      {(onRotateJoinCode || onToggleRegistrationOpen) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-100">
+          {onRotateJoinCode && (
+            <button
+              type="button"
+              onClick={onRotateJoinCode}
+              disabled={isRotatingJoinCode}
+              className="py-2 px-3 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={isRotatingJoinCode ? 'animate-spin' : ''} />
+              招待コード再発行（旧QR無効化）
+            </button>
+          )}
+          {onToggleRegistrationOpen && (
+            <button
+              type="button"
+              onClick={onToggleRegistrationOpen}
+              disabled={isTogglingRegistration}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-colors disabled:opacity-50 ${
+                isRegOpen
+                  ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+              }`}
+            >
+              {isRegOpen ? <Lock size={13} /> : <LockOpen size={13} />}
+              {isRegOpen ? '新規参加受付を停止する' : '新規参加受付を再開する'}
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 };

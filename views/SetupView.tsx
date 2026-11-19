@@ -1,9 +1,9 @@
 import type React from 'react';
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { User } from '../types';
-import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle } from 'lucide-react';
+import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle, KeyRound } from 'lucide-react';
 import { isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
 import { loginPlayerAccount, registerPlayerAccount } from '../src/infrastructure/firebase/playerSetup';
 import { getUtf8ByteLength } from '../src/game/utf8';
@@ -15,7 +15,19 @@ interface Props {
 }
 
 const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated = false }) => {
+  const [searchParams] = useSearchParams();
+  const initialJoinCode = (() => {
+    const fromHash = searchParams.get('join');
+    if (fromHash) return fromHash.trim();
+    if (typeof window !== 'undefined') {
+      const fromWindow = new URLSearchParams(window.location.search).get('join');
+      if (fromWindow) return fromWindow.trim();
+    }
+    return '';
+  })();
+
   const [mode, setMode] = useState<'REGISTER' | 'LOGIN'>('REGISTER');
+  const [joinCode, setJoinCode] = useState(initialJoinCode);
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -26,6 +38,14 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
 
   const DEFAULT_LAT = 35.6812;
   const DEFAULT_LNG = 139.7671;
+
+  // HashRouter クエリ (?join=...) 変化時にも追従
+  useEffect(() => {
+    const fromHash = searchParams.get('join')?.trim();
+    if (fromHash && !joinCode) {
+      setJoinCode(fromHash);
+    }
+  }, [searchParams, joinCode]);
 
   // 起動時に一度だけ現在地を取得
   useEffect(() => {
@@ -69,7 +89,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId.trim() || !password.trim() || !name.trim() || isSubmitting) return;
+    if (!joinCode.trim() || !userId.trim() || !password.trim() || !name.trim() || isSubmitting) return;
     if (getUtf8ByteLength(name.trim()) > 80) {
       toast.error('ニックネームが長すぎます（日本語約26文字／80バイト以内で入力してください）。');
       return;
@@ -87,11 +107,25 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
         password,
         name,
         team,
+        joinCode: joinCode.trim(),
         location: { latitude: posToSave.lat, longitude: posToSave.lng },
         fallbackSessionId: gameSessionId,
       });
       if (result.ok === false) {
-        toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
+        switch (result.reason) {
+          case 'INVALID_JOIN_CODE':
+            toast.error('招待コードの形式が正しくありません。管理者から共有されたURLまたはコードをご確認ください。');
+            break;
+          case 'JOIN_CODE_INACTIVE':
+            toast.error('この招待コードは無効か期限切れです。管理者から最新のQRコードを受け取ってください。');
+            break;
+          case 'REGISTRATION_CLOSED':
+            toast.error('現在、新規参加の受付は停止されています。管理者にお問い合わせください。');
+            break;
+          case 'SESSION_NOT_INITIALIZED':
+            toast.error('ゲームセッション初期化待ちです。管理者が初期化した後に参加してください。');
+            break;
+        }
         return;
       }
       onComplete(result.user);
@@ -193,6 +227,30 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
 
         {mode === 'REGISTER' ? (
           <form onSubmit={handleRegister}>
+            {/* 招待コード */}
+            <div className="mb-4">
+              <label htmlFor="reg-join-code" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
+                招待コード（QR読取で自動入力）
+              </label>
+              <div className="relative">
+                <input
+                  id="reg-join-code"
+                  type="text"
+                  value={joinCode}
+                  onChange={e => setJoinCode(e.target.value.trim())}
+                  className="w-full pl-9 pr-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-mono font-bold text-xs transition-all"
+                  placeholder="管理者共有のQRまたは招待コードを入力"
+                  maxLength={128}
+                  required
+                  disabled={isSubmitting}
+                />
+                <KeyRound size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              </div>
+              <p className="text-[9px] text-slate-400 mt-1 ml-1 font-medium">
+                ※招待URLを開くと自動で入力されます
+              </p>
+            </div>
+
             {/* ユーザーID */}
             <div className="mb-4">
               <label htmlFor="reg-user-id" className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
@@ -284,7 +342,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
 
             <button
               type="submit"
-              disabled={!userId.trim() || !password.trim() || !name.trim() || isSubmitting}
+              disabled={!joinCode.trim() || !userId.trim() || !password.trim() || !name.trim() || isSubmitting}
               className={`w-full py-4 font-black rounded-xl transition-all shadow-lg uppercase tracking-wider text-sm active:scale-95 flex items-center justify-center gap-2 ${
                 isSubmitting
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed'

@@ -358,6 +358,12 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         if (!canCompleteMission(configData.gameStatus, isFinal)) {
           return { ok: false, reason: 'MISSION_NOT_ALLOWED' };
         }
+        if (!isFinal) {
+          const activeMissionId = userData.team === 'A' ? configData.activeMissionA : configData.activeMissionB;
+          if (typeof activeMissionId !== 'string' || activeMissionId !== input.missionId) {
+            return { ok: false, reason: 'MISSION_NOT_ACTIVE' };
+          }
+        }
 
         const catalogPoints = missionData.points;
         if (typeof catalogPoints !== 'number' || !Number.isInteger(catalogPoints) || catalogPoints < 1 || catalogPoints > 100) {
