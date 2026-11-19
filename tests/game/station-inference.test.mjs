@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  analyzeTransitSuggestions,
   calculatePointToSegmentDistance,
   findCandidateStations,
   findCandidateTransitSuggestions,
@@ -116,11 +117,22 @@ test('findNearestStation returns best suggestion or null when out of range', () 
 });
 
 test('real stations.json dataset verification', () => {
-  const filePath = path.resolve('src/data/stations.json');
-  assert.ok(fs.existsSync(filePath), 'src/data/stations.json must exist');
+  const filePath = path.resolve('public/data/stations.json');
+  assert.ok(fs.existsSync(filePath), 'public/data/stations.json must exist');
 
   const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
   assert.ok(allStations.length >= 8000, 'Must have at least 8000 active stations');
+
+  const stationIds = new Set(allStations.map(s => s.id));
+  const brokenLinks = [];
+  for (const station of allStations) {
+    for (const nextEdge of station.next ?? []) {
+      if (!stationIds.has(nextEdge.to)) {
+        brokenLinks.push({ from: station.id, to: nextEdge.to });
+      }
+    }
+  }
+  assert.equal(brokenLinks.length, 0, 'stations.json must not contain dangling next[].to links');
 
   // Test Tokyo station detection
   const tokyoCoords = { latitude: 35.681236, longitude: 139.767125 };
@@ -172,7 +184,7 @@ test('formatSegmentLabel formats transit line and endpoints correctly', () => {
 });
 
 test('findTransitSuggestion identifies in-transit segment between Shibuya and Ebisu', () => {
-  const filePath = path.resolve('src/data/stations.json');
+  const filePath = path.resolve('public/data/stations.json');
   const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 
   // Midpoint between Shibuya and Ebisu on Yamanote Line
@@ -192,10 +204,14 @@ test('findTransitSuggestion identifies in-transit segment between Shibuya and Eb
   assert.equal(candidates[0].type, 'SEGMENT');
   assert.equal(candidates[0].proximity, 'IN_TRANSIT');
   assert.ok(candidates.some(c => c.type === 'STATION' && (c.station?.name === '渋谷' || c.station?.name === '恵比寿')));
+
+  const analysis = analyzeTransitSuggestions(midPoint, allStations);
+  assert.deepEqual(analysis.primary, suggestion);
+  assert.deepEqual(analysis.candidates, candidates);
 });
 
 test('findTransitSuggestion prioritizes AT_STATION when within station threshold', () => {
-  const filePath = path.resolve('src/data/stations.json');
+  const filePath = path.resolve('public/data/stations.json');
   const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 
   // Tokyo Station platform
@@ -249,7 +265,7 @@ test('formatSegmentLabel formats directional label with next station (Phase 3)',
 });
 
 test('findTransitSuggestion integrates heading to suggest next station when moving', () => {
-  const filePath = path.resolve('src/data/stations.json');
+  const filePath = path.resolve('public/data/stations.json');
   const allStations = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
 
   // Moving towards Ebisu from Shibuya

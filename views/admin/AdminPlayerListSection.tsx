@@ -1,12 +1,14 @@
 import type React from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeftRight, RefreshCw, Trash2, Users } from 'lucide-react';
 import type { GameConfig, User } from '../../types';
 import { getPlayerRole } from '../../src/game';
+import { getServerNowMs } from '../../src/infrastructure/firebase/serverClock';
 
 interface AdminPlayerListSectionProps {
   config: GameConfig;
   users: User[];
-  nowMs: number;
+  nowMs?: number;
   modifyingPlayerIds: Set<string>;
   resumingPlayerIds: Set<string>;
   onChangePlayerTeam: (user: User) => Promise<void>;
@@ -17,13 +19,29 @@ interface AdminPlayerListSectionProps {
 const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
   config,
   users,
-  nowMs,
+  nowMs: nowMsProp,
   modifyingPlayerIds,
   resumingPlayerIds,
   onChangePlayerTeam,
   onResumePlayer,
   onDeletePlayer,
-}) => (
+}) => {
+  const [localNowMs, setLocalNowMs] = useState<number>(() => nowMsProp ?? getServerNowMs());
+  const nowMs = nowMsProp ?? localNowMs;
+  const hasActivePenalty = nowMsProp === undefined && users.some(
+    u => typeof u.penaltyRevealUntil === 'number' && u.penaltyRevealUntil > localNowMs,
+  );
+
+  useEffect(() => {
+    if (!hasActivePenalty) return;
+    setLocalNowMs(getServerNowMs());
+    const timer = window.setInterval(() => {
+      setLocalNowMs(getServerNowMs());
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [hasActivePenalty]);
+
+  return (
   <section className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
     <h3 className="font-black flex items-center gap-2 mb-3 text-slate-800 uppercase tracking-tight text-sm">
       <Users size={18} className="text-blue-600" />
@@ -90,6 +108,7 @@ const AdminPlayerListSection: React.FC<AdminPlayerListSectionProps> = ({
       })}
     </div>
   </section>
-);
+  );
+};
 
 export default AdminPlayerListSection;

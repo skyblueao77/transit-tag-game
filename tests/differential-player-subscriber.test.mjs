@@ -74,6 +74,26 @@ describe('Differential per-player subscriber', () => {
     subscriber.dispose();
   });
 
+  test('re-subscribes failed player when setPlayerIds is called again', () => {
+    const { subscriber, activeListeners, subscribeCalls, published, errors } = createHarness();
+
+    subscriber.setPlayerIds(['p1']);
+    assert.deepEqual(subscribeCalls, ['p1']);
+
+    const permError = Object.assign(new Error('Missing permissions'), { code: 'permission-denied' });
+    activeListeners.get('p1').onFailure(permError);
+    assert.equal(errors.length, 0);
+
+    // Calling setPlayerIds again with p1 must re-subscribe because failure cleared active subscription
+    subscriber.setPlayerIds(['p1']);
+    assert.deepEqual(subscribeCalls, ['p1', 'p1']);
+
+    activeListeners.get('p1').onNext({ lat: 35.68 });
+    assert.deepEqual(published.at(-1), { p1: { lat: 35.68 } });
+
+    subscriber.dispose();
+  });
+
   test('ignores updates and setPlayerIds after dispose', () => {
     const { subscriber, activeListeners, subscribeCalls, published } = createHarness();
 

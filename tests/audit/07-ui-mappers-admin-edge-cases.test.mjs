@@ -155,7 +155,6 @@ describe('Audit 07: Snapshot Mappers, Admin Rules/Broadcast/Score Matrix & Exhau
           user: makeUser({ status }),
           missions: [...MISSIONS, ...FINAL_MISSIONS],
           onComplete: async () => ({ ok: true, missionId: 'm01', reward: { points: 20 }, score: { playerScoreDelta: 20, teamScoreDelta: 20, invincibleCardDelta: 0, luckyReward: false }, isFinalMission: isFinal }),
-          onExposeLocation: async () => {},
         });
         assert.ok(html.length > 50);
       });

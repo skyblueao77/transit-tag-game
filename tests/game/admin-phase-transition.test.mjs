@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { resolveAdminPhaseTransition } from '../../src/game/adminPhaseTransition.ts';
+import {
+  resolveAdminPhaseTransition,
+  resolvePlayerPauseResumeExtensions,
+} from '../../src/game/adminPhaseTransition.ts';
 import { FINAL_MISSION_DURATION_MS } from '../../src/game/time.ts';
 
 const now = 1_800_000_000_000;
@@ -58,5 +61,30 @@ describe('trusted admin phase core', () => {
     });
     const final = resolveAdminPhaseTransition({ currentPhase:'DAY2_ACTIVE', action:'START_FINAL', now, finalMissionId:'final_01' }); assert.equal(final.updates.finalMissionEndTime, now + FINAL_MISSION_DURATION_MS); assert.equal(final.updates.isFinalMissionActive, true);
     const ended = resolveAdminPhaseTransition({ currentPhase:'FINAL_MISSION', action:'END_GAME', now }); assert.equal(ended.updates.isGameOver, true); assert.equal(ended.updates.isFinalMissionActive, false);
+  });
+
+  test('extends active player timers on RESUME and skips expired or invalid pause timestamps', () => {
+    const pauseStart = now;
+    const resumeNow = now + 180_000;
+    const patch = resolvePlayerPauseResumeExtensions({
+      waitingUntil: pauseStart + 120_000,
+      invincibleUntil: pauseStart - 5_000, // already expired before pause
+      penaltyRevealUntil: pauseStart + 600_000,
+      shinkansenStartTime: pauseStart - 300_000,
+    }, pauseStart, resumeNow);
+
+    assert.deepEqual(patch, {
+      waitingUntil: pauseStart + 300_000,
+      penaltyRevealUntil: pauseStart + 780_000,
+      shinkansenStartTime: pauseStart - 120_000,
+    });
+
+    assert.equal(resolvePlayerPauseResumeExtensions({
+      waitingUntil: pauseStart - 10_000,
+      invincibleUntil: pauseStart,
+    }, pauseStart, resumeNow), null);
+
+    assert.equal(resolvePlayerPauseResumeExtensions({ waitingUntil: pauseStart + 60_000 }, null, resumeNow), null);
+    assert.equal(resolvePlayerPauseResumeExtensions({ waitingUntil: pauseStart + 60_000 }, pauseStart, pauseStart), null);
   });
 });

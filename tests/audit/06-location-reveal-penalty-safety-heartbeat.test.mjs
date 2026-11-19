@@ -387,7 +387,7 @@ describe('Audit 06: Location Tracking, AutoExpose, Admin Reveal, Penalty & Safet
   });
 
   test('[AUDIT-BUG] auto station/transit check-in labels (e.g., Kobe Port Liner) exceed firestore.rules 100-byte UTF-8 lastStation limit despite passing playerStore length <= 100', () => {
-    const stations = JSON.parse(readFileSync(new URL('../../src/data/stations.json', import.meta.url), 'utf8'));
+    const stations = JSON.parse(readFileSync(new URL('../../public/data/stations.json', import.meta.url), 'utf8'));
     const kobeCenter = stations.find(s => String(s.name).includes('計算科学センター'));
     assert.ok(kobeCenter, 'Expected 計算科学センター station in stations.json');
     const stationLabel = formatStationLabel(kobeCenter);

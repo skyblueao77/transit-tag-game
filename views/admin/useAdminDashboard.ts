@@ -39,7 +39,6 @@ import {
   type EmergencyLocationProjectionsSubscriber,
   subscribeMissionCompletions,
 } from '../../src/infrastructure/firebase/subscriptions';
-import { getServerNowMs } from '../../src/infrastructure/firebase/serverClock';
 import type { PhaseControlAction } from './AdminPhaseControlSection';
 import type { ConfirmOptions } from '../../src/hooks/useConfirmDialog';
 
@@ -61,7 +60,6 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   const [isApplyingPenalty, setIsApplyingPenalty] = useState(false);
 
   const [modifyingPlayerIds, setModifyingPlayerIds] = useState<Set<string>>(new Set());
-  const [nowMs, setNowMs] = useState<number>(() => getServerNowMs());
 
   const [missionTab, setMissionTab] = useState<'DISPATCH' | 'CATALOG' | 'COMPLETIONS'>('DISPATCH');
   const [missionSearch, setMissionSearch] = useState('');
@@ -110,11 +108,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   const emergencySubscriberRef = useRef<EmergencyLocationProjectionsSubscriber | null>(null);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setNowMs(getServerNowMs());
-    }, 5000);
     return () => {
-      clearInterval(timer);
       if (copiedLinkTimerRef.current) clearTimeout(copiedLinkTimerRef.current);
       if (copiedTextTimerRef.current) clearTimeout(copiedTextTimerRef.current);
     };
@@ -943,7 +937,6 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     setPenaltyDurationMinutes,
     isApplyingPenalty,
     modifyingPlayerIds,
-    nowMs,
     missionTab,
     setMissionTab,
     missionSearch,

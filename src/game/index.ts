@@ -224,6 +224,7 @@ export type {
   ThrottleDecisionReason,
 } from './locationThrottling';
 export {
+  analyzeTransitSuggestions,
   calculatePointToSegmentDistance,
   findCandidateStations,
   findCandidateTransitSuggestions,
@@ -242,6 +243,7 @@ export type {
   StationProximity,
   StationSuggestion,
   SuggestStationOptions,
+  TransitAnalysisResult,
   TransitProximity,
   TransitSegment,
   TransitSuggestion,

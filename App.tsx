@@ -22,20 +22,17 @@ import {
   activateInvincibility,
   capturePlayer,
   completeMission,
-  exposeLocation,
   updatePrivateLocation,
   startWaiting,
   requestSafetyAction,
 } from './src/application';
 import {
   firebaseEmergencyLocationStore,
-  firebaseExposedLocationStore,
   firebasePrivateLocationStore,
 } from './src/infrastructure/firebase/locationStores';
 
 import { DEFAULT_DYNAMIC_RULE_SETTINGS } from './constants';
 import {
-  canRevealLocation,
   determineGameWinner,
   getPlayerRole,
   getRoleForTeam,
@@ -71,8 +68,8 @@ import useConfirmDialog from './src/hooks/useConfirmDialog';
 import useOnlineStatus from './src/hooks/useOnlineStatus';
 import usePlayerAutoExpose from './src/hooks/usePlayerAutoExpose';
 import useWaitingAutoResume from './src/hooks/useWaitingAutoResume';
-import { getServerNowMs } from './src/infrastructure/firebase/serverClock';
 import ConfirmDialog from './src/components/ui/ConfirmDialog';
+import ErrorBoundary from './src/components/ui/ErrorBoundary';
 import LoadingSpinner from './src/components/ui/LoadingSpinner';
 import FinalResultView from './src/components/game/FinalResultView';
 import SafetyActionDialog from './src/components/game/SafetyActionDialog';
@@ -240,96 +237,6 @@ const AppContent: React.FC = () => {
     privateLocation,
     exposedLocations,
   });
-
-  // 位置公開（スナップショット方式）
-  // 押した瞬間のprivate locationをスナップショットとして5分間表示。
-  // 本人がその後移動してもピンは動かない。
-  const handleUpdateLocation = useCallback(async (): Promise<void> => {
-    if (!currentUser || !gameConfig.gameSessionId || !canRevealLocation(gameConfig.gameStatus)) return;
-
-    const confirmed = await confirm({
-      title: '現在地の公開',
-      description: '公開された座標は5分間地図上に固定表示されます。\n（その後移動してもピンはその場に残ります）',
-      confirmLabel: '公開する',
-      variant: 'primary',
-    });
-    if (!confirmed) return;
-
-    const now = getServerNowMs();
-    const EXPOSE_DURATION = 5 * 60 * 1000; // 5 分
-    const currentUserId = currentUser.id;
-    const expectedSessionId = gameConfig.gameSessionId;
-
-    // App.tsx が随時private locationを更新しているので、それをスナップショットとして使う
-    const snapLat = privateLocation?.latitude;
-    const snapLng = privateLocation?.longitude;
-
-    if (snapLat == null || snapLng == null) {
-      // Private Location がまだない場合は GPS から直接取得
-      if (!('geolocation' in navigator)) {
-        toast.error('このブラウザは位置情報に対応していません。');
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        async pos => {
-          try {
-            const privateResult = await handleUpdatePrivateLocation({
-              playerId: currentUserId,
-              expectedSessionId,
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-            });
-            if (!privateResult.ok) throw new Error(privateResult.reason);
-
-            const exposeResult = await exposeLocation({
-              playerId: currentUserId,
-              expectedSessionId,
-              privateLocation: {
-                gameSessionId: expectedSessionId,
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-              },
-              phase: gameConfig.gameStatus,
-              now: getServerNowMs(),
-              duration: EXPOSE_DURATION,
-            }, firebaseExposedLocationStore);
-            if (exposeResult.ok === false) throw new Error(exposeResult.reason);
-
-            toast.success('現在地を公開しました。5分後に自動で非公開になります。');
-          } catch (error) {
-            console.error('Location expose error:', error);
-            toast.error('通信エラー：位置の公開に失敗しました。');
-          }
-        },
-        error => {
-          const msg = error.code === 3
-            ? 'GPSの取得がタイムアウトしました。場所を変えてお試しください。'
-            : '位置情報を取得できませんでした。';
-          toast.error(msg);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-      return;
-    }
-
-    // private locationが存在する場合はそのままスナップショットとして書き込む
-    try {
-      const exposeResult = await exposeLocation({
-        playerId: currentUser.id,
-        expectedSessionId: gameConfig.gameSessionId ?? '',
-        privateLocation: privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null,
-        phase: gameConfig.gameStatus,
-        now,
-        duration: EXPOSE_DURATION,
-      }, firebaseExposedLocationStore);
-      if (exposeResult.ok === false) throw new Error(exposeResult.reason);
-
-      toast.success('現在地を公開しました。5分後に自動で非公開になります。');
-    } catch (error) {
-      console.error('Location expose error:', error);
-      toast.error('通信エラー：位置の公開に失敗しました。');
-    }
-  }, [confirm, currentUser, privateLocation, gameConfig.gameStatus, gameConfig.gameSessionId, handleUpdatePrivateLocation]);
 
   const handleUpdateLastStation = useCallback(async (
     stationName: string,
@@ -579,7 +486,7 @@ const AppContent: React.FC = () => {
 
   if (!authReady || userLoading) {
     return (
-      <div className="min-h-[100dvh] bg-slate-900 flex items-center justify-center text-white">
+      <div className="min-h-[100dvh] bg-slate-900 flex items-center justify-center text-white pt-[env(safe-area-inset-top)]">
         <LoadingSpinner message="ゲームデータを読み込み中..." />
       </div>
     );
@@ -597,60 +504,74 @@ const AppContent: React.FC = () => {
     players: allUsers,
   });
 
+  const offlineBanner = !isOnline ? (
+    <div className="shrink-0 z-30 bg-red-600 text-white text-xs py-1.5 px-4 pt-[max(0.375rem,env(safe-area-inset-top))] font-bold flex items-center justify-center gap-2 shadow-sm">
+      <WifiOff size={14} className="animate-pulse shrink-0" />
+      <span>通信断：オフラインモード（位置更新を一時停止中）</span>
+    </div>
+  ) : null;
 
   return (
     <>
       <Toaster position="top-center" richColors />
       <ConfirmDialog {...dialogProps} />
 
-      {!isOnline && (
-        <div className="fixed top-0 left-0 right-0 z-[5000] bg-red-600 text-white text-xs py-1.5 px-4 font-bold flex items-center justify-center gap-2 shadow-md">
-          <WifiOff size={14} className="animate-pulse" />
-          <span>通信が切断されています（オフラインモード）</span>
-        </div>
-      )}
-
       {isAdminPath ? (
         <div className="min-h-[100dvh] w-full bg-slate-100 relative font-sans">
-          <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
-            <Routes>
-              <Route
-                path="/admin"
-                element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
-              />
-              <Route path="*" element={<Navigate to="/admin" replace />} />
-            </Routes>
-          </Suspense>
+          {offlineBanner}
+          <ErrorBoundary scope="route" resetKey={location.pathname}>
+            <Suspense fallback={<LoadingSpinner message="管理者画面を読み込み中..." />}>
+              <Routes>
+                <Route
+                  path="/admin"
+                  element={<AdminView config={gameConfig} users={allUsers} missions={missions} />}
+                />
+                <Route path="*" element={<Navigate to="/admin" replace />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
         </div>
       ) : !activeViewUser ? (
-        <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
-          <SetupView
-            onComplete={setCurrentUser}
-            gameSessionId={gameConfig.gameSessionId}
-            isAuthenticated={Boolean(authUserId)}
-          />
-        </Suspense>
+        <div className="min-h-[100dvh] flex flex-col">
+          {offlineBanner}
+          <div className="flex-1 min-h-0">
+            <ErrorBoundary scope="route" resetKey={location.pathname}>
+              <Suspense fallback={<LoadingSpinner message="セットアップ画面を読み込み中..." />}>
+                <SetupView
+                  onComplete={setCurrentUser}
+                  gameSessionId={gameConfig.gameSessionId}
+                  isAuthenticated={Boolean(authUserId)}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
+        </div>
       ) : (!isAdmin && (gameConfig.gameStatus === 'GAME_OVER' || gameConfig.isGameOver)) ? (
-        <FinalResultView
-          winner={winner}
-          aScore={aScore}
-          bScore={bScore}
-          logs={gameConfig.logs ?? []}
-          safetyDialogOpen={safetyDialogOpen}
-          safetyActionBusy={safetyActionBusy}
-          onOpenSafetyDialog={() => setSafetyDialogOpen(true)}
-          onCloseSafetyDialog={() => setSafetyDialogOpen(false)}
-          onChooseSafetyAction={handleSafetyAction}
-          onSignOutAndReload={async () => {
-            await signOutCurrentUser();
-            window.location.reload();
-          }}
-        />
+        <div className="min-h-[100dvh] flex flex-col">
+          {offlineBanner}
+          <div className="flex-1 min-h-0">
+            <FinalResultView
+              winner={winner}
+              aScore={aScore}
+              bScore={bScore}
+              logs={gameConfig.logs ?? []}
+              safetyDialogOpen={safetyDialogOpen}
+              safetyActionBusy={safetyActionBusy}
+              onOpenSafetyDialog={() => setSafetyDialogOpen(true)}
+              onCloseSafetyDialog={() => setSafetyDialogOpen(false)}
+              onChooseSafetyAction={handleSafetyAction}
+              onSignOutAndReload={async () => {
+                await signOutCurrentUser();
+                window.location.reload();
+              }}
+            />
+          </div>
+        </div>
       ) : (
-        <div className="flex flex-col h-[100dvh] max-h-[100dvh] bg-slate-50 overflow-hidden">
+        <div className="flex flex-col h-[100dvh] max-h-[100dvh] bg-slate-50 overflow-hidden relative">
         {/* 一時中断オーバーレイ */}
         {gamePaused && !isAdmin && (
-          <div className="absolute inset-0 z-[2000] bg-red-600/95 backdrop-blur-md overflow-y-auto flex flex-col items-center p-8 text-center text-white">
+          <div className="absolute inset-0 z-[2000] bg-red-600/95 backdrop-blur-md overflow-y-auto flex flex-col items-center p-8 pt-[max(2rem,env(safe-area-inset-top))] text-center text-white">
             <div className="my-auto flex flex-col items-center">
             <AlertTriangle size={80} className="mb-6 animate-bounce" />
             <h2 className="text-3xl font-black mb-4 uppercase italic">ゲーム一時中断</h2>
@@ -658,7 +579,7 @@ const AppContent: React.FC = () => {
               現在、ゲームは一時中断しています。<br />再開までしばらくお待ちください。
             </p>
             <div className="bg-white/20 p-4 rounded-2xl text-sm font-bold">
-              ゲーム操作は一時停止中です。待機時間や無敵時間などの期限は進行します。
+              ゲーム操作は一時停止中です。再開時に待機・無敵・ペナルティ等の残り時間が延長されます。
             </div>
             <button
               type="button"
@@ -678,8 +599,10 @@ const AppContent: React.FC = () => {
           />
         )}
 
+        {offlineBanner}
+
         {/* 役割バナー */}
-        <div className={`px-4 py-1 flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-white ${getRoleForTeam('A', gameConfig) === 'ONI' ? 'bg-red-600' : 'bg-blue-600'}`}>
+        <div className={`shrink-0 px-4 py-1 ${isOnline ? 'pt-[max(0.25rem,env(safe-area-inset-top))]' : ''} flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-white ${getRoleForTeam('A', gameConfig) === 'ONI' ? 'bg-red-600' : 'bg-blue-600'}`}>
           <Swords size={12} />
           {getRoleForTeam('A', gameConfig) === 'ONI'
             ? 'Team A is ONI / Team B is RUNNER'
@@ -776,53 +699,54 @@ const AppContent: React.FC = () => {
                 </div>
             )
           ) : (
-            <Suspense fallback={<LoadingSpinner message="画面を読み込み中..." />}>
-              <Routes>
-                <Route
-                  path="/map"
-                  element={
-                    <MapView
-                      users={allUsers}
-                      currentUser={activeViewUser}
-                      privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
-                      exposedLocations={exposedLocations}
-                      gameConfig={gameConfig}
-                      onCapture={handleCapture}
-                      onActivateInvincibility={handleActivateInvincibility}
-                      onStartShinkansenWait={handleStartShinkansenWait}
-                      onUpdateLastStation={handleUpdateLastStation}
-                      onUpdateProtectionZone={handleUpdateProtectionZone}
-                      onStartShinkansen={handleStartShinkansen}
-                      onIncrementShinkansenSegment={handleIncrementShinkansenSegment}
-                      onResetShinkansen={handleResetShinkansen}
-                    />
-                  }
-                />
-                <Route
-                  path="/mission"
-                  element={
-                    <MissionView
-                      config={gameConfig}
-                      onComplete={handleScoreUpdate}
-                      onExposeLocation={handleUpdateLocation}
-                      user={activeViewUser}
-                      missions={missions}
-                    />
-                  }
-                />
-                <Route
-                  path="/admin"
-                  element={
-                    <AdminView
-                      config={gameConfig}
-                      users={allUsers}
-                      missions={missions}
-                    />
-                  }
-                />
-                <Route path="*" element={<Navigate to="/map" replace />} />
-              </Routes>
-            </Suspense>
+            <ErrorBoundary scope="route" resetKey={location.pathname}>
+              <Suspense fallback={<LoadingSpinner message="画面を読み込み中..." />}>
+                <Routes>
+                  <Route
+                    path="/map"
+                    element={
+                      <MapView
+                        users={allUsers}
+                        currentUser={activeViewUser}
+                        privateLocation={privateLocation?.gameSessionId === gameConfig.gameSessionId ? privateLocation : null}
+                        exposedLocations={exposedLocations}
+                        gameConfig={gameConfig}
+                        onCapture={handleCapture}
+                        onActivateInvincibility={handleActivateInvincibility}
+                        onStartShinkansenWait={handleStartShinkansenWait}
+                        onUpdateLastStation={handleUpdateLastStation}
+                        onUpdateProtectionZone={handleUpdateProtectionZone}
+                        onStartShinkansen={handleStartShinkansen}
+                        onIncrementShinkansenSegment={handleIncrementShinkansenSegment}
+                        onResetShinkansen={handleResetShinkansen}
+                      />
+                    }
+                  />
+                  <Route
+                    path="/mission"
+                    element={
+                      <MissionView
+                        config={gameConfig}
+                        onComplete={handleScoreUpdate}
+                        user={activeViewUser}
+                        missions={missions}
+                      />
+                    }
+                  />
+                  <Route
+                    path="/admin"
+                    element={
+                      <AdminView
+                        config={gameConfig}
+                        users={allUsers}
+                        missions={missions}
+                      />
+                    }
+                  />
+                  <Route path="*" element={<Navigate to="/map" replace />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
           )}
 
           {isAdmin && (

@@ -13,9 +13,10 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({ onAuthorized }) => {
   const [adminIdInput, setAdminIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   return (
-    <div className="flex flex-col items-center min-h-[100dvh] bg-slate-900 p-4 py-8 font-sans text-white">
+    <div className="flex flex-col items-center min-h-[100dvh] bg-slate-900 p-4 py-8 pt-[max(2rem,env(safe-area-inset-top))] font-sans text-white">
       <div className="w-full max-w-md my-auto">
       {isFirebaseMisconfigured && (
         <div className="w-full mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
@@ -44,6 +45,8 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({ onAuthorized }) => {
 
         <form onSubmit={async e => {
           e.preventDefault();
+          if (isSubmitting) return;
+          setIsSubmitting(true);
           setAuthError(null);
           try {
             const authorized = await signInAdmin(adminIdInput, passwordInput);
@@ -63,6 +66,8 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({ onAuthorized }) => {
             } else {
               setAuthError('ログインに失敗しました。IDまたはパスワードをご確認ください。');
             }
+          } finally {
+            setIsSubmitting(false);
           }
         }}>
           <div className="text-left mb-3">
@@ -97,9 +102,10 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({ onAuthorized }) => {
 
           <button
             type="submit"
-            className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black shadow-lg transition-all active:scale-95 text-sm"
+            disabled={isSubmitting}
+            className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl font-black shadow-lg transition-all active:scale-95 text-sm"
           >
-            ログインする
+            {isSubmitting ? 'ログイン中...' : 'ログインする'}
           </button>
 
           <div className="mt-5 p-3.5 bg-slate-900/70 border border-slate-700 rounded-xl text-left text-[11px] text-slate-300 leading-relaxed">

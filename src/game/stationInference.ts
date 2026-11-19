@@ -280,11 +280,13 @@ export function findCandidateStations(
   const atThreshold = options?.atStationThresholdMeters ?? DEFAULT_AT_STATION_THRESHOLD_METERS;
   const nearThreshold = options?.nearStationThresholdMeters ?? DEFAULT_NEAR_STATION_THRESHOLD_METERS;
 
-  const degBox = (maxDistance / 111000) * 1.5;
-  const minLat = coords.latitude - degBox;
-  const maxLat = coords.latitude + degBox;
-  const minLng = coords.longitude - degBox;
-  const maxLng = coords.longitude + degBox;
+  const degLatBox = (maxDistance / 110574) * 1.15;
+  const latScale = Math.max(0.2, Math.cos((coords.latitude * Math.PI) / 180));
+  const degLngBox = (maxDistance / (111320 * latScale)) * 1.15;
+  const minLat = coords.latitude - degLatBox;
+  const maxLat = coords.latitude + degLatBox;
+  const minLng = coords.longitude - degLngBox;
+  const maxLng = coords.longitude + degLngBox;
 
   const candidates: { station: StationData; distanceMeters: number }[] = [];
 
@@ -340,29 +342,24 @@ export function findNearestStation(
   return candidates[0] ?? null;
 }
 
-/**
- * Phase 2 Transit Inference Engine:
- * Intelligently suggests either station platform arrival (AT_STATION)
- * or in-transit train movement between two stations (IN_TRANSIT).
- */
-export function findTransitSuggestion(
+export interface TransitAnalysisResult {
+  primary: TransitSuggestion | null;
+  candidates: TransitSuggestion[];
+}
+
+function buildTransitPrimaryFromCandidates(
   coords: Coordinates,
   stations: StationData[],
+  candidateStations: StationSuggestion[],
   options?: SuggestStationOptions,
 ): TransitSuggestion | null {
-  if (!coords || !Array.isArray(stations) || stations.length === 0) {
+  if (candidateStations.length === 0) {
     return null;
   }
 
   const atStationThreshold = options?.atStationThresholdMeters ?? DEFAULT_AT_STATION_THRESHOLD_METERS;
   const segmentThreshold = options?.segmentThresholdMeters ?? DEFAULT_SEGMENT_THRESHOLD_METERS;
   const nearThreshold = options?.nearStationThresholdMeters ?? DEFAULT_NEAR_STATION_THRESHOLD_METERS;
-
-  // Step 1: Find candidate stations within 5km
-  const candidateStations = findCandidateStations(coords, stations, 8, options);
-  if (candidateStations.length === 0) {
-    return null;
-  }
 
   const nearest = candidateStations[0];
 
@@ -384,6 +381,7 @@ export function findTransitSuggestion(
     stationMap.set(c.station.id, c.station);
   }
 
+  const fullStationMap = getStationMap(stations);
   const candidateSegments: TransitSegment[] = [];
   const visitedSegmentKeys = new Set<string>();
 
@@ -403,7 +401,7 @@ export function findTransitSuggestion(
       // Find station B (either from candidateStations or full stations list)
       let stationB = stationMap.get(bId);
       if (!stationB) {
-        stationB = getStationMap(stations).get(bId);
+        stationB = fullStationMap.get(bId);
         if (stationB) {
           stationMap.set(bId, stationB);
         }
@@ -482,21 +480,26 @@ export function findTransitSuggestion(
 }
 
 /**
- * Finds all candidate transit suggestions (both segment and station options) for user selection.
+ * Single-pass transit inference: computes both primary suggestion and candidate list
+ * with only one scan of the stations dataset.
  */
-export function findCandidateTransitSuggestions(
+export function analyzeTransitSuggestions(
   coords: Coordinates,
   stations: StationData[],
   options?: SuggestStationOptions,
-): TransitSuggestion[] {
-  const primary = findTransitSuggestion(coords, stations, options);
-  if (!primary) return [];
+): TransitAnalysisResult {
+  if (!coords || !Array.isArray(stations) || stations.length === 0) {
+    return { primary: null, candidates: [] };
+  }
+
+  const candidateStations = findCandidateStations(coords, stations, 8, options);
+  const primary = buildTransitPrimaryFromCandidates(coords, stations, candidateStations, options);
+  if (!primary) {
+    return { primary: null, candidates: [] };
+  }
 
   const candidates: TransitSuggestion[] = [primary];
-  const stationCandidates = findCandidateStations(coords, stations, 4, options);
-
-  for (const st of stationCandidates) {
-    // Avoid duplicate if primary is the same station
+  for (const st of candidateStations.slice(0, 4)) {
     if (primary.type === 'STATION' && primary.station?.id === st.station.id) {
       continue;
     }
@@ -510,5 +513,29 @@ export function findCandidateTransitSuggestions(
     });
   }
 
-  return candidates;
+  return { primary, candidates };
+}
+
+/**
+ * Phase 2 Transit Inference Engine:
+ * Intelligently suggests either station platform arrival (AT_STATION)
+ * or in-transit train movement between two stations (IN_TRANSIT).
+ */
+export function findTransitSuggestion(
+  coords: Coordinates,
+  stations: StationData[],
+  options?: SuggestStationOptions,
+): TransitSuggestion | null {
+  return analyzeTransitSuggestions(coords, stations, options).primary;
+}
+
+/**
+ * Finds all candidate transit suggestions (both segment and station options) for user selection.
+ */
+export function findCandidateTransitSuggestions(
+  coords: Coordinates,
+  stations: StationData[],
+  options?: SuggestStationOptions,
+): TransitSuggestion[] {
+  return analyzeTransitSuggestions(coords, stations, options).candidates;
 }

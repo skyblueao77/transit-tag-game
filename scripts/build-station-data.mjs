@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 
-const TARBALL_URL = 'https://api.github.com/repos/Seo-4d696b75/station_database/tarball/main';
+const PINNED_COMMIT_SHA = '3eec2ed2f83275350e9e41045015b6e95dda3a4b';
+const TARBALL_URL = `https://api.github.com/repos/Seo-4d696b75/station_database/tarball/${PINNED_COMMIT_SHA}`;
 const TMP_DIR = '/tmp/station_db';
-const OUTPUT_FILE = path.resolve('src/data/stations.json');
+const OUTPUT_FILE = path.resolve('public/data/stations.json');
 
 function parseCsv(csvText) {
   const lines = csvText.split(/\r?\n/).filter(line => line.trim().length > 0);
@@ -31,7 +32,7 @@ const LOOP_LINE_CODES = new Set([
 ]);
 
 async function main() {
-  console.log('Downloading and extracting station_database tarball...');
+  console.log(`Downloading and extracting station_database tarball (${PINNED_COMMIT_SHA})...`);
   fs.rmSync(TMP_DIR, { recursive: true, force: true });
   fs.mkdirSync(TMP_DIR, { recursive: true });
 
@@ -121,7 +122,15 @@ async function main() {
     });
   }
 
-  console.log(`Generated ${stations.length} stations with verified lines & connections.`);
+  const validStationIds = new Set(stations.map(s => s.id));
+  let prunedConnections = 0;
+  for (const station of stations) {
+    const filteredNext = station.next.filter(conn => validStationIds.has(conn.to));
+    prunedConnections += station.next.length - filteredNext.length;
+    station.next = filteredNext;
+  }
+
+  console.log(`Generated ${stations.length} stations with verified lines & connections (pruned ${prunedConnections} dangling links).`);
 
   fs.mkdirSync(path.dirname(OUTPUT_FILE), { recursive: true });
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(stations));
