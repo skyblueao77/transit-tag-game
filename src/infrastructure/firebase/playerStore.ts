@@ -1,4 +1,4 @@
-import { doc, increment, runTransaction, serverTimestamp, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import { doc, increment, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 import type { ProtectionZoneType } from '../../game/types';
@@ -6,6 +6,7 @@ import { isValidGameSessionId } from '../../game/gameSession';
 import { getUtf8ByteLength, truncateToUtf8Bytes } from '../../game/utf8';
 import { TEAM_COLORS } from '../../../constants';
 import { appendToConfigLogs, assertAdmin, assertSignedInPlayer, createLogId } from './gateways/shared';
+import { PRIVATE_LOCATION_TTL_MS } from './locationStores';
 import { getServerNowMs, markServerTimestampWriteSent } from './serverClock';
 
 interface Coordinates {
@@ -36,6 +37,7 @@ export async function createPlayerWithPrivateLocation(
     latitude: location.latitude,
     longitude: location.longitude,
     updatedAt: serverTimestamp(),
+    expiresAt: Timestamp.fromMillis(getServerNowMs() + PRIVATE_LOCATION_TTL_MS),
   });
   markServerTimestampWriteSent();
   await batch.commit();

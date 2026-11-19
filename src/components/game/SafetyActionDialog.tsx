@@ -17,8 +17,13 @@ const SafetyActionDialog: React.FC<SafetyActionDialogProps> = ({ busy, onClose, 
           <XCircle size={22} />
         </button>
       </div>
+      <div className="mb-4 rounded-2xl border border-red-300 bg-red-50 p-3 text-xs font-bold leading-relaxed text-red-900">
+        🚨 急病・怪我・事故など生命や安全に関わる緊急時は、本アプリでの連絡よりも先に
+        <span className="font-black underline">119番（救急・消防）・110番（警察）・最寄りの駅係員</span>
+        へ直接連絡することを最優先してください。本アプリは救助・緊急通報サービスではありません。
+      </div>
       <p className="mb-4 text-sm font-medium text-slate-600">
-        該当する内容を選択してください。詳細な個人情報は記録されません。Emergencyを選ぶと、最新の位置情報がある場合に限り、正確な位置を管理者だけに最大2分間共有します。リタイアでは位置を共有しません。
+        該当する内容を選択してください。詳細な個人情報は記録されません。Emergencyを選ぶと、最新の位置情報がある場合に限り、正確な位置を管理者だけに共有し、更新が途絶えても管理者が解除するまで最終位置を保持します。リタイアでは位置を共有しません。
       </p>
       <div className="grid gap-2">
         <button type="button" disabled={busy} onClick={() => void onChoose('EMERGENCY', 'ILLNESS_OR_INJURY')} className="rounded-xl bg-red-50 px-4 py-3 text-left font-bold text-red-800 disabled:opacity-50">

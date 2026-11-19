@@ -174,4 +174,39 @@ describe('Emergency private-location heartbeat', () => {
     assert.equal(await updateEmergencyLocationOnce(input), false);
     assert.equal(updates.length, 0);
   });
+
+  test('accepts coarse (>400m) accuracy fixes during SOS and rejects negative accuracy', async () => {
+    const { input, updates } = fixture();
+    input.geolocation.getCurrentPosition = success => success({
+      coords: { latitude: 35.6812, longitude: 139.7671, accuracy: 1200 },
+    });
+
+    assert.equal(await updateEmergencyLocationOnce(input), true);
+    assert.equal(updates.length, 1);
+
+    input.geolocation.getCurrentPosition = success => success({
+      coords: { latitude: 35.6812, longitude: 139.7671, accuracy: -5 },
+    });
+    assert.equal(await updateEmergencyLocationOnce(input), false);
+    assert.equal(updates.length, 1);
+  });
+
+  test('falls back to low-accuracy geolocation when high-accuracy fix fails or times out', async () => {
+    const { input, updates, geolocationCalls } = fixture();
+    input.geolocation.getCurrentPosition = (success, error, options) => {
+      geolocationCalls.push({ success, error, options });
+      if (options?.enableHighAccuracy) {
+        error?.(new Error('GPS timeout'));
+        return;
+      }
+      success({ coords: { latitude: 35.69, longitude: 139.75, accuracy: 850 } });
+    };
+
+    assert.equal(await updateEmergencyLocationOnce(input), true);
+    assert.equal(geolocationCalls.length, 2);
+    assert.equal(geolocationCalls[0].options?.enableHighAccuracy, true);
+    assert.equal(geolocationCalls[1].options?.enableHighAccuracy, false);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].latitude, 35.69);
+  });
 });

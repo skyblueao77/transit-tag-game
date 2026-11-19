@@ -83,6 +83,19 @@ describe('Map view extracted UI components', () => {
     assert.match(html, /【ペナルティ】位置情報常時公開中！ 残り 1:30/);
     assert.doesNotMatch(html, /チーム位置スナップショット公開中/);
     assert.match(html, /【同一行動規定】チームメンバーと離れすぎています/);
+
+    const periodicHtml = await renderSsrComponent('/views/map/MapStatusHeader.tsx', {
+      isOffline: false,
+      timeLeft: makeTimeLeft({
+        periodicRevealRemaining: 185,
+        nextReveal: 1600,
+      }),
+      gameConfig: makeConfig(),
+      isTeamSplitAlert: false,
+      maxTeammateDistance: 0,
+      formatTime,
+    });
+    assert.match(periodicHtml, /定期位置公開中！ 残り 3:05/);
   });
 
   test('MapStatusBadges renders active status badges and hides shinkansen badge when not ACTIVE', async () => {

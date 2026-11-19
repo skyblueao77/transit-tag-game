@@ -1272,5 +1272,78 @@ describe('Firestore Security Rules', () => {
     });
     assert.equal(deleteRes.status, 403);
   });
+
+  test('Phase 2: validates privateLocations 48h expiresAt TTL and periodic GLOBAL exposedLocations window', async () => {
+    const now = Date.now();
+    // 1. Valid 48h expiresAt on privateLocations -> 200
+    assert.equal((await writeWithServerTimestamps(
+      `privateLocations/${userAUid}`,
+      { ...privateLocationPayload(35.68, 139.76), expiresAt: new Date(now + 48 * 3600_000) },
+      ['updatedAt'],
+      userAToken,
+    )).status, 200);
+
+    // 2. Excess >49h expiresAt on privateLocations -> 403
+    assert.equal((await writeWithServerTimestamps(
+      `privateLocations/${userAUid}`,
+      { ...privateLocationPayload(35.68, 139.76), expiresAt: new Date(now + 50 * 3600_000) },
+      ['updatedAt'],
+      userAToken,
+    )).status, 403);
+
+    // 3. Periodic GLOBAL exposedLocations write inside active periodic window -> 200
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE',
+      gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT,
+      sessionSchemaVersion: 2,
+      startTime: now - 31 * 60_000,
+      periodicRevealIntervalMinutes: 30,
+      periodicRevealDurationMinutes: 5,
+      day: 1,
+      missionMode: 'SEPARATE',
+      isGameOver: false,
+      teamARole: 'RUNNER',
+      teamBRole: 'ONI',
+      teamAScore: 100,
+      teamBScore: 50,
+      currentJoinCode: CURRENT_JOIN_CODE,
+      registrationOpen: true,
+      logs: [],
+    });
+    assert.equal((await writeWithServerTimestamps(
+      `exposedLocations/${userAUid}`,
+      exposedLocationPayload(35.68, 139.76, { revealScope: 'GLOBAL', expiresAt: now + 3 * 60_000 }),
+      ['capturedAt'],
+      userAToken,
+    )).status, 200);
+
+    // 4. Periodic GLOBAL exposedLocations write outside periodic window -> 403
+    await seed('game_config/current', {
+      gameStatus: 'DAY1_ACTIVE',
+      gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: SESSION_STARTED_AT,
+      sessionSchemaVersion: 2,
+      startTime: now - 10 * 60_000,
+      periodicRevealIntervalMinutes: 30,
+      periodicRevealDurationMinutes: 5,
+      day: 1,
+      missionMode: 'SEPARATE',
+      isGameOver: false,
+      teamARole: 'RUNNER',
+      teamBRole: 'ONI',
+      teamAScore: 100,
+      teamBScore: 50,
+      currentJoinCode: CURRENT_JOIN_CODE,
+      registrationOpen: true,
+      logs: [],
+    });
+    assert.equal((await writeWithServerTimestamps(
+      `exposedLocations/${userBUid}`,
+      exposedLocationPayload(35.68, 139.76, { revealScope: 'GLOBAL', expiresAt: now + 3 * 60_000 }),
+      ['capturedAt'],
+      userBToken,
+    )).status, 403);
+  });
 });
 

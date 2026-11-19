@@ -427,13 +427,17 @@ export class SimulatedFirestore {
         && auth.uid === id
         && hasCurrentGameSession()
         && (isCurrentParticipant(id) || participantAfter)
-        && wrapKeys(d).hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
+        && wrapKeys(d).hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt', 'expiresAt'])
         && wrapKeys(d).hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
         && d.gameSessionId === get('game_config/current').data.gameSessionId
         && isNum(d.latitude) && d.latitude >= -90 && d.latitude <= 90
         && isNum(d.longitude) && d.longitude >= -180 && d.longitude <= 180
         && isTs(d.updatedAt)
-        && d.updatedAt.toMillis() === nowMs;
+        && d.updatedAt.toMillis() === nowMs
+        && (!wrapKeys(d).hasAny(['expiresAt'])
+          || (isTs(d.expiresAt)
+            && d.expiresAt.toMillis() > nowMs
+            && d.expiresAt.toMillis() <= nowMs + 49 * 60 * 60_000));
     }
 
     // 4. exposedLocations/{uid}
@@ -446,12 +450,35 @@ export class SimulatedFirestore {
                 && ['EMERGENCY', 'RETIRED'].includes(getAfter(`users/${id}`).data.status))
               || (res !== null && isTs(res.expiresAt) && res.expiresAt.toMillis() <= nowMs)));
       }
+      const activePeriodicRevealEndMs = cfg => {
+        const intervalMs = wrapKeys(cfg).hasAny(['periodicRevealIntervalMinutes'])
+          && isInt(cfg.periodicRevealIntervalMinutes)
+          && cfg.periodicRevealIntervalMinutes >= 5
+          && cfg.periodicRevealIntervalMinutes <= 120
+          ? cfg.periodicRevealIntervalMinutes * 60_000
+          : 1_800_000;
+        const rawDurationMs = wrapKeys(cfg).hasAny(['periodicRevealDurationMinutes'])
+          && isInt(cfg.periodicRevealDurationMinutes)
+          && cfg.periodicRevealDurationMinutes >= 1
+          && cfg.periodicRevealDurationMinutes <= 30
+          ? cfg.periodicRevealDurationMinutes * 60_000
+          : 300_000;
+        const durationMs = rawDurationMs < intervalMs ? rawDurationMs : intervalMs;
+        if (!wrapKeys(cfg).hasAny(['gameStatus']) || !['DAY1_ACTIVE', 'DAY2_ACTIVE'].includes(cfg.gameStatus)) return 0;
+        if (!wrapKeys(cfg).hasAny(['startTime']) || !isInt(cfg.startTime) || cfg.startTime <= 0) return 0;
+        if (nowMs < cfg.startTime + intervalMs) return 0;
+        const cycle = Math.floor((nowMs - cfg.startTime) / intervalMs);
+        const windowStart = cfg.startTime + cycle * intervalMs;
+        const windowEnd = windowStart + durationMs;
+        return nowMs < windowEnd ? windowEnd : 0;
+      };
       const validScope = (data, uid) => {
         if (!exists('game_config/current') || !exists(`users/${uid}`)) return false;
         const cfg = get('game_config/current').data;
         const me = get(`users/${uid}`).data;
         const expMs = tsToMillis(data.expiresAt);
         if (expMs === null) return false;
+        const periodicEndMs = activePeriodicRevealEndMs(cfg);
         if ((!wrapKeys(data).hasAny(['revealScope']) || data.revealScope === 'INDIVIDUAL')
           && expMs <= nowMs + 6 * 60_000) return true;
         if (data.revealScope === 'GLOBAL'
@@ -459,6 +486,10 @@ export class SimulatedFirestore {
           && isActiveDeadline(cfg.locationRevealUntil)
           && expiresWithinDeadline(data.expiresAt, cfg.locationRevealUntil)
           && expMs <= nowMs + 61 * 60_000) return true;
+        if (data.revealScope === 'GLOBAL'
+          && periodicEndMs > 0
+          && expiresWithinDeadline(data.expiresAt, periodicEndMs)
+          && expMs <= nowMs + 31 * 60_000) return true;
         if (data.revealScope === 'TEAM_A'
           && me.team === 'A'
           && wrapKeys(cfg).hasAny(['teamARevealUntil'])

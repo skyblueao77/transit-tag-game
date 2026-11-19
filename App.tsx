@@ -152,6 +152,7 @@ const AppContent: React.FC = () => {
     gameConfig,
     privateLocation,
     exposedLocations,
+    setPrivateLocation,
   } = useGameSubscriptions(
     authUserId,
     onBroadcast,
@@ -180,8 +181,18 @@ const AppContent: React.FC = () => {
 
 
   const handleUpdatePrivateLocation = useCallback(
-    (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebasePrivateLocationStore),
-    [],
+    async (input: UpdatePrivateLocationInput) => {
+      const result = await updatePrivateLocation(input, firebasePrivateLocationStore);
+      if (result.ok) {
+        setPrivateLocation({
+          gameSessionId: input.expectedSessionId,
+          latitude: input.latitude,
+          longitude: input.longitude,
+        });
+      }
+      return result;
+    },
+    [setPrivateLocation],
   );
 
   useMapGeolocation({
@@ -192,8 +203,18 @@ const AppContent: React.FC = () => {
   });
 
   const handleUpdateEmergencyLocation = useCallback(
-    (input: UpdatePrivateLocationInput) => updatePrivateLocation(input, firebaseEmergencyLocationStore),
-    [],
+    async (input: UpdatePrivateLocationInput) => {
+      const result = await updatePrivateLocation(input, firebaseEmergencyLocationStore);
+      if (result.ok) {
+        setPrivateLocation({
+          gameSessionId: input.expectedSessionId,
+          latitude: input.latitude,
+          longitude: input.longitude,
+        });
+      }
+      return result;
+    },
+    [setPrivateLocation],
   );
 
   useEffect(() => {

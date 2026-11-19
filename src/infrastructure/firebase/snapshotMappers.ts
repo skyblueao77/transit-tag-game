@@ -46,6 +46,7 @@ export function mapPrivateLocation(data: Record<string, unknown> | null): Privat
     latitude: data.latitude,
     longitude: data.longitude,
     ...(data.updatedAt === undefined ? {} : { updatedAt: data.updatedAt }),
+    ...(data.expiresAt === undefined ? {} : { expiresAt: data.expiresAt }),
   };
 }
 

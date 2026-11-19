@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { GameStatus } from '../../types';
 import type { Coordinates, UpdatePrivateLocationResult } from '../application';
-import { canUpdatePrivateLocation, shouldThrottleLocationUpdate } from '../game';
+import { canUpdatePrivateLocation, isGameActive, shouldThrottleLocationUpdate } from '../game';
 
 interface UseMapGeolocationParams {
   currentUserId: string;
@@ -25,6 +25,7 @@ export default function useMapGeolocation({
   const watchIdRef = useRef<number | null>(null);
   const lastUploadTimeRef = useRef<number>(0);
   const lastUploadedCoordsRef = useRef<Coordinates | null>(null);
+  const isTrackingEnabled = Boolean(currentUserId && isGameActive(gameStatus));
 
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
     if (!currentUserId || !gameSessionId || !canUpdatePrivateLocation(gameStatus)) return;
@@ -70,7 +71,7 @@ export default function useMapGeolocation({
   }, [updateLocation]);
 
   useEffect(() => {
-    if (!currentUserId || !('geolocation' in navigator)) return;
+    if (!isTrackingEnabled || !('geolocation' in navigator)) return;
 
     const startWatching = () => {
       if (watchIdRef.current !== null) {
@@ -109,5 +110,5 @@ export default function useMapGeolocation({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopWatching();
     };
-  }, [currentUserId]);
+  }, [isTrackingEnabled]);
 }

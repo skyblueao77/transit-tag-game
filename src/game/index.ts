@@ -102,7 +102,22 @@ export type {
   AutoExposeUserInput,
   ResolveAutoExposePlanInput,
 } from './autoExpose';
-export { resolveLocationVisibility } from './reveal';
+export {
+  hasActiveRevealWindow,
+  PERIODIC_REVEAL_DEFAULT_DURATION_MINUTES,
+  PERIODIC_REVEAL_DEFAULT_INTERVAL_MINUTES,
+  PERIODIC_REVEAL_MAX_DURATION_MINUTES,
+  PERIODIC_REVEAL_MAX_INTERVAL_MINUTES,
+  PERIODIC_REVEAL_MIN_DURATION_MINUTES,
+  PERIODIC_REVEAL_MIN_INTERVAL_MINUTES,
+  resolveLocationVisibility,
+  resolvePeriodicRevealWindow,
+} from './reveal';
+export type {
+  ActiveRevealWindowInput,
+  PeriodicRevealWindowInput,
+  PeriodicRevealWindowResult,
+} from './reveal';
 export { resolveAdminRevealPlan } from './adminReveal';
 export {
   planMissionCatalogSync,

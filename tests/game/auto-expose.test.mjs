@@ -196,4 +196,40 @@ describe('Auto-expose projection planning', () => {
       targetUntil,
     });
   });
+
+  test('triggers GLOBAL snapshot during periodic reveal window and uses Math.max with manual locationRevealUntil', () => {
+    const startTime = NOW - 31 * 60_000;
+    const periodicEnd = NOW + 4 * 60_000;
+    const periodicOnly = resolveAutoExposePlan(baseInput({
+      gameConfig: {
+        gameSessionId: SESSION_ID,
+        gameStatus: 'DAY1_ACTIVE',
+        startTime,
+        periodicRevealIntervalMinutes: 30,
+        periodicRevealDurationMinutes: 5,
+      },
+    }));
+    assert.deepEqual(periodicOnly, {
+      revealScope: 'GLOBAL',
+      duration: 4 * 60_000,
+      targetUntil: periodicEnd,
+    });
+
+    const manualLongerUntil = NOW + 12 * 60_000;
+    const combined = resolveAutoExposePlan(baseInput({
+      gameConfig: {
+        gameSessionId: SESSION_ID,
+        gameStatus: 'DAY1_ACTIVE',
+        startTime,
+        periodicRevealIntervalMinutes: 30,
+        periodicRevealDurationMinutes: 5,
+        locationRevealUntil: manualLongerUntil,
+      },
+    }));
+    assert.deepEqual(combined, {
+      revealScope: 'GLOBAL',
+      duration: 12 * 60_000,
+      targetUntil: manualLongerUntil,
+    });
+  });
 });

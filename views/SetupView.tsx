@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { User } from '../types';
-import { Users, Train, MapPin, Shield, LogIn, UserPlus, UserCheck, AlertTriangle, KeyRound } from 'lucide-react';
+import { Users, Train, Shield, LogIn, UserPlus, UserCheck, AlertTriangle, KeyRound } from 'lucide-react';
 import { isFirebaseMisconfigured } from '../src/infrastructure/firebase/firebaseClient';
 import { loginPlayerAccount, registerPlayerAccount } from '../src/infrastructure/firebase/playerSetup';
 import { getUtf8ByteLength } from '../src/game/utf8';
@@ -32,9 +32,9 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [team, setTeam] = useState<'A' | 'B'>('A');
+  const [consentLocationPrivacy, setConsentLocationPrivacy] = useState(false);
+  const [consentSafetyRules, setConsentSafetyRules] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
 
   const DEFAULT_LAT = 35.6812;
   const DEFAULT_LNG = 139.7671;
@@ -47,22 +47,18 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
     }
   }, [searchParams, joinCode]);
 
-  // 起動時に一度だけ現在地を取得
-  useEffect(() => {
-    if (!('geolocation' in navigator)) return;
-    let mounted = true;
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        if (!mounted) return;
-        setCurrentPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-      },
-      err => console.log('初期位置取得スキップ:', err.message),
-      { enableHighAccuracy: true, timeout: 10000 },
-    );
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  const readCurrentPositionBestEffort = (): Promise<{ lat: number; lng: number } | null> => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      return Promise.resolve(null);
+    }
+    return new Promise(resolve => {
+      navigator.geolocation.getCurrentPosition(
+        pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60_000 },
+      );
+    });
+  };
 
   const getFriendlyAuthError = (err: unknown): string => {
     const code = (err as { code?: string })?.code || '';
@@ -90,6 +86,10 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinCode.trim() || !userId.trim() || !password.trim() || !name.trim() || isSubmitting) return;
+    if (!consentLocationPrivacy || !consentSafetyRules) {
+      toast.error('位置情報の利用・削除方針および安全ルールへの同意チェックが必要です。');
+      return;
+    }
     if (getUtf8ByteLength(name.trim()) > 80) {
       toast.error('ニックネームが長すぎます（日本語約26文字／80バイト以内で入力してください）。');
       return;
@@ -101,7 +101,8 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
 
     setIsSubmitting(true);
     try {
-      const posToSave = currentPos ?? { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
+      const measuredPos = await readCurrentPositionBestEffort();
+      const posToSave = measuredPos ?? { lat: DEFAULT_LAT, lng: DEFAULT_LNG };
       const result = await registerPlayerAccount({
         userId,
         password,
@@ -143,11 +144,12 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
 
     setIsSubmitting(true);
     try {
+      const measuredPos = await readCurrentPositionBestEffort();
       const result = await loginPlayerAccount({
         userId,
         password,
-        currentLocation: currentPos
-          ? { latitude: currentPos.lat, longitude: currentPos.lng }
+        currentLocation: measuredPos
+          ? { latitude: measuredPos.lat, longitude: measuredPos.lng }
           : null,
         fallbackSessionId: gameSessionId,
       });
@@ -166,8 +168,6 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
       setIsSubmitting(false);
     }
   };
-
-  const isLocationReady = currentPos !== null;
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-4 py-8 flex flex-col items-center text-white font-sans">
@@ -340,11 +340,49 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
               </div>
             </div>
 
+            {/* 同意チェックボックス（位置情報・削除方針・安全ルール） */}
+            <div className="mb-5 space-y-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-left">
+              <label className="flex items-start gap-2.5 text-[11px] font-bold leading-snug text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={consentLocationPrivacy}
+                  onChange={e => setConsentLocationPrivacy(e.target.checked)}
+                  disabled={isSubmitting}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  required
+                />
+                <span>
+                  ゲーム参加中の位置情報（GPS）の利用・チーム／運営への共有範囲、および 48時間後の自動削除ポリシー（TTL）に同意します。
+                </span>
+              </label>
+              <label className="flex items-start gap-2.5 text-[11px] font-bold leading-snug text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={consentSafetyRules}
+                  onChange={e => setConsentSafetyRules(e.target.checked)}
+                  disabled={isSubmitting}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  required
+                />
+                <span>
+                  駅構内・ホームでの走行禁止、駆け込み乗車禁止、歩きスマホ禁止、および緊急時の119/110優先などの安全ルールを遵守します。
+                </span>
+              </label>
+            </div>
+
             <button
               type="submit"
-              disabled={!joinCode.trim() || !userId.trim() || !password.trim() || !name.trim() || isSubmitting}
+              disabled={
+                !joinCode.trim()
+                || !userId.trim()
+                || !password.trim()
+                || !name.trim()
+                || !consentLocationPrivacy
+                || !consentSafetyRules
+                || isSubmitting
+              }
               className={`w-full py-4 font-black rounded-xl transition-all shadow-lg uppercase tracking-wider text-sm active:scale-95 flex items-center justify-center gap-2 ${
-                isSubmitting
+                isSubmitting || !consentLocationPrivacy || !consentSafetyRules
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   : 'bg-slate-900 hover:bg-black text-white'
               }`}
@@ -406,12 +444,6 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
           <p className="mt-4 text-center text-xs font-bold text-amber-600 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
             ⏳ ゲームセッション初期化待ちです。<br />管理者が初期化すると参加可能になります。
           </p>
-        )}
-
-        {isLocationReady && (
-          <div className="mt-4 flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-600 uppercase tracking-tighter">
-            <MapPin size={11} /> GPS測位準備完了
-          </div>
         )}
 
         {/* 管理者ログインリンク */}

@@ -388,8 +388,13 @@ npm run build
 1. [Firebase Console](https://console.firebase.google.com/) で無料プロジェクトを作成（Sparkプラン）。
 2. Authentication で「匿名認証」と「メール/パスワード認証」を有効化。
 3. Firestore Database を作成（東京リージョン `asia-northeast1` 推奨）。
-4. `.env` に取得した Firebase API キー等を設定。
-5. デプロイ実行:
+4. **Firestore TTL（位置情報の自動削除）ポリシー設定**:
+   - Firestore Database > **TTL（Time-to-live）** メニューから、以下の2つのポリシーを有効化することを推奨します（古い位置データが48時間後／有効期限切れ後に自動削除されます）:
+     - コレクション `privateLocations` / フィールド `expiresAt`
+     - コレクション `exposedLocations` / フィールド `expiresAt`
+     - コレクション `emergencyLocationProjections` / フィールド `expiresAt`（SOS記録の自動削除が必要な場合。管理者画面での参照用に保持する場合は未設定でも可）
+5. `.env` に取得した Firebase API キー等を設定。
+6. デプロイ実行:
    ```bash
    npx firebase login
    npx firebase use your-project-id
@@ -401,4 +406,4 @@ npm run build
 ## 📄 ライセンス
 
 本プロジェクトは [MIT License](LICENSE) の下で公開されています。  
-地図データ: © [OpenStreetMap](https://www.openstreetmap.org/) contributors (ODbL)
+地図タイル: [地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)（国土地理院）

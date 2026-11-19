@@ -4,7 +4,6 @@ import type {
 } from '../application/locationPorts';
 
 export const EMERGENCY_LOCATION_HEARTBEAT_INTERVAL_MS = 60_000;
-const MAX_LOCATION_ACCURACY_METERS = 400;
 
 export interface EmergencyHeartbeatPosition {
   coords: {
@@ -73,35 +72,57 @@ function updateFromCurrentPosition(
       resolve(updated);
     };
 
-    try {
-      input.geolocation.getCurrentPosition(position => {
-        const { latitude, longitude, accuracy } = position.coords;
-        if (!input.isCurrentPlayer()
-          || !Number.isFinite(latitude)
-          || !Number.isFinite(longitude)
-          || !Number.isFinite(accuracy)
-          || accuracy < 0
-          || accuracy > MAX_LOCATION_ACCURACY_METERS) {
-          finish(false);
-          return;
-        }
+    const handlePosition = (position: EmergencyHeartbeatPosition) => {
+      const { latitude, longitude, accuracy } = position.coords;
+      // During SOS emergencies, accept coarse network/cell fixes (> 400m) as long as accuracy is valid (>= 0).
+      if (!input.isCurrentPlayer()
+        || !Number.isFinite(latitude)
+        || !Number.isFinite(longitude)
+        || !Number.isFinite(accuracy)
+        || accuracy < 0) {
+        finish(false);
+        return;
+      }
 
-        void input.updatePrivateLocation({
-          playerId: input.playerId,
-          expectedSessionId: input.expectedSessionId,
-          latitude,
-          longitude,
-        }).then(result => {
-          if (result.ok === false) input.onFailure?.(result.reason);
-          finish(result.ok);
-        }).catch(error => {
-          input.onFailure?.(error);
-          finish(false);
-        });
-      }, error => {
+      void input.updatePrivateLocation({
+        playerId: input.playerId,
+        expectedSessionId: input.expectedSessionId,
+        latitude,
+        longitude,
+      }).then(result => {
+        if (result.ok === false) input.onFailure?.(result.reason);
+        finish(result.ok);
+      }).catch(error => {
         input.onFailure?.(error);
         finish(false);
-      }, { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 });
+      });
+    };
+
+    try {
+      input.geolocation.getCurrentPosition(
+        handlePosition,
+        primaryError => {
+          if (!input.isCurrentPlayer() || !input.isOnline()) {
+            input.onFailure?.(primaryError);
+            finish(false);
+            return;
+          }
+          try {
+            input.geolocation.getCurrentPosition(
+              handlePosition,
+              fallbackError => {
+                input.onFailure?.(fallbackError);
+                finish(false);
+              },
+              { enableHighAccuracy: false, timeout: 10_000, maximumAge: 60_000 },
+            );
+          } catch (fallbackThrow) {
+            input.onFailure?.(fallbackThrow);
+            finish(false);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 },
+      );
     } catch (error) {
       input.onFailure?.(error);
       finish(false);

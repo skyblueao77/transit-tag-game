@@ -8,6 +8,7 @@ import {
   findTransitSuggestion,
   getPlayerRole,
   isActiveUntil,
+  isGameActive,
   remainingSeconds,
   resolveLocationVisibility,
   type StationData,
@@ -26,6 +27,8 @@ import MapStatusHeader from './map/MapStatusHeader';
 import MapStatusBadges from './map/MapStatusBadges';
 import MapOniCapturePanel from './map/MapOniCapturePanel';
 import MapRunnerControls from './map/MapRunnerControls';
+
+const AUTO_STATION_UPDATE_COOLDOWN_MS = 10 * 60 * 1000;
 
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -75,6 +78,7 @@ const MapView: React.FC<Props> = ({
   const [transitSuggestion, setTransitSuggestion] = useState<TransitSuggestion | null>(null);
   const [transitCandidates, setTransitCandidates] = useState<TransitSuggestion[]>([]);
   const [isSuggestDismissed, setIsSuggestDismissed] = useState(false);
+  const [locationFixSeq, setLocationFixSeq] = useState(0);
   const lastDismissedKey = useRef<string | null>(null);
   const prevCoordsRef = useRef<Coordinates | null>(null);
 
@@ -123,15 +127,18 @@ const MapView: React.FC<Props> = ({
     prevCoordsRef.current = currentCoords;
     setTransitCandidates(candidates);
     setTransitSuggestion(suggestion);
+    setLocationFixSeq(seq => seq + 1);
 
     if (suggestion && suggestion.displayText !== lastDismissedKey.current) {
       setIsSuggestDismissed(false);
     }
   }, [privateLocation]);
 
-  // 自動反映（オートチェックイン）ロジック
+  // 自動反映（オートチェックイン）ロジック（異なる測位フィックス2回連続かつ最小10分間隔）
   const stableSuggestionRef = useRef<{ text: string; count: number }>({ text: '', count: 0 });
   const lastAutoUpdatedKey = useRef<string | null>(null);
+  const lastEvaluatedFixSeqRef = useRef<number>(0);
+  const lastAutoUpdateAtRef = useRef<number>(0);
   const isAutoUpdatingRef = useRef(false);
 
   useEffect(() => {
@@ -148,6 +155,10 @@ const MapView: React.FC<Props> = ({
     if (isAutoUpdatingRef.current) {
       return;
     }
+    if (locationFixSeq === 0 || locationFixSeq === lastEvaluatedFixSeqRef.current) {
+      return;
+    }
+    lastEvaluatedFixSeqRef.current = locationFixSeq;
 
     const currentTarget = transitSuggestion.displayText;
     if (currentUser.lastStation === currentTarget || lastAutoUpdatedKey.current === currentTarget) {
@@ -162,10 +173,16 @@ const MapView: React.FC<Props> = ({
     }
 
     if (stableSuggestionRef.current.count >= 2) {
+      const nowMs = Date.now();
+      if (lastAutoUpdateAtRef.current > 0 && nowMs - lastAutoUpdateAtRef.current < AUTO_STATION_UPDATE_COOLDOWN_MS) {
+        return;
+      }
       isAutoUpdatingRef.current = true;
       onUpdateLastStation(currentTarget, { silentToast: true })
         .then(() => {
           lastAutoUpdatedKey.current = currentTarget;
+          lastAutoUpdateAtRef.current = Date.now();
+          stableSuggestionRef.current = { text: currentTarget, count: 0 };
           toast.success(`現在地を自動更新しました: ${currentTarget}`, {
             duration: 3500,
           });
@@ -178,7 +195,7 @@ const MapView: React.FC<Props> = ({
           isAutoUpdatingRef.current = false;
         });
     }
-  }, [isOnline, transitSuggestion, isAutoUpdateEnabled, currentUser.lastStation, currentUser.status, onUpdateLastStation]);
+  }, [isOnline, transitSuggestion, locationFixSeq, isAutoUpdateEnabled, currentUser.lastStation, currentUser.status, onUpdateLastStation]);
 
   const handleConfirmStation = async (stationName: string) => {
     if (!onUpdateLastStation) return;
@@ -193,7 +210,7 @@ const MapView: React.FC<Props> = ({
     }
   };
 
-  useWakeLock(true);
+  useWakeLock(isGameActive(gameConfig.gameStatus));
 
   const isAdminViewer = currentUser.team === 'ADMIN';
   const currentRole: Role = getPlayerRole(currentUser, gameConfig);
@@ -246,7 +263,11 @@ const MapView: React.FC<Props> = ({
       const map = L.map(containerRef.current).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13,
       );
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+      L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+        attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener noreferrer">地理院タイル</a>',
+        crossOrigin: true,
+        maxZoom: 18,
+      }).addTo(map);
       mapRef.current = map;
     }
 
@@ -285,6 +306,9 @@ const MapView: React.FC<Props> = ({
         globalRevealUntil: gameConfig.locationRevealUntil,
         teamARevealUntil: gameConfig.teamARevealUntil,
         teamBRevealUntil: gameConfig.teamBRevealUntil,
+        startTime: gameConfig.startTime,
+        periodicRevealIntervalMinutes: gameConfig.periodicRevealIntervalMinutes,
+        periodicRevealDurationMinutes: gameConfig.periodicRevealDurationMinutes,
       });
 
       if (visibility.mode === 'HIDDEN' || visibility.latitude === undefined || visibility.longitude === undefined) return;
@@ -362,6 +386,9 @@ const MapView: React.FC<Props> = ({
     gameConfig.locationRevealUntil,
     gameConfig.teamARevealUntil,
     gameConfig.teamBRevealUntil,
+    gameConfig.startTime,
+    gameConfig.periodicRevealIntervalMinutes,
+    gameConfig.periodicRevealDurationMinutes,
     gameConfig.gameStatus,
     epoch5sMs,
   ]);
