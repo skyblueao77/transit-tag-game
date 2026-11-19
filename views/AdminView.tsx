@@ -34,10 +34,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
   if (!dashboard.isAuthorized) {
     return (
       <AdminAuthGate
-        isBootstrapCompleted={dashboard.isBootstrapCompleted}
-        initialSetupMode={dashboard.isSetupMode}
         onAuthorized={() => dashboard.setIsAuthorized(true)}
-        onBootstrapCompleted={() => dashboard.setIsBootstrapCompleted(true)}
       />
     );
   }
@@ -99,9 +96,15 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             inviteUrl={dashboard.inviteUrl}
             copiedLink={dashboard.copiedLink}
             copiedText={dashboard.copiedText}
+            currentJoinCode={config.currentJoinCode}
+            registrationOpen={config.registrationOpen}
+            isRotatingJoinCode={dashboard.isRotatingJoinCode}
+            isTogglingRegistration={dashboard.isTogglingRegistration}
             onCopyInviteUrl={() => { void dashboard.handleCopyInviteUrl(); }}
             onCopyInviteMessage={() => { void dashboard.handleCopyInviteMessage(); }}
             onOpenQrModal={() => dashboard.setShowQrModal(true)}
+            onRotateJoinCode={() => { void dashboard.handleRotateJoinCode(); }}
+            onToggleRegistrationOpen={() => { void dashboard.handleToggleRegistrationOpen(); }}
           />
         </div>
 
@@ -221,6 +224,7 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
         <InviteQrModal
           qrDataUri={dashboard.qrDataUri}
           copiedLink={dashboard.copiedLink}
+          currentJoinCode={config.currentJoinCode}
           onCopyInviteUrl={() => { void dashboard.handleCopyInviteUrl(); }}
           onClose={() => dashboard.setShowQrModal(false)}
         />

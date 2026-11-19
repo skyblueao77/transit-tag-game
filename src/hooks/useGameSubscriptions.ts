@@ -26,6 +26,7 @@ export function useGameSubscriptions(
   onConfigError?: (error: Error) => void,
   canSubscribeParticipants: boolean = Boolean(authUserId),
   onSubscriptionError?: (source: 'players' | 'missions' | 'exposedLocations', error: Error) => void,
+  canSubscribeConfig: boolean = Boolean(authUserId),
 ): UseGameSubscriptionsResult {
   const [rawUsers, setRawUsers] = useState<User[]>([]);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -88,7 +89,7 @@ export function useGameSubscriptions(
   }, [authUserId, gameConfig.gameSessionId]);
 
   useEffect(() => {
-    if (!authUserId) {
+    if (!authUserId || !canSubscribeParticipants) {
       setExposedLocations({});
       exposedSubscriberRef.current = null;
       return;
@@ -109,19 +110,19 @@ export function useGameSubscriptions(
       }
       subscriber.dispose();
     };
-  }, [authUserId, gameConfig.gameSessionId, onSubscriptionError]);
+  }, [authUserId, canSubscribeParticipants, gameConfig.gameSessionId, onSubscriptionError]);
 
   useEffect(() => {
-    if (!authUserId) return;
+    if (!authUserId || !canSubscribeParticipants) return;
     if (exposedPlayerIdsKey === '') {
       exposedSubscriberRef.current?.setPlayerIds([]);
       return;
     }
     exposedSubscriberRef.current?.setPlayerIds(exposedPlayerIdsRef.current);
-  }, [authUserId, exposedPlayerIdsKey]);
+  }, [authUserId, canSubscribeParticipants, exposedPlayerIdsKey]);
 
   useEffect(() => {
-    if (!authUserId) {
+    if (!authUserId || !canSubscribeParticipants) {
       setMissions([]);
       return;
     }
@@ -132,10 +133,11 @@ export function useGameSubscriptions(
         onSubscriptionError?.('missions', error);
       },
     );
-  }, [authUserId, onSubscriptionError]);
+  }, [authUserId, canSubscribeParticipants, onSubscriptionError]);
 
   useEffect(() => {
-    if (!authUserId) {
+    if (!authUserId || !canSubscribeConfig) {
+      setGameConfig(INITIAL_GAME_CONFIG);
       lastBroadcastTimeRef.current = null;
       return;
     }
@@ -158,7 +160,7 @@ export function useGameSubscriptions(
         onConfigError?.(error as Error);
       },
     );
-  }, [authUserId, onBroadcast, onConfigError]);
+  }, [authUserId, canSubscribeConfig, onBroadcast, onConfigError]);
 
   return {
     allUsers,

@@ -8,6 +8,7 @@ import {
   SERVER_TIMESTAMP_SENTINEL,
   SimulatedFirestore,
   createActiveParticipantDb,
+  incrementSentinel,
 } from './helpers/rulesContractHarness.mjs';
 
 // Pure helper copy-free import check via source/runtime where safe
@@ -47,53 +48,84 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
     assert.notEqual(toSyntheticEmail('   '), toSyntheticEmail('a'));
   });
 
-  test('initial admin bootstrap succeeds once for password user without participant doc', () => {
+  test('blocks client admin bootstrap and non-admin admins/{uid} creation while allowing existing admin to add admin', () => {
     const db = new SimulatedFirestore();
-    const adminAuth = { uid: 'admin-boot-1', signInProvider: 'password' };
+    const userAuth = { uid: 'boot-attacker', signInProvider: 'password' };
+    assert.throws(() => {
+      db.commitBatch([
+        {
+          type: 'set',
+          path: 'system/admin_bootstrap',
+          data: { initializedBy: 'boot-attacker', initializedAt: SERVER_TIMESTAMP_SENTINEL },
+          merge: false,
+        },
+        {
+          type: 'set',
+          path: 'admins/boot-attacker',
+          data: { role: 'admin', createdAt: SERVER_TIMESTAMP_SENTINEL },
+          merge: false,
+        },
+      ], userAuth);
+    }, RulePermissionError);
+
+    assert.throws(() => {
+      db.commitBatch([
+        {
+          type: 'set',
+          path: 'admins/boot-attacker',
+          data: { role: 'admin', createdAt: SERVER_TIMESTAMP_SENTINEL },
+          merge: false,
+        },
+      ], userAuth);
+    }, RulePermissionError);
+
+    // Pre-seeded Console admin can invite another admin with server timestamp
+    db.seed('admins/admin-console', { role: 'admin', createdAt: FsTimestamp.fromMillis(db.serverNowMs) });
     db.commitBatch([
       {
         type: 'set',
-        path: 'system/admin_bootstrap',
-        data: { initializedBy: 'admin-boot-1', initializedAt: SERVER_TIMESTAMP_SENTINEL },
-        merge: false,
-      },
-      {
-        type: 'set',
-        path: 'admins/admin-boot-1',
+        path: 'admins/admin-2',
         data: { role: 'admin', createdAt: SERVER_TIMESTAMP_SENTINEL },
         merge: false,
       },
-    ], adminAuth);
-
-    assert.equal(db.rawGet('admins/admin-boot-1').role, 'admin');
+    ], { uid: 'admin-console', signInProvider: 'password' });
+    assert.equal(db.rawGet('admins/admin-2').role, 'admin');
   });
 
-  test('blocks duplicate admin bootstrap, anonymous bootstrap, and participant self-escalation', () => {
-    const db = new SimulatedFirestore();
-    assert.throws(() => {
-      db.commitBatch([
-        { type: 'set', path: 'system/admin_bootstrap', data: { initializedBy: 'anon-1', initializedAt: SERVER_TIMESTAMP_SENTINEL }, merge: false },
-        { type: 'set', path: 'admins/anon-1', data: { role: 'admin', createdAt: SERVER_TIMESTAMP_SENTINEL }, merge: false },
-      ], { uid: 'anon-1', signInProvider: 'anonymous' });
-    }, RulePermissionError);
-
-    db.seed('game_config/current', {
-      gameSessionId: '11111111-1111-4111-8111-111111111111',
-      sessionStartedAt: 1000,
-      sessionSchemaVersion: 2,
-    });
-    db.seed('users/p-1', { id: 'p-1', team: 'A', gameSessionId: '11111111-1111-4111-8111-111111111111' });
-    assert.throws(() => {
-      db.commitBatch([
-        { type: 'set', path: 'system/admin_bootstrap', data: { initializedBy: 'p-1', initializedAt: SERVER_TIMESTAMP_SENTINEL }, merge: false },
-        { type: 'set', path: 'admins/p-1', data: { role: 'admin', createdAt: SERVER_TIMESTAMP_SENTINEL }, merge: false },
-      ], { uid: 'p-1', signInProvider: 'password' });
-    }, RulePermissionError);
-  });
-
-  test('new player registration batch writes users/{uid} + privateLocations/{uid} validly', () => {
-    const { db, sessionId } = createActiveParticipantDb();
+  test('new player registration batch writes users/{uid} + privateLocations/{uid} validly with joinCode and blocks invalid/inactive joinCodes', () => {
+    const { db, sessionId, joinCode } = createActiveParticipantDb();
     const pAuth = { uid: 'player-new', signInProvider: 'password' };
+
+    // Missing or wrong joinCode rejected
+    assert.throws(() => {
+      db.commitBatch([
+        {
+          type: 'set',
+          path: 'users/player-new',
+          data: {
+            id: 'player-new', name: '新規太郎', role: 'RUNNER', team: 'A', color: '#ef4444',
+            score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0, joinCode: 'wrong-join-code-000000',
+          },
+          merge: false,
+        },
+      ], pAuth);
+    }, RulePermissionError);
+
+    // Anonymous auth rejected
+    assert.throws(() => {
+      db.commitBatch([
+        {
+          type: 'set',
+          path: 'users/anon-new',
+          data: {
+            id: 'anon-new', name: '匿名', role: 'RUNNER', team: 'A', color: '#ef4444',
+            score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0, joinCode,
+          },
+          merge: false,
+        },
+      ], { uid: 'anon-new', signInProvider: 'anonymous' });
+    }, RulePermissionError);
+
     db.commitBatch([
       {
         type: 'set',
@@ -108,6 +140,7 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
           status: 'ACTIVE',
           gameSessionId: sessionId,
           invincibleCards: 0,
+          joinCode,
         },
         merge: false,
       },
@@ -137,7 +170,7 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
           path: 'users/player-early',
           data: {
             id: 'player-early', name: 'A', role: 'RUNNER', team: 'A', color: '#ef4444',
-            score: 0, status: 'ACTIVE', gameSessionId: 'missing', invincibleCards: 0,
+            score: 0, status: 'ACTIVE', gameSessionId: 'missing', invincibleCards: 0, joinCode: 'VALID_JOIN_CODE_123456',
           },
           merge: false,
         },
@@ -146,7 +179,7 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
   });
 
   test('[AUDIT-BUG] SetupView user registration name trimming & boundary lengths (UTF-8 <= 80 bytes)', () => {
-    const { db, sessionId } = createActiveParticipantDb();
+    const { db, sessionId, joinCode } = createActiveParticipantDb();
     const pAuth = { uid: 'p-max', signInProvider: 'password' };
     const fiftyJapaneseChars = 'あ'.repeat(50);
     assert.equal(getUtf8ByteLength(fiftyJapaneseChars), 150);
@@ -173,6 +206,7 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
           status: 'ACTIVE',
           gameSessionId: sessionId,
           invincibleCards: 0,
+          joinCode,
         },
         merge: false,
       },
@@ -338,5 +372,165 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
       setupViewSource.includes('isAuthenticated && !gameSessionId'),
       'SetupView should only display session-initialization banner when authenticated',
     );
+  });
+
+  test('Phase 1: restricts game_config/current and missions reads to current participants/admins and enforces registrationOpen', () => {
+    const { db, sessionId, joinCode } = createActiveParticipantDb();
+    db.seed('missions/m01', { id: 'm01', title: 'Mission 1', points: 20 });
+    db.seed('users/p1', {
+      id: 'p1', name: 'P1', role: 'RUNNER', team: 'A', color: '#ef4444',
+      score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0, joinCode,
+    });
+    const participant = { uid: 'p1', signInProvider: 'password' };
+    const outsider = { uid: 'outsider', signInProvider: 'password' };
+
+    assert.throws(() => db.getDoc('game_config/current', outsider), RulePermissionError);
+    assert.throws(() => db.getDoc('missions/m01', outsider), RulePermissionError);
+    assert.equal(db.getDoc('game_config/current', participant).gameSessionId, sessionId);
+    assert.equal(db.getDoc('missions/m01', participant).id, 'm01');
+
+    // Close registration during DAY1_ACTIVE
+    db.seed('game_config/current', { ...db.rawGet('game_config/current'), gameStatus: 'DAY1_ACTIVE', registrationOpen: false });
+    assert.throws(() => {
+      db.commitBatch([
+        {
+          type: 'set',
+          path: 'users/late-joiner',
+          data: {
+            id: 'late-joiner', name: 'Late', role: 'RUNNER', team: 'A', color: '#ef4444',
+            score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0, joinCode,
+          },
+          merge: false,
+        },
+      ], { uid: 'late-joiner', signInProvider: 'password' });
+    }, RulePermissionError);
+  });
+
+  test('Phase 1: enforces server timestamps, timer bounds, log slice integrity, fail-closed activeMission, and expired snapshot privacy', () => {
+    const { db, sessionId, joinCode } = createActiveParticipantDb();
+    db.seed('game_config/current', {
+      ...db.rawGet('game_config/current'),
+      gameStatus: 'DAY1_ACTIVE',
+      logs: [{ id: 'log-0', timestamp: db.serverNowMs - 10_000, message: 'Start', type: 'SYSTEM' }],
+    });
+    db.seed('missions/m01', { id: 'm01', title: 'Mission 1', points: 20 });
+    db.seed('users/p1', {
+      id: 'p1', name: 'P1', role: 'RUNNER', team: 'A', color: '#ef4444',
+      score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 1, joinCode,
+    });
+    db.seed('users/p2', {
+      id: 'p2', name: 'P2', role: 'ONI', team: 'B', color: '#3b82f6',
+      score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0, joinCode,
+    });
+    const p1Auth = { uid: 'p1', signInProvider: 'password' };
+    const p2Auth = { uid: 'p2', signInProvider: 'password' };
+
+    // 1. Forged/skewed client updatedAt on privateLocations rejected; SERVER_TIMESTAMP accepted
+    assert.throws(() => {
+      db.commitBatch([{
+        type: 'set',
+        path: 'privateLocations/p1',
+        data: { gameSessionId: sessionId, latitude: 35.68, longitude: 139.76, updatedAt: FsTimestamp.fromMillis(db.serverNowMs - 5000) },
+        merge: false,
+      }], p1Auth);
+    }, RulePermissionError);
+    db.commitBatch([{
+      type: 'set',
+      path: 'privateLocations/p1',
+      data: { gameSessionId: sessionId, latitude: 35.68, longitude: 139.76, updatedAt: SERVER_TIMESTAMP_SENTINEL },
+      merge: false,
+    }], p1Auth);
+
+    // 2. Expired exposedLocations hidden from p2, deletable by owner p1
+    db.seed('exposedLocations/p1', {
+      playerId: 'p1', gameSessionId: sessionId, latitude: 35.68, longitude: 139.76,
+      capturedAt: FsTimestamp.fromMillis(db.serverNowMs - 120_000),
+      expiresAt: FsTimestamp.fromMillis(db.serverNowMs - 1000),
+      revealScope: 'INDIVIDUAL',
+    });
+    assert.throws(() => db.getDoc('exposedLocations/p1', p2Auth), RulePermissionError);
+    db.commitBatch([{ type: 'delete', path: 'exposedLocations/p1' }], p1Auth);
+    assert.equal(db.rawGet('exposedLocations/p1'), null);
+
+    // 3. 1ms or 61min timer bypass rejected
+    assert.throws(() => {
+      db.commitBatch([{
+        type: 'update',
+        path: 'users/p1',
+        data: { invincibleCards: 0, invincibleUntil: db.serverNowMs + 1 },
+      }], p1Auth);
+    }, RulePermissionError);
+    assert.throws(() => {
+      db.commitBatch([{
+        type: 'update',
+        path: 'users/p1',
+        data: { status: 'WAITING', waitingUntil: db.serverNowMs + 1, shinkansenStartTime: null },
+      }], p1Auth);
+    }, RulePermissionError);
+
+    // 4. Standalone SYSTEM log-only config write rejected without matching user state change
+    assert.throws(() => {
+      db.commitBatch([{
+        type: 'update',
+        path: 'game_config/current',
+        data: { logs: [{ id: 'spam-1', timestamp: db.serverNowMs, message: 'Spam', type: 'SYSTEM' }, db.rawGet('game_config/current').logs[0]] },
+      }], p1Auth);
+    }, RulePermissionError);
+
+    // 5. Middle-element log tamper rejected even with state change
+    assert.throws(() => {
+      db.commitBatch([
+        { type: 'update', path: 'users/p1', data: { invincibleCards: 0, invincibleUntil: db.serverNowMs + 1_800_000 } },
+        {
+          type: 'update',
+          path: 'game_config/current',
+          data: {
+            logs: [
+              { id: 'inv-1', timestamp: db.serverNowMs, message: 'Invincible', type: 'SYSTEM' },
+              { id: 'log-0', timestamp: db.serverNowMs - 10_000, message: 'TAMPERED', type: 'SYSTEM' },
+            ],
+          },
+        },
+      ], p1Auth);
+    }, RulePermissionError);
+
+    // 6. Mission completion fails closed when activeMissionA is unset
+    const compId = `A_${sessionId}_m01`;
+    assert.throws(() => {
+      db.commitBatch([
+        {
+          type: 'set',
+          path: `missionCompletions/${compId}`,
+          data: {
+            gameSessionId: sessionId, missionId: 'm01', team: 'A', completedBy: 'p1',
+            points: 20, isFinalMission: false, completedAt: SERVER_TIMESTAMP_SENTINEL,
+          },
+          merge: false,
+        },
+        { type: 'update', path: 'users/p1', data: { score: 20, lastCompletionId: compId } },
+        { type: 'update', path: 'game_config/current', data: { teamAScore: incrementSentinel(20), logs: [{ id: 'm1', timestamp: db.serverNowMs, message: 'M1', type: 'MISSION' }, db.rawGet('game_config/current').logs[0]] } },
+      ], p1Auth);
+    }, RulePermissionError);
+  });
+
+  test('Phase 1: firebase.json enforces HSTS, hardened CSP, and route Cache-Control headers', () => {
+    const firebaseConfig = JSON.parse(readFileSync(new URL('../../firebase.json', import.meta.url), 'utf8'));
+    const headers = firebaseConfig.hosting?.headers ?? [];
+    const globalRule = headers.find(h => h.source === '**');
+    assert.ok(globalRule, 'Expected global header rule');
+    const headerMap = Object.fromEntries(globalRule.headers.map(h => [h.key, h.value]));
+    assert.match(headerMap['Strict-Transport-Security'] ?? '', /max-age=31536000/);
+    const csp = headerMap['Content-Security-Policy'] ?? '';
+    assert.match(csp, /object-src 'none'/);
+    assert.match(csp, /worker-src 'self'/);
+    assert.match(csp, /upgrade-insecure-requests/);
+    assert.match(csp, /https:\/\/cyberjapandata\.gsi\.go\.jp/);
+    assert.match(csp, /https:\/\/recaptchaenterprise\.googleapis\.com/);
+
+    const bySource = Object.fromEntries(headers.map(h => [h.source, Object.fromEntries(h.headers.map(x => [x.key, x.value]))]));
+    assert.equal(bySource['/index.html']?.['Cache-Control'], 'no-cache, no-store, must-revalidate');
+    assert.equal(bySource['/sw.js']?.['Cache-Control'], 'no-cache, no-store, must-revalidate');
+    assert.equal(bySource['/manifest.webmanifest']?.['Cache-Control'], 'no-cache, no-store, must-revalidate');
+    assert.equal(bySource['/assets/**']?.['Cache-Control'], 'public, max-age=31536000, immutable');
   });
 });

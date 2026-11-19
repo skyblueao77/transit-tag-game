@@ -12,11 +12,13 @@ import { mapUserDocument } from './snapshotMappers';
 
 export type RegisterPlayerResult =
   | { ok: true; user: User }
-  | { ok: false; reason: 'SESSION_NOT_INITIALIZED' };
+  | { ok: false; reason: 'SESSION_NOT_INITIALIZED' | 'INVALID_JOIN_CODE' | 'JOIN_CODE_INACTIVE' | 'REGISTRATION_CLOSED' };
 
 export type LoginPlayerResult =
   | { ok: true; user: User }
   | { ok: false; reason: 'PLAYER_NOT_FOUND' | 'SESSION_MISMATCH' };
+
+const JOIN_CODE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 export async function resolveActiveGameSessionId(
   fallbackSessionId?: string,
@@ -33,17 +35,31 @@ export async function resolveActiveGameSessionId(
   return validation.session.gameSessionId;
 }
 
+async function rollbackAuthState(createdAuthUid: string | null, signedInExistingUid: string | null): Promise<void> {
+  if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
+    await deleteUser(auth.currentUser).catch(() => {});
+  } else if (signedInExistingUid && auth.currentUser?.uid === signedInExistingUid) {
+    await signOutCurrentUser().catch(() => {});
+  }
+}
+
 export async function registerPlayerAccount(input: {
   userId: string;
   password: string;
   name: string;
   team: 'A' | 'B';
+  joinCode: string;
   location: { latitude: number; longitude: number };
   fallbackSessionId?: string;
 }): Promise<RegisterPlayerResult> {
   const normalizedName = truncateToUtf8Bytes(input.name.trim(), 80);
   if (!normalizedName) {
     throw new Error('INVALID_ARGUMENT');
+  }
+
+  const normalizedJoinCode = typeof input.joinCode === 'string' ? input.joinCode.trim() : '';
+  if (!JOIN_CODE_PATTERN.test(normalizedJoinCode)) {
+    return { ok: false, reason: 'INVALID_JOIN_CODE' };
   }
 
   let createdAuthUid: string | null = null;
@@ -82,16 +98,28 @@ export async function registerPlayerAccount(input: {
       id = existingUid;
     }
 
-    // Firestore ルールで game_config/current の読み取りには signedIn() が必須のため、認証完了後にセッションIDを解決する
-    const activeSessionId = await resolveActiveGameSessionId(input.fallbackSessionId);
+    // Firestore ルールで joinCodes/{code} の読み取りにはパスワード認証が必須のため、認証完了後に検証する
+    const joinCodeSnap = await getDoc(doc(db, 'joinCodes', normalizedJoinCode));
+    if (!joinCodeSnap.exists()) {
+      await rollbackAuthState(createdAuthUid, signedInExistingUid);
+      createdAuthUid = null;
+      signedInExistingUid = null;
+      return { ok: false, reason: 'INVALID_JOIN_CODE' };
+    }
+    const joinCodeData = joinCodeSnap.data();
+    const joinSessionId = typeof joinCodeData.gameSessionId === 'string' ? joinCodeData.gameSessionId : '';
+    if (joinCodeData.active !== true || joinSessionId.length === 0) {
+      await rollbackAuthState(createdAuthUid, signedInExistingUid);
+      createdAuthUid = null;
+      signedInExistingUid = null;
+      return { ok: false, reason: 'JOIN_CODE_INACTIVE' };
+    }
+
+    const activeSessionId = await resolveActiveGameSessionId(joinSessionId);
     if (!activeSessionId) {
-      if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
-        await deleteUser(auth.currentUser).catch(() => {});
-        createdAuthUid = null;
-      } else if (signedInExistingUid && auth.currentUser?.uid === signedInExistingUid) {
-        await signOutCurrentUser().catch(() => {});
-        signedInExistingUid = null;
-      }
+      await rollbackAuthState(createdAuthUid, signedInExistingUid);
+      createdAuthUid = null;
+      signedInExistingUid = null;
       return { ok: false, reason: 'SESSION_NOT_INITIALIZED' };
     }
 
@@ -106,18 +134,26 @@ export async function registerPlayerAccount(input: {
       status: 'ACTIVE',
       gameSessionId: activeSessionId,
       invincibleCards: 0,
+      joinCode: normalizedJoinCode,
     };
 
-    await createPlayerWithPrivateLocation(newUser, input.location, activeSessionId);
+    try {
+      await createPlayerWithPrivateLocation(newUser, input.location, activeSessionId);
+    } catch (createErr: unknown) {
+      const errCode = (createErr as { code?: string })?.code;
+      if (errCode === 'permission-denied') {
+        await rollbackAuthState(createdAuthUid, signedInExistingUid);
+        createdAuthUid = null;
+        signedInExistingUid = null;
+        return { ok: false, reason: 'REGISTRATION_CLOSED' };
+      }
+      throw createErr;
+    }
     createdAuthUid = null;
     signedInExistingUid = null;
     return { ok: true, user: newUser };
   } catch (err) {
-    if (createdAuthUid && auth.currentUser?.uid === createdAuthUid) {
-      await deleteUser(auth.currentUser).catch(() => {});
-    } else if (signedInExistingUid && auth.currentUser?.uid === signedInExistingUid) {
-      await signOutCurrentUser().catch(() => {});
-    }
+    await rollbackAuthState(createdAuthUid, signedInExistingUid);
     throw err;
   }
 }
@@ -137,7 +173,18 @@ export async function loginPlayerAccount(input: {
   }
 
   const existingUser = mapUserDocument(userSnap.id, userSnap.data());
-  const activeSessionId = await resolveActiveGameSessionId(input.fallbackSessionId).catch(() => null);
+  let activeSessionId: string | null = null;
+  try {
+    activeSessionId = await resolveActiveGameSessionId(input.fallbackSessionId);
+  } catch (sessionErr: unknown) {
+    const errCode = (sessionErr as { code?: string })?.code;
+    if (errCode === 'permission-denied' && existingUser.team !== 'ADMIN') {
+      // 旧セッションのプレイヤーは game_config/current の read ルールで拒否されるためセッション不一致として扱う
+      await signOutCurrentUser().catch(() => {});
+      return { ok: false, reason: 'SESSION_MISMATCH' };
+    }
+    activeSessionId = null;
+  }
   if (
     activeSessionId
     && existingUser.team !== 'ADMIN'

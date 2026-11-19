@@ -194,6 +194,7 @@ export class SimulatedFirestore {
     const exists = p => snapshotMap.has(p);
     const get = p => ({ data: snapshotMap.get(p) });
     const signedIn = () => auth !== null && typeof auth.uid === 'string';
+    const isPasswordUser = () => signedIn() && auth.signInProvider === 'password';
     const isAdmin = () => signedIn() && exists(`admins/${auth.uid}`);
     const hasCurrentGameSession = () => {
       const cp = 'game_config/current';
@@ -215,7 +216,10 @@ export class SimulatedFirestore {
     const parts = path.split('/');
     const [col, id, sub, subId] = parts;
 
-    if (path === 'system/admin_bootstrap') return true;
+    if (col === 'joinCodes' && id && !sub) {
+      return isPasswordUser();
+    }
+    if (path === 'system/admin_bootstrap') return false;
     if (col === 'admins' && id && !sub) {
       return signedIn() && (auth.uid === id || isAdmin());
     }
@@ -236,6 +240,8 @@ export class SimulatedFirestore {
       const targetUser = get(`users/${id}`)?.data;
       if (!targetUser) return false;
       return resource.gameSessionId === cfg.gameSessionId
+        && isTs(resource.expiresAt)
+        && resource.expiresAt.toMillis() > this.serverNowMs
         && targetUser.status !== 'EMERGENCY'
         && targetUser.status !== 'RETIRED';
     }
@@ -246,13 +252,13 @@ export class SimulatedFirestore {
       return signedIn() && (isAdmin() || isCurrentParticipant(auth.uid) || auth.uid === id);
     }
     if (col === 'missions' && id && !sub) {
-      return signedIn();
+      return isAdmin() || (signedIn() && isCurrentParticipant(auth.uid));
     }
     if (col === 'missionCompletions' && id && !sub) {
       return signedIn() && (isAdmin() || isCurrentParticipant(auth.uid));
     }
     if (col === 'game_config' && id && !sub) {
-      return signedIn();
+      return isAdmin() || (signedIn() && isCurrentParticipant(auth.uid));
     }
     return false;
   }
@@ -278,11 +284,14 @@ export class SimulatedFirestore {
       return (u.team === 'A' || u.team === 'B') && u.gameSessionId === get('game_config/current').data.gameSessionId;
     };
 
+    if (collectionName === 'joinCodes') {
+      return isAdmin();
+    }
     if (collectionName === 'users') {
       return signedIn() && (isAdmin() || isCurrentParticipant(auth.uid));
     }
     if (collectionName === 'missions') {
-      return signedIn();
+      return isAdmin() || (signedIn() && isCurrentParticipant(auth.uid));
     }
     if (collectionName === 'missionCompletions') {
       return signedIn() && (isAdmin() || isCurrentParticipant(auth.uid));
@@ -294,7 +303,7 @@ export class SimulatedFirestore {
       return isAdmin();
     }
     if (collectionName === 'game_config') {
-      return signedIn();
+      return isAdmin() || (signedIn() && isCurrentParticipant(auth.uid));
     }
     return false;
   }
@@ -348,39 +357,58 @@ export class SimulatedFirestore {
       return false;
     };
 
+    const validJoinCodeFormat = code => typeof code === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(code);
+    const expectedPostShinkansenWaitMs = cfg => (
+      wrapKeys(cfg).hasAny(['postShinkansenWaitMinutes'])
+      && isInt(cfg.postShinkansenWaitMinutes)
+      && cfg.postShinkansenWaitMinutes >= 1
+      && cfg.postShinkansenWaitMinutes <= 180
+        ? cfg.postShinkansenWaitMinutes * 60_000
+        : 3_600_000
+    );
+    const validPostShinkansenWaitingBound = (cfg, targetTimeMs) => {
+      const waitMs = expectedPostShinkansenWaitMs(cfg);
+      return isInt(targetTimeMs)
+        && targetTimeMs >= nowMs + waitMs - 60_000
+        && targetTimeMs <= nowMs + waitMs + 60_000;
+    };
+    const expectedCaptureWaitMs = cfg => (
+      wrapKeys(cfg).hasAny(['captureWaitMinutes'])
+      && isInt(cfg.captureWaitMinutes)
+      && cfg.captureWaitMinutes >= 1
+      && cfg.captureWaitMinutes <= 120
+        ? cfg.captureWaitMinutes * 60_000
+        : 1_800_000
+    );
+    const validCaptureWaitingBound = (cfg, targetTimeMs) => {
+      const waitMs = expectedCaptureWaitMs(cfg);
+      return isInt(targetTimeMs)
+        && targetTimeMs >= nowMs + waitMs - 60_000
+        && targetTimeMs <= nowMs + waitMs + 60_000;
+    };
+
     const parts = path.split('/');
     const [col, id, sub, subId] = parts;
 
+    // 0. joinCodes/{code}
+    if (col === 'joinCodes' && id && !sub) {
+      return isAdmin();
+    }
+
     // 1. system/admin_bootstrap
     if (path === 'system/admin_bootstrap') {
-      if (opKind !== 'create') return false;
-      const d = afterData;
-      return isPasswordUser()
-        && !exists(`users/${auth.uid}`)
-        && !exists('system/admin_bootstrap')
-        && wrapKeys(d).hasOnly(['initializedBy', 'initializedAt'])
-        && d.initializedBy === auth.uid
-        && isTs(d.initializedAt);
+      return false;
     }
 
     // 2. admins/{uid} & subcollections
     if (col === 'admins' && id && !sub) {
       if (opKind !== 'create') return false;
       const d = afterData;
-      const bootstrapCreate = isPasswordUser()
-        && auth.uid === id
-        && !exists(`users/${auth.uid}`)
-        && !exists('system/admin_bootstrap')
-        && existsAfter('system/admin_bootstrap')
-        && getAfter('system/admin_bootstrap').data.initializedBy === auth.uid
+      return isAdmin()
         && wrapKeys(d).hasOnly(['role', 'createdAt'])
         && d.role === 'admin'
-        && isTs(d.createdAt);
-      const adminCreate = isAdmin()
-        && wrapKeys(d).hasOnly(['role', 'createdAt'])
-        && d.role === 'admin'
-        && isTs(d.createdAt);
-      return bootstrapCreate || adminCreate;
+        && isTs(d.createdAt)
+        && d.createdAt.toMillis() === nowMs;
     }
     if (col === 'admins' && id && sub && subId) {
       return signedIn() && auth.uid === id && isAdmin();
@@ -390,23 +418,33 @@ export class SimulatedFirestore {
     if (col === 'privateLocations' && id && !sub) {
       if (opKind === 'delete') return isAdmin();
       const d = afterData;
+      const cfg = exists('game_config/current') ? get('game_config/current').data : null;
+      const participantAfter = existsAfter(`users/${id}`)
+        && ['A', 'B'].includes(getAfter(`users/${id}`).data.team)
+        && cfg !== null
+        && getAfter(`users/${id}`).data.gameSessionId === cfg.gameSessionId;
       return signedIn()
         && auth.uid === id
         && hasCurrentGameSession()
+        && (isCurrentParticipant(id) || participantAfter)
         && wrapKeys(d).hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
         && wrapKeys(d).hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
         && d.gameSessionId === get('game_config/current').data.gameSessionId
         && isNum(d.latitude) && d.latitude >= -90 && d.latitude <= 90
         && isNum(d.longitude) && d.longitude >= -180 && d.longitude <= 180
-        && isTs(d.updatedAt);
+        && isTs(d.updatedAt)
+        && d.updatedAt.toMillis() === nowMs;
     }
 
     // 4. exposedLocations/{uid}
     if (col === 'exposedLocations' && id && !sub) {
       if (opKind === 'delete') {
+        const res = beforeData;
         return isAdmin()
-          || (signedIn() && auth.uid === id && existsAfter(`users/${id}`)
-            && ['EMERGENCY', 'RETIRED'].includes(getAfter(`users/${id}`).data.status));
+          || (signedIn() && auth.uid === id
+            && ((existsAfter(`users/${id}`)
+                && ['EMERGENCY', 'RETIRED'].includes(getAfter(`users/${id}`).data.status))
+              || (res !== null && isTs(res.expiresAt) && res.expiresAt.toMillis() <= nowMs)));
       }
       const validScope = (data, uid) => {
         if (!exists('game_config/current') || !exists(`users/${uid}`)) return false;
@@ -454,6 +492,7 @@ export class SimulatedFirestore {
           && isNum(data.latitude) && data.latitude >= -90 && data.latitude <= 90
           && isNum(data.longitude) && data.longitude >= -180 && data.longitude <= 180
           && isTs(data.capturedAt)
+          && data.capturedAt.toMillis() === nowMs
           && isTs(data.expiresAt)
           && nowMs < data.expiresAt.toMillis()
           && validScope(data, uid)
@@ -494,7 +533,7 @@ export class SimulatedFirestore {
       }
       const d = afterData;
       const dk = wrapKeys(d);
-      return signedIn()
+      return isCurrentParticipant(id)
         && auth.uid === id
         && hasCurrentGameSession()
         && dk.hasOnly(['playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt', 'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'])
@@ -507,8 +546,8 @@ export class SimulatedFirestore {
         && getAfter(`users/${id}`).data.status === 'EMERGENCY'
         && isNum(d.latitude) && d.latitude >= -90 && d.latitude <= 90
         && isNum(d.longitude) && d.longitude >= -180 && d.longitude <= 180
-        && isTs(d.projectedAt)
-        && isTs(d.sourceLocationUpdatedAt)
+        && isTs(d.projectedAt) && d.projectedAt.toMillis() === nowMs
+        && isTs(d.sourceLocationUpdatedAt) && d.sourceLocationUpdatedAt.toMillis() <= nowMs
         && isTs(d.expiresAt)
         && d.expiresAt.toMillis() > nowMs
         && d.expiresAt.toMillis() <= nowMs + 3 * 60_000;
@@ -518,28 +557,37 @@ export class SimulatedFirestore {
     if (col === 'users' && id && !sub) {
       if (opKind === 'delete') return isAdmin();
       if (opKind === 'create') {
-        if (!signedIn() || isAdmin() || auth.uid !== id || !hasCurrentGameSession()) return false;
+        if (!isPasswordUser() || isAdmin() || auth.uid !== id || !hasCurrentGameSession()) return false;
+        const cfg = get('game_config/current').data;
+        if (cfg.gameStatus === 'GAME_OVER') return false;
+        if (cfg.gameStatus !== 'PRE_GAME' && cfg.registrationOpen !== true) return false;
         const d = afterData;
         const dk = wrapKeys(d);
-        return dk.hasOnly([
+        if (!dk.hasOnly([
           'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards', 'lastCompletionId', 'lastStation',
+          'gameSessionId', 'invincibleCards', 'joinCode', 'lastCompletionId', 'lastStation',
           'protectionZone', 'shinkansenSegmentCount', 'penaltyRevealUntil',
-        ])
-          && (!dk.hasAny(['lastStation']) || (typeof d.lastStation === 'string' && Buffer.byteLength(d.lastStation, 'utf8') <= 250))
+        ])) return false;
+        if (!dk.hasAll(['id', 'name', 'role', 'team', 'color', 'score', 'status', 'gameSessionId', 'invincibleCards', 'joinCode'])) return false;
+        if (!validJoinCodeFormat(d.joinCode)) return false;
+        const jcPath = `joinCodes/${d.joinCode}`;
+        if (!exists(jcPath)) return false;
+        const jc = get(jcPath).data;
+        if (jc.active !== true || jc.gameSessionId !== cfg.gameSessionId) return false;
+        return (!dk.hasAny(['lastStation']) || (typeof d.lastStation === 'string' && Buffer.byteLength(d.lastStation, 'utf8') <= 250))
+          && (!dk.hasAny(['lastCompletionId']) || (typeof d.lastCompletionId === 'string' && d.lastCompletionId.length <= 200))
           && (!dk.hasAny(['protectionZone']) || ['NONE', 'GREEN_CAR', 'SAFE_ZONE'].includes(d.protectionZone))
           && (!dk.hasAny(['shinkansenSegmentCount']) || (isInt(d.shinkansenSegmentCount) && d.shinkansenSegmentCount >= 0))
           && (!dk.hasAny(['penaltyRevealUntil']) || (isInt(d.penaltyRevealUntil) && d.penaltyRevealUntil >= 0))
-          && dk.hasAll(['id', 'name', 'role', 'team', 'color', 'score', 'status', 'gameSessionId', 'invincibleCards'])
           && d.id === id
           && typeof d.name === 'string' && Buffer.byteLength(d.name, 'utf8') > 0 && Buffer.byteLength(d.name, 'utf8') <= 80
           && d.role === 'RUNNER'
           && (d.team === 'A' || d.team === 'B')
-          && typeof d.color === 'string'
+          && typeof d.color === 'string' && d.color.length > 0 && d.color.length <= 32
           && d.status === 'ACTIVE'
           && isInt(d.score) && d.score === 0
           && isInt(d.invincibleCards) && d.invincibleCards === 0
-          && d.gameSessionId === get('game_config/current').data.gameSessionId;
+          && d.gameSessionId === cfg.gameSessionId;
       }
 
       // update
@@ -560,8 +608,11 @@ export class SimulatedFirestore {
         const isActivePhase = hasCfg && ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION'].includes(cfg.gameStatus);
         const myRole = hasCfg ? (b.team === 'A' ? cfg.teamARole : cfg.teamBRole) : '';
 
-        if (!signedIn() || auth.uid !== id || !hasNoCoordinates(a)
+        if (!isCurrentParticipant(id) || auth.uid !== id || !hasNoCoordinates(a)
           || a.id !== b.id || a.team !== b.team || a.role !== b.role || a.gameSessionId !== b.gameSessionId) {
+          return false;
+        }
+        if (bk.hasAny(['joinCode']) && (!ak.hasAny(['joinCode']) || a.joinCode !== b.joinCode)) {
           return false;
         }
 
@@ -626,14 +677,7 @@ export class SimulatedFirestore {
           && isActivePhase && myRole === 'RUNNER'
           && b.status === 'ACTIVE' && a.status === 'WAITING'
           && (a.shinkansenStartTime === null || a.shinkansenStartTime === 0)
-          && isInt(a.waitingUntil) && a.waitingUntil > nowMs
-          && (a.waitingUntil <= nowMs + 3_660_000
-            || (wrapKeys(cfg).hasAny(['postShinkansenWaitMinutes'])
-              && isInt(cfg.postShinkansenWaitMinutes)
-              && cfg.postShinkansenWaitMinutes >= 1
-              && cfg.postShinkansenWaitMinutes <= 180
-              && a.waitingUntil <= nowMs + cfg.postShinkansenWaitMinutes * 60_000 + 60_000))
-          && a.waitingUntil <= nowMs + 10_860_000) return true;
+          && validPostShinkansenWaitingBound(cfg, a.waitingUntil)) return true;
 
         // Invincibility card use
         if (diff.hasOnly(['invincibleCards', 'invincibleUntil'])
@@ -641,7 +685,8 @@ export class SimulatedFirestore {
           && (!bk.hasAny(['invincibleUntil']) || !isInt(b.invincibleUntil) || b.invincibleUntil <= nowMs)
           && isInt(b.invincibleCards) && b.invincibleCards >= 1
           && a.invincibleCards === b.invincibleCards - 1
-          && isInt(a.invincibleUntil) && a.invincibleUntil > nowMs
+          && isInt(a.invincibleUntil)
+          && a.invincibleUntil >= nowMs + 1_740_000
           && a.invincibleUntil <= nowMs + 1_860_000) return true;
 
         // Safety action
@@ -679,6 +724,7 @@ export class SimulatedFirestore {
         if (!exists('game_config/current') || !existsAfter('game_config/current')) return false;
         const b = beforeData;
         const a = afterData;
+        const ak = wrapKeys(a);
         const bk = wrapKeys(b);
         const diff = affectedKeysDiff(a, b);
         const curConfig = get('game_config/current').data;
@@ -690,6 +736,7 @@ export class SimulatedFirestore {
         if (a.id !== b.id || a.name !== b.name || a.team !== b.team || a.role !== b.role || a.score !== b.score
           || a.gameSessionId !== b.gameSessionId || a.gameSessionId !== curConfig.gameSessionId) return false;
         if (bk.hasAny(['color']) && a.color !== b.color) return false;
+        if (bk.hasAny(['joinCode']) && (!ak.hasAny(['joinCode']) || a.joinCode !== b.joinCode)) return false;
         if (!['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION'].includes(curConfig.gameStatus)) return false;
         if (myRole !== 'ONI' || me.status !== 'ACTIVE') return false;
         if (!isSurvival ? afterConfig.teamARole === curConfig.teamARole : afterConfig.teamARole !== curConfig.teamARole) return false;
@@ -710,13 +757,7 @@ export class SimulatedFirestore {
         if (!isSurvival && b.team !== me.team
           && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
           && a.status === 'WAITING'
-          && isInt(a.waitingUntil) && a.waitingUntil > nowMs
-          && (a.waitingUntil <= nowMs + 1_860_000
-            || (wrapKeys(curConfig).hasAny(['captureWaitMinutes'])
-              && isInt(curConfig.captureWaitMinutes)
-              && curConfig.captureWaitMinutes >= 1 && curConfig.captureWaitMinutes <= 120
-              && a.waitingUntil <= nowMs + curConfig.captureWaitMinutes * 60_000 + 60_000))
-          && a.waitingUntil <= nowMs + 7_260_000
+          && validCaptureWaitingBound(curConfig, a.waitingUntil)
           && a.invincibleUntil === 0) {
           return true;
         }
@@ -767,12 +808,17 @@ export class SimulatedFirestore {
         && config.activeFinalMissionId === data.missionId;
       const normalOk = data.isFinalMission === false
         && ['DAY1_ACTIVE', 'DAY2_ACTIVE'].includes(config.gameStatus)
-        && ((!ck.hasAny(['activeMissionA']) && !ck.hasAny(['activeMissionB']))
-          || (data.team === 'A' && (!ck.hasAny(['activeMissionA']) || config.activeMissionA === data.missionId))
-          || (data.team === 'B' && (!ck.hasAny(['activeMissionB']) || config.activeMissionB === data.missionId)));
+        && ((data.team === 'A'
+            && ck.hasAny(['activeMissionA'])
+            && typeof config.activeMissionA === 'string'
+            && config.activeMissionA === data.missionId)
+          || (data.team === 'B'
+            && ck.hasAny(['activeMissionB'])
+            && typeof config.activeMissionB === 'string'
+            && config.activeMissionB === data.missionId));
       if (!finalOk && !normalOk) return false;
       if (dk.hasAny(['luckyReward']) && typeof data.luckyReward !== 'boolean') return false;
-      if (!isTs(data.completedAt)) return false;
+      if (!isTs(data.completedAt) || data.completedAt.toMillis() !== nowMs) return false;
       return id === `${data.team}_${data.gameSessionId}_${data.missionId}`;
     }
 
@@ -802,6 +848,8 @@ export class SimulatedFirestore {
           && ek.hasAll(['id', 'timestamp', 'message', 'type'])
           && typeof entry.id === 'string' && Buffer.byteLength(entry.id, 'utf8') > 0 && Buffer.byteLength(entry.id, 'utf8') <= 100
           && isInt(entry.timestamp)
+          && entry.timestamp >= nowMs - 300_000
+          && entry.timestamp <= nowMs + 60_000
           && typeof entry.message === 'string' && Buffer.byteLength(entry.message, 'utf8') > 0 && Buffer.byteLength(entry.message, 'utf8') <= 300
           && allowedTypes.includes(entry.type);
       };
@@ -812,11 +860,23 @@ export class SimulatedFirestore {
         const expectedLen = prevLogs.length >= 200 ? 200 : prevLogs.length + 1;
         if (nw.logs.length !== expectedLen) return false;
         if (!validLogEntry(nw.logs[0], allowedTypes)) return false;
-        return prevLogs.length === 0 || deepEqual(nw.logs[1], prevLogs[0]);
+        if (prevLogs.length === 0) return true;
+        return deepEqual(nw.logs.slice(1, nw.logs.length), prevLogs.slice(0, nw.logs.length - 1));
       };
 
       if (diff.hasOnly(['logs']) && diff.size() === 1) {
-        return validPrependedLogs(currentData, newData, ['SYSTEM', 'EMERGENCY'])
+        const mePath = `users/${auth.uid}`;
+        const safetyChange = exists(mePath)
+          && existsAfter(mePath)
+          && get(mePath).data.status !== getAfter(mePath).data.status
+          && ['EMERGENCY', 'RETIRED'].includes(getAfter(mePath).data.status);
+        const gameplayStateChange = exists(mePath)
+          && existsAfter(mePath)
+          && ((get(mePath).data.status !== getAfter(mePath).data.status
+              && ['ACTIVE', 'WAITING'].includes(getAfter(mePath).data.status))
+            || (getAfter(mePath).data.invincibleCards < get(mePath).data.invincibleCards));
+        return ((safetyChange && validPrependedLogs(currentData, newData, ['EMERGENCY']))
+            || (gameplayStateChange && validPrependedLogs(currentData, newData, ['SYSTEM'])))
           && newData.teamARole === currentData.teamARole
           && newData.teamBRole === currentData.teamBRole
           && newData.teamAScore === currentData.teamAScore
@@ -836,14 +896,7 @@ export class SimulatedFirestore {
         if (!diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])) return false;
 
         if (!isSurvival) {
-          const t = newData.nextRevealTime;
-          const validBound = isInt(t) && t > nowMs && t <= nowMs + 7_260_000
-            && (t <= nowMs + 1_860_000
-              || (wrapKeys(currentData).hasAny(['captureWaitMinutes'])
-                && isInt(currentData.captureWaitMinutes)
-                && currentData.captureWaitMinutes >= 1 && currentData.captureWaitMinutes <= 120
-                && t <= nowMs + currentData.captureWaitMinutes * 60_000 + 60_000));
-          if (!validBound) return false;
+          if (!validCaptureWaitingBound(currentData, newData.nextRevealTime)) return false;
         } else if (!wrapKeys(currentData).hasAny(['nextRevealTime'])) {
           if (wrapKeys(newData).hasAny(['nextRevealTime']) && !isInt(newData.nextRevealTime)) return false;
         } else if (newData.nextRevealTime !== currentData.nextRevealTime) {
@@ -871,13 +924,7 @@ export class SimulatedFirestore {
             : (newData.teamBScore === currentData.teamBScore + 50 && newData.teamAScore === currentData.teamAScore);
           if (!scoreOk) return false;
         } else {
-          if (tAfter.status !== 'WAITING' || !isInt(tAfter.waitingUntil) || tAfter.waitingUntil <= nowMs) return false;
-          const waitOk = tAfter.waitingUntil <= nowMs + 1_860_000
-            || (wrapKeys(currentData).hasAny(['captureWaitMinutes'])
-              && isInt(currentData.captureWaitMinutes)
-              && currentData.captureWaitMinutes >= 1 && currentData.captureWaitMinutes <= 120
-              && tAfter.waitingUntil <= nowMs + currentData.captureWaitMinutes * 60_000 + 60_000);
-          if (!waitOk || tAfter.waitingUntil > nowMs + 7_260_000) return false;
+          if (tAfter.status !== 'WAITING' || !validCaptureWaitingBound(currentData, tAfter.waitingUntil)) return false;
           const swapOk = me.team === 'A'
             ? (currentData.teamARole === 'ONI' && newData.teamARole === 'RUNNER' && newData.teamBRole === 'ONI'
               && newData.teamAScore === currentData.teamAScore + 50 && newData.teamBScore === currentData.teamBScore)
@@ -979,18 +1026,23 @@ export class SimulatedFirestore {
 export function createActiveParticipantDb(overrides = {}) {
   const db = new SimulatedFirestore(overrides.serverNowMs ?? 1_750_000_000_000);
   const sessionId = overrides.gameSessionId ?? '11111111-1111-4111-8111-111111111111';
-  db.seed('system/admin_bootstrap', {
-    initializedBy: 'admin-1',
-    initializedAt: FsTimestamp.fromMillis(db.serverNowMs - 10_000),
-  });
+  const joinCode = overrides.joinCode ?? 'valid_join_code_0001';
   db.seed('admins/admin-1', {
     role: 'admin',
     createdAt: FsTimestamp.fromMillis(db.serverNowMs - 10_000),
+  });
+  db.seed(`joinCodes/${joinCode}`, {
+    code: joinCode,
+    gameSessionId: sessionId,
+    active: true,
+    createdAt: db.serverNowMs - 10_000,
   });
   db.seed('game_config/current', {
     gameSessionId: sessionId,
     sessionStartedAt: db.serverNowMs - 3_600_000,
     sessionSchemaVersion: 2,
+    currentJoinCode: joinCode,
+    registrationOpen: true,
     gameStatus: 'DAY1_ACTIVE',
     day: 1,
     missionMode: 'DIFFERENT',
@@ -1014,5 +1066,5 @@ export function createActiveParticipantDb(overrides = {}) {
     logs: [],
     ...overrides.config,
   });
-  return { db, sessionId };
+  return { db, sessionId, joinCode };
 }

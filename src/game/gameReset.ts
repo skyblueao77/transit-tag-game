@@ -292,16 +292,22 @@ export interface FutureGameResetConfigPatch {
   nextRevealTime: number;
   clearRevealDeadlines: readonly ['locationRevealUntil', 'teamARevealUntil', 'teamBRevealUntil'];
   preserveLogCount: 199;
+  currentJoinCode?: string;
+  registrationOpen?: boolean;
 }
+
+const joinCodePattern = /^[A-Za-z0-9_-]{16,128}$/;
 
 export function planFutureGameResetConfig(input: {
   proposedSessionId: string;
   resetAt: number;
   nextRevealTime: number;
+  joinCode?: string;
 }): FutureGameResetConfigPatch | null {
   if (!isValidResetId(input.proposedSessionId)
     || !Number.isFinite(input.resetAt) || input.resetAt < 0
     || !Number.isFinite(input.nextRevealTime) || input.nextRevealTime < input.resetAt) return null;
+  if (input.joinCode !== undefined && !joinCodePattern.test(input.joinCode)) return null;
   return {
     gameStatus: 'PRE_GAME', day: 1, teamAScore: 0, teamBScore: 0,
     missionMode: 'DIFFERENT', activeMissionA: null, activeMissionB: null,
@@ -312,6 +318,7 @@ export function planFutureGameResetConfig(input: {
     nextRevealTime: input.nextRevealTime,
     clearRevealDeadlines: ['locationRevealUntil', 'teamARevealUntil', 'teamBRevealUntil'],
     preserveLogCount: 199,
+    ...(input.joinCode !== undefined ? { currentJoinCode: input.joinCode, registrationOpen: true } : {}),
   };
 }
 

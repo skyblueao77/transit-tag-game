@@ -7,7 +7,6 @@ import QRCode from 'qrcode-svg';
 import { getRoleForTeam } from '../../src/game';
 import {
   calibrateAdminServerClock,
-  isAdminBootstrapCompleted,
   isCurrentAuthUserAdmin,
 } from '../../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../../src/application/adminGameStateActions';
@@ -31,6 +30,8 @@ import { createOrUpdateMission, deleteMission, awardMissionCompletionByAdmin } f
 import {
   sendAdminBroadcast,
   applyAdminPenaltyReveal,
+  rotateAdminJoinCode,
+  setAdminRegistrationOpen,
 } from '../../src/infrastructure/firebase/clientFirestoreGateways';
 import { adminChangePlayerTeam, adminDeletePlayer } from '../../src/infrastructure/firebase/playerStore';
 import {
@@ -50,8 +51,6 @@ interface UseAdminDashboardParams {
 }
 
 export function useAdminDashboard({ config, users, missions, confirm }: UseAdminDashboardParams) {
-  const [isSetupMode, setIsSetupMode] = useState(false);
-  const [isBootstrapCompleted, setIsBootstrapCompleted] = useState<boolean | null>(null);
   const [isAuthorized, setIsAuthorized] = useState(false);
 
   const [broadcastInput, setBroadcastInput] = useState('');
@@ -75,6 +74,8 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [isRotatingJoinCode, setIsRotatingJoinCode] = useState(false);
+  const [isTogglingRegistration, setIsTogglingRegistration] = useState(false);
 
   const [scoreTeam, setScoreTeam] = useState<'A' | 'B'>('A');
   const [scoreDeltaInput, setScoreDeltaInput] = useState('');
@@ -121,8 +122,9 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   const inviteUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    return `${window.location.origin}/#/`;
-  }, []);
+    const base = `${window.location.origin}/#/`;
+    return config.currentJoinCode ? `${base}?join=${encodeURIComponent(config.currentJoinCode)}` : base;
+  }, [config.currentJoinCode]);
 
   const qrDataUri = useMemo(() => {
     if (!inviteUrl) return '';
@@ -211,17 +213,9 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
         const isAdminUser = await isCurrentAuthUserAdmin();
         if (mounted && isAdminUser) {
           setIsAuthorized(true);
-          return;
-        }
-        const completed = await isAdminBootstrapCompleted();
-        if (mounted) {
-          setIsBootstrapCompleted(completed);
-          if (!completed) {
-            setIsSetupMode(true);
-          }
         }
       } catch (err) {
-        console.error('Error verifying admin authentication / bootstrap:', err);
+        console.error('Error verifying admin authentication:', err);
       }
     })();
     return () => {
@@ -843,6 +837,58 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     }
   };
 
+  const handleRotateJoinCode = async (): Promise<void> => {
+    if (isRotatingJoinCode || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
+    const confirmed = await confirm({
+      title: '招待コードの再発行',
+      description: '新しい招待コードを発行し、以前の招待URL・QRコードを無効化しますか？\n（既に登録済みのプレイヤーはそのまま継続利用できます）',
+      confirmLabel: '再発行する',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    setIsRotatingJoinCode(true);
+    try {
+      const result = await rotateAdminJoinCode(expectedSessionId);
+      if (result.ok) {
+        toast.success('新しい招待コードを発行しました（旧コードは無効化されました）');
+      } else {
+        toast.error(`招待コードの再発行に失敗しました: ${result.reason}`);
+      }
+    } finally {
+      setIsRotatingJoinCode(false);
+    }
+  };
+
+  const handleToggleRegistrationOpen = async (): Promise<void> => {
+    if (isTogglingRegistration || isProcessing) return;
+    const expectedSessionId = requireSessionId();
+    if (!expectedSessionId) return;
+    const currentOpen = config.registrationOpen !== false;
+    const nextOpen = !currentOpen;
+    const confirmed = await confirm({
+      title: nextOpen ? '新規参加登録の再開' : '新規参加登録の停止',
+      description: nextOpen
+        ? '新規プレイヤーの参加登録受付を再開しますか？'
+        : '新規プレイヤーの参加登録を停止しますか？（既存プレイヤーの再開ログインは影響を受けません）',
+      confirmLabel: nextOpen ? '再開する' : '停止する',
+      variant: nextOpen ? 'primary' : 'danger',
+    });
+    if (!confirmed) return;
+    setIsTogglingRegistration(true);
+    try {
+      const result = await setAdminRegistrationOpen(nextOpen, expectedSessionId);
+      if (result.ok) {
+        toast.success(nextOpen ? '新規参加登録を再開しました' : '新規参加登録を停止しました');
+      } else {
+        toast.error(`参加受付状態の更新に失敗しました: ${result.reason}`);
+      }
+    } finally {
+      setIsTogglingRegistration(false);
+    }
+  };
+
   const handleCopyInviteUrl = async () => {
     if (!inviteUrl) return;
     try {
@@ -858,7 +904,8 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   const handleCopyInviteMessage = async () => {
     if (!inviteUrl) return;
-    const msg = `🚆【鉄道鬼ごっこ】ゲームに参加しよう！\nインストール不要！以下のURLを開き、お好きなユーザーIDとパスワードで参加してね：\n${inviteUrl}`;
+    const joinCodeLine = config.currentJoinCode ? `\n招待コード: ${config.currentJoinCode}` : '';
+    const msg = `🚆【鉄道鬼ごっこ】ゲームに参加しよう！\nインストール不要！以下のURLを開き、お好きなユーザーIDとパスワードで参加してね：\n${inviteUrl}${joinCodeLine}`;
     try {
       await navigator.clipboard.writeText(msg);
       setCopiedText(true);
@@ -885,9 +932,6 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   }, [config.gameStatus]);
 
   return {
-    isSetupMode,
-    isBootstrapCompleted,
-    setIsBootstrapCompleted,
     isAuthorized,
     setIsAuthorized,
     broadcastInput,
@@ -917,6 +961,8 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     copiedText,
     showQrModal,
     setShowQrModal,
+    isRotatingJoinCode,
+    isTogglingRegistration,
     scoreTeam,
     setScoreTeam,
     scoreDeltaInput,
@@ -964,6 +1010,8 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     handleDeletePlayer,
     handlePrepareGameReset,
     handleExecuteGameReset,
+    handleRotateJoinCode,
+    handleToggleRegistrationOpen,
     handleCopyInviteUrl,
     handleCopyInviteMessage,
   };

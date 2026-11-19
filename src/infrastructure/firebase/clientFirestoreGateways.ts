@@ -11,6 +11,8 @@ export {
   clientAdminPhaseGateway,
   clientAdminGameStateGateway,
   clientAdminGameResetGateway,
+  rotateAdminJoinCode,
+  setAdminRegistrationOpen,
 } from './gateways/adminSessionGateways.ts';
 
 export {

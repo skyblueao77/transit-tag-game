@@ -65,6 +65,15 @@ import {
 } from './shared.ts';
 import { getServerNowMs } from '../serverClock.ts';
 
+export function generateJoinCode(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  }
+  throw new Error('Secure random generator is not available in this runtime.');
+}
+
 // ============================================================
 // 6. Admin Game Session Initialization Gateway (Session初期化)
 // ============================================================
@@ -91,9 +100,13 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
         };
       }
 
-      const participantsSnap = await getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B'])));
+      const [participantsSnap, activeJoinCodesSnap] = await Promise.all([
+        getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
+        getDocs(query(collection(db, 'joinCodes'), where('active', '==', true))),
+      ]);
       const participantRefs = participantsSnap.docs.map(p => doc(db, 'users', p.id));
-      if (participantRefs.length > 495) {
+      const staleJoinCodeRefs = activeJoinCodesSnap.docs.map(d => doc(db, 'joinCodes', d.id));
+      if (participantRefs.length + staleJoinCodeRefs.length > 495) {
         return { ok: false, reason: 'ROSTER_TOO_LARGE' };
       }
 
@@ -121,6 +134,7 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
         }
 
         const newSessionId = generateSecureId();
+        const joinCode = generateJoinCode();
 
         const newConfig = {
           ...DEFAULT_DYNAMIC_RULE_SETTINGS,
@@ -132,6 +146,8 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
           gameSessionId: newSessionId,
           sessionStartedAt: now,
           sessionSchemaVersion: 2,
+          currentJoinCode: joinCode,
+          registrationOpen: true,
           gameStatus: 'PRE_GAME' as GameStatus,
           day: 1,
           teamARole: 'RUNNER' as Role,
@@ -164,6 +180,16 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
         };
 
         transaction.set(configRef, newConfig, { merge: true });
+
+        for (const jcRef of staleJoinCodeRefs) {
+          transaction.update(jcRef, { active: false });
+        }
+        transaction.set(doc(db, 'joinCodes', joinCode), {
+          code: joinCode,
+          gameSessionId: newSessionId,
+          active: true,
+          createdAt: now,
+        });
 
         for (const pRef of participantRefs) {
           transaction.update(pRef, { gameSessionId: newSessionId });
@@ -602,12 +628,13 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       }
 
       const configRef = doc(db, 'game_config', 'current');
-      const [configSnap, usersSnap, exposedSnap, projSnap, completionsSnap] = await Promise.all([
+      const [configSnap, usersSnap, exposedSnap, projSnap, completionsSnap, activeJoinCodesSnap] = await Promise.all([
         getDoc(configRef),
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
         getDocs(collection(db, 'exposedLocations')),
         getDocs(collection(db, 'emergencyLocationProjections')),
         getDocs(collection(db, 'missionCompletions')),
+        getDocs(query(collection(db, 'joinCodes'), where('active', '==', true))),
       ]);
 
       if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
@@ -639,18 +666,20 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
 
       const now = getServerNowMs();
       const newSessionId = conf.proposedSessionId;
+      const newJoinCode = generateJoinCode();
       const futureConfigPlan = planFutureGameResetConfig({
         proposedSessionId: newSessionId,
         resetAt: now,
         nextRevealTime: now + DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes * 60 * 1000,
+        joinCode: newJoinCode,
       });
       const playerResetPatch = planFuturePlayerReset(newSessionId);
       if (!futureConfigPlan || !playerResetPatch) {
         return { ok: false, reason: 'INVALID_CONFIG' };
       }
 
-      // 1 config + N users + private + exposed + projections + conf update + receipt set
-      const coreWrites = 1 + usersSnap.docs.length + privateLocationIds.length + exposedSnap.docs.length + projSnap.docs.length + 2;
+      // 1 config + N users + private + exposed + projections + activeJoinCodes deactivate + 1 new joinCode + conf update + receipt set
+      const coreWrites = 1 + usersSnap.docs.length + privateLocationIds.length + exposedSnap.docs.length + projSnap.docs.length + activeJoinCodesSnap.docs.length + 1 + 2;
       if (coreWrites > RESET_MAX_ESTIMATED_WRITES) {
         return { ok: false, reason: 'RESET_TOO_LARGE' };
       }
@@ -684,6 +713,7 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
       batch.set(configRef, {
         ...DEFAULT_DYNAMIC_RULE_SETTINGS,
         ...futureConfigFields,
+        registrationOpen: true,
         pauseStartTime: null,
         currentArea: typeof configData.currentArea === 'string' ? configData.currentArea : INITIAL_GAME_CONFIG.currentArea,
         currentRegion: typeof configData.currentRegion === 'string' ? configData.currentRegion : INITIAL_GAME_CONFIG.currentRegion,
@@ -696,6 +726,17 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
         teamBRevealUntil: null,
         logs: preservedLogs,
       }, { merge: true });
+
+      // 旧招待コードを無効化し、新セッション用の招待コードを発行する
+      for (const jcDoc of activeJoinCodesSnap.docs) {
+        batch.update(doc(db, 'joinCodes', jcDoc.id), { active: false });
+      }
+      batch.set(doc(db, 'joinCodes', newJoinCode), {
+        code: newJoinCode,
+        gameSessionId: newSessionId,
+        active: true,
+        createdAt: now,
+      });
 
       // 2. プレイヤーを初期状態にリセット
       for (const d of usersSnap.docs) {
@@ -768,3 +809,108 @@ export const clientAdminGameResetGateway: AdminGameResetGateway = {
     }
   },
 };
+
+export type RotateAdminJoinCodeResult =
+  | { ok: true; joinCode: string }
+  | { ok: false; reason: 'PERMISSION_DENIED' | 'CONFIG_NOT_FOUND' | 'SESSION_CHANGED' | 'TOO_MANY_JOIN_CODES' | 'PERSISTENCE_ERROR' };
+
+export type SetAdminRegistrationOpenResult =
+  | { ok: true; registrationOpen: boolean }
+  | { ok: false; reason: 'PERMISSION_DENIED' | 'CONFIG_NOT_FOUND' | 'SESSION_CHANGED' | 'PERSISTENCE_ERROR' };
+
+export async function rotateAdminJoinCode(expectedSessionId: string): Promise<RotateAdminJoinCodeResult> {
+  try {
+    const uid = requireAuthUid();
+    const isAdmin = await verifyAdmin(uid);
+    if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+
+    const activeJoinCodesSnap = await getDocs(
+      query(collection(db, 'joinCodes'), where('active', '==', true)),
+    );
+    if (activeJoinCodesSnap.docs.length + 2 > 495) {
+      return { ok: false, reason: 'TOO_MANY_JOIN_CODES' };
+    }
+
+    const newJoinCode = generateJoinCode();
+    const logId = createLogId();
+
+    return await runTransaction(db, async transaction => {
+      const configRef = doc(db, 'game_config', 'current');
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+
+      const configData = configSnap.data();
+      const sessionValidation = validateExpectedSession(configData, expectedSessionId);
+      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
+
+      const now = getServerNowMs();
+      const logs = appendToConfigLogs(configData.logs, {
+        id: logId,
+        now,
+        message: '管理者が新しい参加招待コードを発行し、旧招待コードを無効化しました',
+        type: 'SYSTEM',
+      });
+
+      transaction.update(configRef, {
+        currentJoinCode: newJoinCode,
+        logs,
+      });
+
+      for (const jcDoc of activeJoinCodesSnap.docs) {
+        transaction.update(doc(db, 'joinCodes', jcDoc.id), { active: false });
+      }
+      transaction.set(doc(db, 'joinCodes', newJoinCode), {
+        code: newJoinCode,
+        gameSessionId: sessionValidation.gameSessionId,
+        active: true,
+        createdAt: now,
+      });
+
+      return { ok: true, joinCode: newJoinCode };
+    });
+  } catch (error) {
+    console.error('rotateAdminJoinCode error:', error);
+    return { ok: false, reason: 'PERSISTENCE_ERROR' };
+  }
+}
+
+export async function setAdminRegistrationOpen(
+  open: boolean,
+  expectedSessionId: string,
+): Promise<SetAdminRegistrationOpenResult> {
+  try {
+    const uid = requireAuthUid();
+    const isAdmin = await verifyAdmin(uid);
+    if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
+
+    const logId = createLogId();
+
+    return await runTransaction(db, async transaction => {
+      const configRef = doc(db, 'game_config', 'current');
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
+
+      const configData = configSnap.data();
+      const sessionValidation = validateExpectedSession(configData, expectedSessionId);
+      if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
+
+      const now = getServerNowMs();
+      const logs = appendToConfigLogs(configData.logs, {
+        id: logId,
+        now,
+        message: open ? '管理者が新規参加登録を再開しました' : '管理者が新規参加登録を停止しました',
+        type: 'SYSTEM',
+      });
+
+      transaction.update(configRef, {
+        registrationOpen: open,
+        logs,
+      });
+
+      return { ok: true, registrationOpen: open };
+    });
+  } catch (error) {
+    console.error('setAdminRegistrationOpen error:', error);
+    return { ok: false, reason: 'PERSISTENCE_ERROR' };
+  }
+}
