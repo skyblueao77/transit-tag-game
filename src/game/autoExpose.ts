@@ -1,4 +1,5 @@
 import { canRevealLocation } from './phases.ts';
+import { resolvePeriodicRevealWindow } from './reveal.ts';
 import type { GameStatus } from './types';
 
 export type AutoExposeScope = 'PENALTY' | 'GLOBAL' | 'TEAM_A' | 'TEAM_B';
@@ -16,6 +17,9 @@ export interface AutoExposeConfigInput {
   locationRevealUntil?: number | null;
   teamARevealUntil?: number | null;
   teamBRevealUntil?: number | null;
+  startTime?: number | null;
+  periodicRevealIntervalMinutes?: number | null;
+  periodicRevealDurationMinutes?: number | null;
 }
 
 export interface AutoExposePrivateLocationInput {
@@ -68,7 +72,18 @@ export function resolveAutoExposePlan({
   let targetUntil = 0;
 
   const penaltyUntil = typeof currentUser.penaltyRevealUntil === 'number' ? currentUser.penaltyRevealUntil : 0;
-  const globalUntil = typeof gameConfig.locationRevealUntil === 'number' ? gameConfig.locationRevealUntil : 0;
+  const periodicWindow = resolvePeriodicRevealWindow({
+    phase: gameConfig.gameStatus,
+    now,
+    startTime: gameConfig.startTime,
+    intervalMinutes: gameConfig.periodicRevealIntervalMinutes,
+    durationMinutes: gameConfig.periodicRevealDurationMinutes,
+  });
+  const manualGlobalUntil = typeof gameConfig.locationRevealUntil === 'number' ? gameConfig.locationRevealUntil : 0;
+  const periodicGlobalUntil = periodicWindow.isActive && typeof periodicWindow.activeUntil === 'number'
+    ? periodicWindow.activeUntil
+    : 0;
+  const globalUntil = Math.max(manualGlobalUntil, periodicGlobalUntil);
   const teamAUntil = typeof gameConfig.teamARevealUntil === 'number' ? gameConfig.teamARevealUntil : 0;
   const teamBUntil = typeof gameConfig.teamBRevealUntil === 'number' ? gameConfig.teamBRevealUntil : 0;
 

@@ -48,13 +48,17 @@ test('PWA manifest and asset configuration', async t => {
     }
   });
 
-  await t.test('OSM tile caching pattern matches legitimate tiles and rejects malicious domains', () => {
-    const tilePattern = /^https:\/\/[a-c]\.tile\.openstreetmap\.org\/.*/i;
-    assert.equal(tilePattern.test('https://a.tile.openstreetmap.org/13/7200/3200.png'), true);
-    assert.equal(tilePattern.test('https://b.tile.openstreetmap.org/13/7200/3200.png'), true);
-    assert.equal(tilePattern.test('https://c.tile.openstreetmap.org/13/7200/3200.png'), true);
-    assert.equal(tilePattern.test('https://evil.com/fake.tile.openstreetmap.org/test.png'), false);
-    assert.equal(tilePattern.test('https://attacker-tile.openstreetmap.org/test.png'), false);
-    assert.equal(tilePattern.test('http://a.tile.openstreetmap.org/test.png'), false);
+  await t.test('GSI tile caching pattern matches legitimate tiles, rejects malicious domains, and caches status 200 only', () => {
+    const viteConfigSource = fs.readFileSync(path.resolve('vite.config.ts'), 'utf8');
+    assert.match(viteConfigSource, /cacheName:\s*['"]gsi-map-tiles['"]/);
+    assert.match(viteConfigSource, /statuses:\s*\[200\]/);
+    assert.doesNotMatch(viteConfigSource, /tile\.openstreetmap\.org/);
+
+    const tilePattern = /^https:\/\/cyberjapandata\.gsi\.go\.jp\/xyz\/.*/i;
+    assert.equal(tilePattern.test('https://cyberjapandata.gsi.go.jp/xyz/std/13/7200/3200.png'), true);
+    assert.equal(tilePattern.test('https://cyberjapandata.gsi.go.jp/xyz/pale/15/28000/12000.png'), true);
+    assert.equal(tilePattern.test('https://evil.com/cyberjapandata.gsi.go.jp/xyz/std/test.png'), false);
+    assert.equal(tilePattern.test('https://attacker-gsi.go.jp/xyz/std/test.png'), false);
+    assert.equal(tilePattern.test('http://cyberjapandata.gsi.go.jp/xyz/std/13/7200/3200.png'), false);
   });
 });

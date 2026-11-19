@@ -2,11 +2,13 @@ import type { GameStatus, Role } from './types';
 import { ONI_INITIAL_LOCK_DURATION_MS, remainingSeconds } from './time.ts';
 import { isWaitingActive } from './waiting.ts';
 import { isGamePaused } from './phases.ts';
+import { resolvePeriodicRevealWindow } from './reveal.ts';
 
 export interface MapTimeLeft {
   waiting: number;
   invincible: number;
   nextReveal: number;
+  periodicRevealRemaining?: number;
   final: number;
   oniLock: number;
   shinkansenRemaining: number;
@@ -29,6 +31,8 @@ export interface ComputeMapTimeLeftInput {
     startTime?: number;
     pauseStartTime?: number | null;
     nextRevealTime?: number;
+    periodicRevealIntervalMinutes?: number | null;
+    periodicRevealDurationMinutes?: number | null;
     isFinalMissionActive?: boolean;
     finalMissionEndTime?: number;
     locationRevealUntil?: number | null;
@@ -84,7 +88,17 @@ export function computeMapTimeLeft(
   const final = gameConfig.isFinalMissionActive
     ? remainingSeconds(gameConfig.finalMissionEndTime, now)
     : 0;
-  const nextReveal = remainingSeconds(gameConfig.nextRevealTime, now);
+  const periodicWindow = resolvePeriodicRevealWindow({
+    phase: gameConfig.gameStatus,
+    now,
+    startTime: gameConfig.startTime,
+    intervalMinutes: gameConfig.periodicRevealIntervalMinutes,
+    durationMinutes: gameConfig.periodicRevealDurationMinutes,
+  });
+  const periodicRevealRemaining = periodicWindow.isActive
+    ? remainingSeconds(periodicWindow.activeUntil, now)
+    : 0;
+  const nextReveal = remainingSeconds(periodicWindow.nextWindowStart ?? gameConfig.nextRevealTime, now);
 
   const shinkansenLimitMinutes = gameConfig.shinkansenMaxMinutes ?? defaultShinkansenMaxMinutes;
   let shinkansenRemaining = 0;
@@ -103,6 +117,7 @@ export function computeMapTimeLeft(
     waiting,
     invincible,
     nextReveal,
+    periodicRevealRemaining,
     final,
     oniLock,
     shinkansenRemaining,

@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   onSnapshot,
   query,
   where,
@@ -21,7 +22,7 @@ import {
   createDifferentialPlayerSubscriber,
   type DifferentialPlayerSubscriber,
 } from '../differentialPlayerSubscriber';
-import { getServerNowMs, recordConfirmedServerTimestamp } from './serverClock';
+import { recordConfirmedServerTimestamp } from './serverClock';
 
 export function subscribeCurrentPlayer(
   uid: string,
@@ -55,6 +56,16 @@ export function subscribeMissions(
       data: document.data(),
     }))));
   }, onError);
+}
+
+export async function fetchPrivateLocation(
+  uid: string,
+  expectedSessionId: string,
+): Promise<PrivateLocation | null> {
+  const snapshot = await getDoc(doc(db, 'privateLocations', uid));
+  if (!snapshot.exists()) return null;
+  const location = mapPrivateLocation(snapshot.data());
+  return location?.gameSessionId === expectedSessionId ? location : null;
 }
 
 export function subscribePrivateLocation(
@@ -135,8 +146,7 @@ export function createEmergencyLocationProjectionsSubscriber(
       onFailure,
     ),
     onPublish: values => {
-      const now = getServerNowMs();
-      onValue([...values.values()].filter(projection => projection.expiresAt > now));
+      onValue([...values.values()]);
     },
     onError,
   });

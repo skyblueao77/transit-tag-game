@@ -137,7 +137,7 @@ service cloud.firestore {
             && getAfter(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
             && getAfter(/databases/$(database)/documents/users/$(uid)).data.gameSessionId
               == get(/databases/$(database)/documents/game_config/current).data.gameSessionId))
-        && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt', 'expiresAt'])
         && request.resource.data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
         && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         && request.resource.data.latitude is number
@@ -146,7 +146,11 @@ service cloud.firestore {
         && request.resource.data.longitude is number
         && request.resource.data.longitude >= -180
         && request.resource.data.longitude <= 180
-        && request.resource.data.updatedAt == request.time;
+        && request.resource.data.updatedAt == request.time
+        && (!request.resource.data.keys().hasAny(['expiresAt'])
+          || (request.resource.data.expiresAt is timestamp
+            && request.resource.data.expiresAt > request.time
+            && request.resource.data.expiresAt <= request.time + duration.value(49, 'h')));
       allow delete: if isAdmin();
     }
 
@@ -154,11 +158,51 @@ service cloud.firestore {
       return signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
     }
 
+    function periodicRevealIntervalMs(cfg) {
+      return (cfg.keys().hasAny(['periodicRevealIntervalMinutes'])
+        && cfg.periodicRevealIntervalMinutes is int
+        && cfg.periodicRevealIntervalMinutes >= 5
+        && cfg.periodicRevealIntervalMinutes <= 120)
+        ? cfg.periodicRevealIntervalMinutes * 60000
+        : 1800000;
+    }
+
+    function periodicRevealDurationMs(cfg, intervalMs) {
+      let raw = (cfg.keys().hasAny(['periodicRevealDurationMinutes'])
+        && cfg.periodicRevealDurationMinutes is int
+        && cfg.periodicRevealDurationMinutes >= 1
+        && cfg.periodicRevealDurationMinutes <= 30)
+        ? cfg.periodicRevealDurationMinutes * 60000
+        : 300000;
+      return raw < intervalMs ? raw : intervalMs;
+    }
+
+    function periodicWindowEndAt(startTime, intervalMs, durationMs, nowMs) {
+      let cycle = math.floor((nowMs - startTime) / intervalMs);
+      let windowStart = startTime + cycle * intervalMs;
+      let windowEnd = windowStart + durationMs;
+      return nowMs < windowEnd ? windowEnd : 0;
+    }
+
+    function activePeriodicRevealEndMs(cfg, nowMs) {
+      let intervalMs = periodicRevealIntervalMs(cfg);
+      let durationMs = periodicRevealDurationMs(cfg, intervalMs);
+      return (cfg.keys().hasAny(['gameStatus'])
+        && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && cfg.keys().hasAny(['startTime'])
+        && cfg.startTime is int
+        && cfg.startTime > 0
+        && nowMs >= cfg.startTime + intervalMs)
+        ? periodicWindowEndAt(cfg.startTime, intervalMs, durationMs, nowMs)
+        : 0;
+    }
+
     function validExposedLocationScope(data, uid) {
       let playerPath = /databases/$(database)/documents/users/$(uid);
       let configPath = /databases/$(database)/documents/game_config/current;
       let cfg = get(configPath).data;
       let me = get(playerPath).data;
+      let periodicEndMs = activePeriodicRevealEndMs(cfg, request.time.toMillis());
       return ((!data.keys().hasAny(['revealScope']) || data.revealScope == 'INDIVIDUAL')
           && data.expiresAt <= request.time + duration.value(6, 'm'))
         || (data.revealScope == 'GLOBAL'
@@ -166,6 +210,10 @@ service cloud.firestore {
           && isActiveDeadline(cfg.locationRevealUntil)
           && expiresWithinDeadline(data.expiresAt, cfg.locationRevealUntil)
           && data.expiresAt <= request.time + duration.value(61, 'm'))
+        || (data.revealScope == 'GLOBAL'
+          && periodicEndMs > 0
+          && expiresWithinDeadline(data.expiresAt, periodicEndMs)
+          && data.expiresAt <= request.time + duration.value(31, 'm'))
         || (data.revealScope == 'TEAM_A'
           && me.team == 'A'
           && cfg.keys().hasAny(['teamARevealUntil'])

@@ -132,4 +132,37 @@ describe('computeMapTimeLeft', () => {
     assert.equal(paused.nextReveal, 400);
     assert.equal(paused.invincible, 150);
   });
+
+  test('computes deterministic periodicRevealRemaining and nextReveal during DAY1_ACTIVE and falls back in FINAL_MISSION', () => {
+    const startTime = now - 32 * 60_000;
+    const activePeriodic = computeMapTimeLeft({
+      currentUser: { team: 'A', status: 'ACTIVE' },
+      gameConfig: {
+        gameStatus: 'DAY1_ACTIVE',
+        startTime,
+        periodicRevealIntervalMinutes: 30,
+        periodicRevealDurationMinutes: 5,
+        nextRevealTime: now + 999_000,
+      },
+      currentRole: 'RUNNER',
+      now,
+    });
+    assert.equal(activePeriodic.periodicRevealRemaining, 3 * 60);
+    assert.equal(activePeriodic.nextReveal, 28 * 60);
+
+    const finalFallback = computeMapTimeLeft({
+      currentUser: { team: 'A', status: 'ACTIVE' },
+      gameConfig: {
+        gameStatus: 'FINAL_MISSION',
+        startTime,
+        periodicRevealIntervalMinutes: 30,
+        periodicRevealDurationMinutes: 5,
+        nextRevealTime: now + 120_000,
+      },
+      currentRole: 'RUNNER',
+      now,
+    });
+    assert.equal(finalFallback.periodicRevealRemaining, 0);
+    assert.equal(finalFallback.nextReveal, 120);
+  });
 });

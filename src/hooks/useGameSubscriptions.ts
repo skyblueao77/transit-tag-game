@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import type { GameConfig, User, Mission, PrivateLocation, ExposedLocation } from '../../types';
 import { INITIAL_GAME_CONFIG } from '../../constants';
+import { canRevealLocation, hasActiveRevealWindow } from '../game';
+import { getServerNowMs } from '../infrastructure/firebase/serverClock';
 import {
   createExposedLocationsSubscriber,
   type ExposedLocationsSubscriber,
+  fetchPrivateLocation,
   subscribeGameConfig,
   subscribeMissions,
   subscribePlayers,
-  subscribePrivateLocation,
 } from '../infrastructure/firebase/subscriptions';
 
 export interface UseGameSubscriptionsResult {
@@ -33,6 +35,7 @@ export function useGameSubscriptions(
   const [gameConfig, setGameConfig] = useState<GameConfig>(INITIAL_GAME_CONFIG);
   const [privateLocation, setPrivateLocation] = useState<PrivateLocation | null>(null);
   const [exposedLocations, setExposedLocations] = useState<Record<string, ExposedLocation>>({});
+  const [exposeWindowNowMs, setExposeWindowNowMs] = useState<number>(() => getServerNowMs());
   const lastBroadcastTimeRef = useRef<number | null>(null);
   const exposedSubscriberRef = useRef<ExposedLocationsSubscriber | null>(null);
 
@@ -59,6 +62,43 @@ export function useGameSubscriptions(
   exposedPlayerIdsRef.current = exposedPlayerIds;
 
   useEffect(() => {
+    if (!authUserId || !canSubscribeParticipants || !canRevealLocation(gameConfig.gameStatus)) {
+      return;
+    }
+    setExposeWindowNowMs(getServerNowMs());
+    const timer = window.setInterval(() => {
+      setExposeWindowNowMs(getServerNowMs());
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [authUserId, canSubscribeParticipants, gameConfig.gameStatus]);
+
+  const isExposeWindowActive = useMemo(
+    () => Boolean(authUserId && canSubscribeParticipants) && hasActiveRevealWindow({
+      phase: gameConfig.gameStatus,
+      locationRevealUntil: gameConfig.locationRevealUntil,
+      teamARevealUntil: gameConfig.teamARevealUntil,
+      teamBRevealUntil: gameConfig.teamBRevealUntil,
+      startTime: gameConfig.startTime,
+      periodicRevealIntervalMinutes: gameConfig.periodicRevealIntervalMinutes,
+      periodicRevealDurationMinutes: gameConfig.periodicRevealDurationMinutes,
+      players: allUsers,
+    }, exposeWindowNowMs),
+    [
+      authUserId,
+      canSubscribeParticipants,
+      gameConfig.gameStatus,
+      gameConfig.locationRevealUntil,
+      gameConfig.teamARevealUntil,
+      gameConfig.teamBRevealUntil,
+      gameConfig.startTime,
+      gameConfig.periodicRevealIntervalMinutes,
+      gameConfig.periodicRevealDurationMinutes,
+      allUsers,
+      exposeWindowNowMs,
+    ],
+  );
+
+  useEffect(() => {
     if (!authUserId || !canSubscribeParticipants) {
       setRawUsers([]);
       return;
@@ -77,19 +117,26 @@ export function useGameSubscriptions(
       setPrivateLocation(null);
       return;
     }
-    return subscribePrivateLocation(
-      authUserId,
-      gameConfig.gameSessionId,
-      setPrivateLocation,
-      error => {
+    let cancelled = false;
+    void fetchPrivateLocation(authUserId, gameConfig.gameSessionId)
+      .then(location => {
+        if (!cancelled) {
+          setPrivateLocation(location);
+        }
+      })
+      .catch(error => {
         console.error('Error fetching private location:', error);
-        setPrivateLocation(null);
-      },
-    );
+        if (!cancelled) {
+          setPrivateLocation(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [authUserId, gameConfig.gameSessionId]);
 
   useEffect(() => {
-    if (!authUserId || !canSubscribeParticipants) {
+    if (!authUserId || !canSubscribeParticipants || !isExposeWindowActive) {
       setExposedLocations({});
       exposedSubscriberRef.current = null;
       return;
@@ -110,16 +157,16 @@ export function useGameSubscriptions(
       }
       subscriber.dispose();
     };
-  }, [authUserId, canSubscribeParticipants, gameConfig.gameSessionId, onSubscriptionError]);
+  }, [authUserId, canSubscribeParticipants, gameConfig.gameSessionId, isExposeWindowActive, onSubscriptionError]);
 
   useEffect(() => {
-    if (!authUserId || !canSubscribeParticipants) return;
+    if (!authUserId || !canSubscribeParticipants || !isExposeWindowActive) return;
     if (exposedPlayerIdsKey === '') {
       exposedSubscriberRef.current?.setPlayerIds([]);
       return;
     }
     exposedSubscriberRef.current?.setPlayerIds(exposedPlayerIdsRef.current);
-  }, [authUserId, canSubscribeParticipants, exposedPlayerIdsKey]);
+  }, [authUserId, canSubscribeParticipants, isExposeWindowActive, exposedPlayerIdsKey]);
 
   useEffect(() => {
     if (!authUserId || !canSubscribeParticipants) {

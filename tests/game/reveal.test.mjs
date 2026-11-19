@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { resolveLocationVisibility } from '../../src/game/reveal.ts';
+import {
+  hasActiveRevealWindow,
+  PERIODIC_REVEAL_DEFAULT_DURATION_MINUTES,
+  PERIODIC_REVEAL_DEFAULT_INTERVAL_MINUTES,
+  PERIODIC_REVEAL_MAX_DURATION_MINUTES,
+  PERIODIC_REVEAL_MAX_INTERVAL_MINUTES,
+  PERIODIC_REVEAL_MIN_DURATION_MINUTES,
+  PERIODIC_REVEAL_MIN_INTERVAL_MINUTES,
+  resolveLocationVisibility,
+  resolvePeriodicRevealWindow,
+} from '../../src/game/reveal.ts';
 
 const now = 1_000_000;
 const active = 'DAY1_ACTIVE';
@@ -153,6 +163,136 @@ describe('location visibility rules', () => {
       penaltyRevealUntil: now,
       exposedLocation: { latitude: 35.3, longitude: 139.3, expiresAt: now + 60_000, revealScope: 'PENALTY' },
     }).mode, 'HIDDEN');
+  });
+
+  test('resolvePeriodicRevealWindow handles pre-first-window, inside window, between cycles, clamping, and paused phases', () => {
+    const startTime = 1_700_000_000_000;
+    const intervalMs = 30 * 60_000;
+    const durationMs = 5 * 60_000;
+
+    // Pre-first window
+    assert.deepEqual(resolvePeriodicRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      now: startTime + 10 * 60_000,
+      startTime,
+      intervalMinutes: 30,
+      durationMinutes: 5,
+    }), {
+      isActive: false,
+      nextWindowStart: startTime + intervalMs,
+    });
+
+    // Inside cycle 1 window
+    assert.deepEqual(resolvePeriodicRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      now: startTime + intervalMs + 2 * 60_000,
+      startTime,
+      intervalMinutes: 30,
+      durationMinutes: 5,
+    }), {
+      isActive: true,
+      activeUntil: startTime + intervalMs + durationMs,
+      nextWindowStart: startTime + 2 * intervalMs,
+    });
+
+    // Between cycle 1 end and cycle 2 start
+    assert.deepEqual(resolvePeriodicRevealWindow({
+      phase: 'DAY2_ACTIVE',
+      now: startTime + intervalMs + durationMs,
+      startTime,
+      intervalMinutes: 30,
+      durationMinutes: 5,
+    }), {
+      isActive: false,
+      nextWindowStart: startTime + 2 * intervalMs,
+    });
+
+    // Parameter clamping & default fallback
+    const clamped = resolvePeriodicRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      now: startTime + PERIODIC_REVEAL_MIN_INTERVAL_MINUTES * 60_000 + 30_000,
+      startTime,
+      intervalMinutes: 1,
+      durationMinutes: 999,
+    });
+    assert.equal(clamped.isActive, true);
+    assert.equal(
+      clamped.activeUntil,
+      startTime + PERIODIC_REVEAL_MIN_INTERVAL_MINUTES * 60_000 + Math.min(PERIODIC_REVEAL_MAX_DURATION_MINUTES, PERIODIC_REVEAL_MIN_INTERVAL_MINUTES) * 60_000,
+    );
+
+    const defaults = resolvePeriodicRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      now: startTime + PERIODIC_REVEAL_DEFAULT_INTERVAL_MINUTES * 60_000 + 10_000,
+      startTime,
+    });
+    assert.equal(defaults.isActive, true);
+    assert.equal(
+      defaults.activeUntil,
+      startTime + PERIODIC_REVEAL_DEFAULT_INTERVAL_MINUTES * 60_000 + PERIODIC_REVEAL_DEFAULT_DURATION_MINUTES * 60_000,
+    );
+
+    // Max interval clamping
+    const maxClamped = resolvePeriodicRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      now: startTime + PERIODIC_REVEAL_MAX_INTERVAL_MINUTES * 60_000 + 1000,
+      startTime,
+      intervalMinutes: 999,
+      durationMinutes: 0,
+    });
+    assert.equal(maxClamped.isActive, true);
+    assert.equal(
+      maxClamped.activeUntil,
+      startTime + PERIODIC_REVEAL_MAX_INTERVAL_MINUTES * 60_000 + PERIODIC_REVEAL_MIN_DURATION_MINUTES * 60_000,
+    );
+
+    // Paused / non-revealable phase
+    assert.deepEqual(resolvePeriodicRevealWindow({
+      phase: 'DAY1_PAUSED',
+      now: startTime + intervalMs + 60_000,
+      startTime,
+      intervalMinutes: 30,
+      durationMinutes: 5,
+    }), { isActive: false });
+  });
+
+  test('resolveLocationVisibility exposes GLOBAL snapshot during periodic reveal window and hasActiveRevealWindow reflects active sources', () => {
+    const epochNow = 1_700_000_000_000;
+    const startTime = epochNow - 31 * 60_000;
+    const vis = resolve({
+      exposedLocation: { latitude: 35.2, longitude: 139.2, expiresAt: startTime + 35 * 60_000, revealScope: 'GLOBAL' },
+    }, {
+      now: epochNow,
+      startTime,
+      periodicRevealIntervalMinutes: 30,
+      periodicRevealDurationMinutes: 5,
+    });
+    assert.deepEqual(vis, {
+      mode: 'GLOBAL_SNAPSHOT',
+      latitude: 35.2,
+      longitude: 139.2,
+      expiresAt: startTime + 35 * 60_000,
+    });
+
+    assert.equal(hasActiveRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      startTime,
+      periodicRevealIntervalMinutes: 30,
+      periodicRevealDurationMinutes: 5,
+    }, epochNow), true);
+
+    assert.equal(hasActiveRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      startTime: epochNow - 10 * 60_000,
+      periodicRevealIntervalMinutes: 30,
+      periodicRevealDurationMinutes: 5,
+      players: [{ team: 'A', status: 'ACTIVE', penaltyRevealUntil: epochNow - 1000 }],
+    }, epochNow), false);
+
+    assert.equal(hasActiveRevealWindow({
+      phase: 'DAY1_ACTIVE',
+      players: [{ team: 'A', status: 'ACTIVE', penaltyRevealUntil: epochNow + 10_000 }],
+    }, epochNow), true);
   });
 
   test('input objects are not mutated', () => {

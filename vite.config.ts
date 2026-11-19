@@ -56,16 +56,16 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         runtimeCaching: [
           {
-            urlPattern: /^https:\/\/[a-c]\.tile\.openstreetmap\.org\/.*/i,
+            urlPattern: /^https:\/\/cyberjapandata\.gsi\.go\.jp\/xyz\/.*/i,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'osm-map-tiles',
+              cacheName: 'gsi-map-tiles',
               expiration: {
                 maxEntries: 500,
                 maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
               },
               cacheableResponse: {
-                statuses: [0, 200],
+                statuses: [200],
               },
             },
           },

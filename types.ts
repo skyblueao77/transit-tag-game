@@ -39,6 +39,7 @@ export interface PrivateLocation {
   latitude: number;
   longitude: number;
   updatedAt?: unknown;
+  expiresAt?: unknown;
 }
 
 export type ExposedLocationScope = 'GLOBAL' | 'TEAM_A' | 'TEAM_B' | 'INDIVIDUAL' | 'PENALTY';

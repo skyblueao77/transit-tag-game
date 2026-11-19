@@ -296,7 +296,7 @@ describe('Audit 06: Location Tracking, AutoExpose, Admin Reveal, Penalty & Safet
     }).reason, 'MAX_QUIET_EXCEEDED');
   });
 
-  test('emergencyLocationHeartbeat ignores poor accuracy > 400m and stops immediately on status leave', async () => {
+  test('emergencyLocationHeartbeat accepts coarse (>400m) accuracy, rejects negative accuracy, and stops immediately on status leave', async () => {
     const calls = [];
     const timers = [];
     let getPosCb = null;
@@ -333,14 +333,14 @@ describe('Audit 06: Location Tracking, AutoExpose, Admin Reveal, Penalty & Safet
 
       assert.equal(timers.length, 1);
       assert.ok(getPosCb);
-      // Poor accuracy (> 400m) rejected:
-      getPosCb({ coords: { latitude: 35.6, longitude: 139.7, accuracy: 450 } });
+      // Negative accuracy rejected:
+      getPosCb({ coords: { latitude: 35.6, longitude: 139.7, accuracy: -1 } });
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(calls.length, 0);
 
-      // Trigger interval tick with good accuracy (50m):
+      // Coarse (> 400m) network/cell accuracy accepted during SOS:
       timers[0].cb();
-      getPosCb({ coords: { latitude: 35.6, longitude: 139.7, accuracy: 50 } });
+      getPosCb({ coords: { latitude: 35.6, longitude: 139.7, accuracy: 850 } });
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(calls.length, 1);
 
@@ -407,5 +407,112 @@ describe('Audit 06: Location Tracking, AutoExpose, Admin Reveal, Penalty & Safet
       () => db.commitBatch([{ type: 'update', path: 'users/uA', data: { lastStation: segmentLabel } }], { uid: 'uA', signInProvider: 'password' }),
       `[AUDIT-BUG] Real Japanese station/transit labels (${Buffer.byteLength(stationLabel, 'utf8')}B station / ${Buffer.byteLength(segmentLabel, 'utf8')}B segment, e.g. ${segmentLabel}) pass JS .length<=100 in playerStore.ts but exceed firestore.rules 100-byte UTF-8 lastStation limit -> PERMISSION_DENIED during auto check-in!`,
     );
+  });
+
+  test('Phase 2: privateLocations enforces 48h TTL bound and periodic GLOBAL exposedLocations window', () => {
+    const { db, sessionId } = createActiveParticipantDb({
+      config: {
+        startTime: 1_750_000_000_000 - 31 * 60_000,
+        periodicRevealIntervalMinutes: 30,
+        periodicRevealDurationMinutes: 5,
+      },
+    });
+    db.seed('users/uA', {
+      id: 'uA', name: 'A', role: 'RUNNER', team: 'A', color: '#ef4444',
+      score: 0, status: 'ACTIVE', gameSessionId: sessionId, invincibleCards: 0,
+    });
+    const uAuth = { uid: 'uA', signInProvider: 'password' };
+
+    // Valid 48h privateLocation TTL accepted
+    db.commitBatch([{
+      type: 'set',
+      path: 'privateLocations/uA',
+      data: {
+        gameSessionId: sessionId,
+        latitude: 35.68,
+        longitude: 139.76,
+        updatedAt: SERVER_TIMESTAMP_SENTINEL,
+        expiresAt: FsTimestamp.fromMillis(db.serverNowMs + 48 * 3600_000),
+      },
+      merge: false,
+    }], uAuth);
+
+    // Oversized (>49h) privateLocation TTL rejected
+    assert.throws(() => {
+      db.commitBatch([{
+        type: 'set',
+        path: 'privateLocations/uA',
+        data: {
+          gameSessionId: sessionId,
+          latitude: 35.68,
+          longitude: 139.76,
+          updatedAt: SERVER_TIMESTAMP_SENTINEL,
+          expiresAt: FsTimestamp.fromMillis(db.serverNowMs + 50 * 3600_000),
+        },
+        merge: false,
+      }], uAuth);
+    }, RulePermissionError);
+
+    // Periodic GLOBAL write accepted during active periodic window
+    db.commitBatch([{
+      type: 'set',
+      path: 'exposedLocations/uA',
+      data: {
+        playerId: 'uA',
+        gameSessionId: sessionId,
+        latitude: 35.68,
+        longitude: 139.76,
+        capturedAt: SERVER_TIMESTAMP_SENTINEL,
+        expiresAt: FsTimestamp.fromMillis(db.serverNowMs + 4 * 60_000),
+        revealScope: 'GLOBAL',
+      },
+      merge: false,
+    }], uAuth);
+
+    // Outside periodic window (startTime only 10m ago) -> rejected
+    db.seed('game_config/current', {
+      ...db.rawGet('game_config/current'),
+      startTime: db.serverNowMs - 10 * 60_000,
+    });
+    assert.throws(() => {
+      db.commitBatch([{
+        type: 'set',
+        path: 'exposedLocations/uB',
+        data: {
+          playerId: 'uB',
+          gameSessionId: sessionId,
+          latitude: 35.68,
+          longitude: 139.76,
+          capturedAt: SERVER_TIMESTAMP_SENTINEL,
+          expiresAt: FsTimestamp.fromMillis(db.serverNowMs + 4 * 60_000),
+          revealScope: 'GLOBAL',
+        },
+        merge: false,
+      }], { uid: 'uB', signInProvider: 'password' });
+    }, RulePermissionError);
+  });
+
+  test('Phase 2: UI, hooks, and GSI tile safeguards remain in place', () => {
+    const safetySource = readFileSync(new URL('../../src/components/game/SafetyActionDialog.tsx', import.meta.url), 'utf8');
+    const emergencyMapSource = readFileSync(new URL('../../views/EmergencyProjectionMap.tsx', import.meta.url), 'utf8');
+    const setupSource = readFileSync(new URL('../../views/SetupView.tsx', import.meta.url), 'utf8');
+    const wakeLockSource = readFileSync(new URL('../../src/hooks/useWakeLock.ts', import.meta.url), 'utf8');
+    const geoSource = readFileSync(new URL('../../src/hooks/useMapGeolocation.ts', import.meta.url), 'utf8');
+    const subHookSource = readFileSync(new URL('../../src/hooks/useGameSubscriptions.ts', import.meta.url), 'utf8');
+
+    assert.match(safetySource, /119番.*110番/);
+    assert.match(emergencyMapSource, /cyberjapandata\.gsi\.go\.jp\/xyz\/std/);
+    assert.match(emergencyMapSource, /通信途絶の可能性/);
+    assert.match(mapViewSource, /cyberjapandata\.gsi\.go\.jp\/xyz\/std/);
+    assert.match(mapViewSource, /AUTO_STATION_UPDATE_COOLDOWN_MS/);
+    assert.match(mapViewSource, /locationFixSeq/);
+    assert.match(mapViewSource, /useWakeLock\(isGameActive\(gameConfig\.gameStatus\)\)/);
+    assert.match(setupSource, /consentLocationPrivacy/);
+    assert.match(setupSource, /consentSafetyRules/);
+    assert.match(wakeLockSource, /requestEpochRef/);
+    assert.match(wakeLockSource, /mountedRef/);
+    assert.match(geoSource, /isGameActive\(gameStatus\)/);
+    assert.match(subHookSource, /fetchPrivateLocation/);
+    assert.match(subHookSource, /hasActiveRevealWindow/);
   });
 });
