@@ -178,8 +178,7 @@ service cloud.firestore {
     }
 
     function periodicWindowEndAt(startTime, intervalMs, durationMs, nowMs) {
-      let cycle = math.floor((nowMs - startTime) / intervalMs);
-      let windowStart = startTime + cycle * intervalMs;
+      let windowStart = nowMs - ((nowMs - startTime) % intervalMs);
       let windowEnd = windowStart + durationMs;
       return nowMs < windowEnd ? windowEnd : 0;
     }
@@ -197,12 +196,14 @@ service cloud.firestore {
         : 0;
     }
 
-    function validExposedLocationScope(data, uid) {
-      let playerPath = /databases/$(database)/documents/users/$(uid);
-      let configPath = /databases/$(database)/documents/game_config/current;
-      let cfg = get(configPath).data;
-      let me = get(playerPath).data;
+    function validPeriodicGlobalRevealScope(data, cfg) {
       let periodicEndMs = activePeriodicRevealEndMs(cfg, request.time.toMillis());
+      return periodicEndMs > 0
+        && expiresWithinDeadline(data.expiresAt, periodicEndMs)
+        && data.expiresAt <= request.time + duration.value(31, 'm');
+    }
+
+    function validExposedLocationScope(data, me, cfg) {
       return ((!data.keys().hasAny(['revealScope']) || data.revealScope == 'INDIVIDUAL')
           && data.expiresAt <= request.time + duration.value(6, 'm'))
         || (data.revealScope == 'GLOBAL'
@@ -211,9 +212,7 @@ service cloud.firestore {
           && expiresWithinDeadline(data.expiresAt, cfg.locationRevealUntil)
           && data.expiresAt <= request.time + duration.value(61, 'm'))
         || (data.revealScope == 'GLOBAL'
-          && periodicEndMs > 0
-          && expiresWithinDeadline(data.expiresAt, periodicEndMs)
-          && data.expiresAt <= request.time + duration.value(31, 'm'))
+          && validPeriodicGlobalRevealScope(data, cfg))
         || (data.revealScope == 'TEAM_A'
           && me.team == 'A'
           && cfg.keys().hasAny(['teamARevealUntil'])
@@ -233,15 +232,28 @@ service cloud.firestore {
           && data.expiresAt <= request.time + duration.value(61, 'm'));
     }
 
-
     function validOwnerExposedLocationWrite(uid) {
       let data = request.resource.data;
-      let cfg = get(/databases/$(database)/documents/game_config/current).data;
-      let me = get(/databases/$(database)/documents/users/$(uid)).data;
+      let configPath = /databases/$(database)/documents/game_config/current;
+      let playerPath = /databases/$(database)/documents/users/$(uid);
+      let cfg = get(configPath).data;
+      let me = get(playerPath).data;
       return signedIn()
-        && !isAdmin()
         && request.auth.uid == uid
-        && hasCurrentGameSession()
+        && !isAdmin()
+        && exists(configPath)
+        && cfg.gameSessionId is string
+        && cfg.gameSessionId.size() > 0
+        && cfg.sessionStartedAt is int
+        && cfg.sessionStartedAt >= 0
+        && cfg.sessionSchemaVersion is int
+        && cfg.sessionSchemaVersion >= 2
+        && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && exists(playerPath)
+        && me.team in ['A', 'B']
+        && me.gameSessionId == cfg.gameSessionId
+        && me.status != 'EMERGENCY'
+        && me.status != 'RETIRED'
         && data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt', 'revealScope', 'playerId'])
         && data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt'])
         && (!data.keys().hasAny(['playerId']) || data.playerId == uid)
@@ -255,12 +267,7 @@ service cloud.firestore {
         && data.capturedAt == request.time
         && data.expiresAt is timestamp
         && request.time < data.expiresAt
-        && validExposedLocationScope(data, uid)
-        && isCurrentParticipant(uid)
-        && me.status != 'EMERGENCY'
-        && me.status != 'RETIRED'
-        && exists(/databases/$(database)/documents/game_config/current)
-        && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE'];
+        && validExposedLocationScope(data, me, cfg);
     }
 
     function ownerMayReplaceSnapshot() {
@@ -268,9 +275,9 @@ service cloud.firestore {
       let newData = request.resource.data;
       let oldScope = oldData.keys().hasAny(['revealScope']) ? oldData.revealScope : 'INDIVIDUAL';
       let newScope = newData.keys().hasAny(['revealScope']) ? newData.revealScope : 'INDIVIDUAL';
+      let cfg = get(/databases/$(database)/documents/game_config/current).data;
       return !oldData.keys().hasAny(['gameSessionId'])
-        || !hasCurrentGameSession()
-        || oldData.gameSessionId != get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+        || oldData.gameSessionId != cfg.gameSessionId
         || !(oldData.expiresAt is timestamp)
         || oldData.expiresAt <= request.time
         || (oldScope == 'PENALTY'
