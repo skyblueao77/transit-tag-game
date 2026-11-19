@@ -90,7 +90,10 @@ export const clientCaptureGateway: CaptureGateway = {
         return { ok: false, reason: 'TARGET_NOT_FOUND' };
       }
 
-      const now = getServerNowMs();
+      if (participantIds.length > 495) {
+        return { ok: false, reason: 'INVALID_GAME_STATE' };
+      }
+
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -108,6 +111,7 @@ export const clientCaptureGateway: CaptureGateway = {
         const userSnaps = await Promise.all(
           participantIds.map(id => transaction.get(doc(db, 'users', id))),
         );
+        const now = getServerNowMs();
 
         const roster: CapturePlayer[] = [];
         for (const snap of userSnaps) {
@@ -223,7 +227,6 @@ export const clientInvincibilityGateway: InvincibilityGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -237,6 +240,7 @@ export const clientInvincibilityGateway: InvincibilityGateway = {
         if (!userSnap.exists()) return { ok: false, reason: 'PLAYER_NOT_FOUND' };
         if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
 
+        const now = getServerNowMs();
         const userData = userSnap.data();
         const configData = configSnap.data();
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
@@ -317,7 +321,6 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -335,6 +338,7 @@ export const clientMissionCompletionGateway: MissionCompletionGateway = {
         if (!configSnap.exists()) return { ok: false, reason: 'SESSION_CHANGED' };
         if (!missionSnap.exists()) return { ok: false, reason: 'MISSION_NOT_FOUND' };
 
+        const now = getServerNowMs();
         const userData = userSnap.data();
         const configData = configSnap.data();
         const missionData = missionSnap.data();
@@ -432,7 +436,6 @@ export const clientWaitingGateway: WaitingGateway = {
       if (!uid) return { ok: false, reason: 'INVALID_ARGUMENT' };
       if (!isValidGameSessionId(input.expectedSessionId)) return { ok: false, reason: 'SESSION_CHANGED' };
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -446,6 +449,7 @@ export const clientWaitingGateway: WaitingGateway = {
         if (!userSnap.exists()) return { ok: false, reason: 'PLAYER_NOT_FOUND' };
         if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
 
+        const now = getServerNowMs();
         const userData = userSnap.data();
         const configData = configSnap.data();
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
@@ -514,7 +518,6 @@ export const clientWaitingGateway: WaitingGateway = {
       if (!uid) return { ok: false, reason: 'INVALID_ARGUMENT' };
       if (!isValidGameSessionId(input.expectedSessionId)) return { ok: false, reason: 'SESSION_CHANGED' };
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -528,6 +531,7 @@ export const clientWaitingGateway: WaitingGateway = {
         if (!userSnap.exists()) return { ok: false, reason: 'PLAYER_NOT_FOUND' };
         if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
 
+        const now = getServerNowMs();
         const userData = userSnap.data();
         const configData = configSnap.data();
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
@@ -590,10 +594,10 @@ export const clientSafetyActionGateway: SafetyActionGateway = {
         return { ok: false, reason: 'SESSION_CHANGED' };
       }
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
+        const now = getServerNowMs();
         const userRef = doc(db, 'users', uid);
         const configRef = doc(db, 'game_config', 'current');
         const locRef = doc(db, 'privateLocations', uid);

@@ -211,3 +211,163 @@ export function planMissionCatalogSync(
   }
   return { allowed: true, upserts, createdCount, updatedCount, unchangedCount, totalManagedCount: catalog.length };
 }
+
+export const MAX_MISSION_IMPORT_COUNT = 100;
+const VALID_IMPORTED_MISSION_ID = /^[A-Za-z0-9_-]{1,80}$/;
+
+export type MissionImportFailureReason =
+  | 'INVALID_JSON'
+  | 'INVALID_FORMAT'
+  | 'TOO_MANY_MISSIONS'
+  | 'INVALID_MISSION';
+
+export type MissionImportParseResult =
+  | { ok: true; missions: Mission[] }
+  | { ok: false; reason: MissionImportFailureReason; detail?: string };
+
+function sanitizeOptionalShortField(value: unknown, fallback: string, maxLength: number): string | null {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return fallback;
+  if (trimmed.length > maxLength) return null;
+  return trimmed;
+}
+
+/** Exports missions as formatted JSON compatible with parseImportedMissionsJson. */
+export function exportMissionsToJson(missions: readonly Mission[]): string {
+  const normalized = missions.map(mission => ({
+    id: mission.id,
+    area: mission.area || 'ALL',
+    region: mission.region || 'ALL',
+    title: mission.title,
+    description: mission.description,
+    points: mission.points,
+    type: mission.type,
+    ...(typeof mission.lat === 'number' && Number.isFinite(mission.lat) ? { lat: mission.lat } : {}),
+    ...(typeof mission.lng === 'number' && Number.isFinite(mission.lng) ? { lng: mission.lng } : {}),
+    ...(typeof mission.isFinalMission === 'boolean' ? { isFinalMission: mission.isFinalMission } : {}),
+  }));
+  return JSON.stringify(normalized, null, 2);
+}
+
+/** Parses and validates an imported custom mission JSON payload (array or `{ missions: [...] }`). */
+export function parseImportedMissionsJson(rawJson: string): MissionImportParseResult {
+  if (typeof rawJson !== 'string' || rawJson.trim().length === 0) {
+    return { ok: false, reason: 'INVALID_JSON', detail: 'JSON文字列が空です' };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    return { ok: false, reason: 'INVALID_JSON', detail: 'JSONの構文が正しくありません' };
+  }
+
+  const rawItems = Array.isArray(parsed)
+    ? parsed
+    : (isRecord(parsed) && Array.isArray(parsed.missions) ? parsed.missions : null);
+  if (!rawItems) {
+    return { ok: false, reason: 'INVALID_FORMAT', detail: 'ミッション配列（[...] または { "missions": [...] }）を指定してください' };
+  }
+  if (rawItems.length === 0) {
+    return { ok: false, reason: 'INVALID_FORMAT', detail: '少なくとも1件のミッションが必要です' };
+  }
+  if (rawItems.length > MAX_MISSION_IMPORT_COUNT) {
+    return {
+      ok: false,
+      reason: 'TOO_MANY_MISSIONS',
+      detail: `一度にインポートできるミッションは最大${MAX_MISSION_IMPORT_COUNT}件です`,
+    };
+  }
+
+  const seenIds = new Set<string>();
+  const missions: Mission[] = [];
+  for (let index = 0; index < rawItems.length; index += 1) {
+    const item = rawItems[index];
+    const rowLabel = `${index + 1}件目`;
+    if (!isRecord(item)) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: オブジェクト形式で指定してください` };
+    }
+
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const description = typeof item.description === 'string' ? item.description.trim() : '';
+    if (!title || title.length > 120) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: title は1〜120文字で指定してください` };
+    }
+    if (!description || description.length > 500) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: description は1〜500文字で指定してください` };
+    }
+    if (typeof item.type !== 'string' || !missionTypes.has(item.type)) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: type は PHOTO または CHECKIN を指定してください` };
+    }
+    if (typeof item.points !== 'number' || !Number.isInteger(item.points) || item.points < 1 || item.points > 100) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: points は1〜100の整数を指定してください` };
+    }
+
+    const area = sanitizeOptionalShortField(item.area, 'ALL', 60);
+    const region = sanitizeOptionalShortField(item.region, 'ALL', 60);
+    if (area === null || region === null) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: area / region は60文字以内の文字列で指定してください` };
+    }
+
+    let id: string;
+    if (item.id === undefined || item.id === null || (typeof item.id === 'string' && item.id.trim().length === 0)) {
+      let seq = index + 1;
+      id = `custom_import_${seq}`;
+      while (seenIds.has(id)) {
+        seq += 1;
+        id = `custom_import_${seq}`;
+      }
+    } else if (typeof item.id === 'string' && VALID_IMPORTED_MISSION_ID.test(item.id.trim())) {
+      id = item.id.trim();
+    } else {
+      return {
+        ok: false,
+        reason: 'INVALID_MISSION',
+        detail: `${rowLabel}: id は半角英数字・アンダースコア・ハイフン（80文字以内）で指定してください`,
+      };
+    }
+
+    if (seenIds.has(id)) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: ミッションID "${id}" が重複しています` };
+    }
+    seenIds.add(id);
+
+    const hasLat = item.lat !== undefined && item.lat !== null;
+    const hasLng = item.lng !== undefined && item.lng !== null;
+    if (hasLat !== hasLng) {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: lat と lng は両方指定するか両方省略してください` };
+    }
+    let lat: number | undefined;
+    let lng: number | undefined;
+    if (hasLat && hasLng) {
+      if (
+        typeof item.lat !== 'number' || !Number.isFinite(item.lat) || item.lat < -90 || item.lat > 90
+        || typeof item.lng !== 'number' || !Number.isFinite(item.lng) || item.lng < -180 || item.lng > 180
+      ) {
+        return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: lat/lng の座標範囲が不正です` };
+      }
+      lat = item.lat;
+      lng = item.lng;
+    }
+
+    if (item.isFinalMission !== undefined && typeof item.isFinalMission !== 'boolean') {
+      return { ok: false, reason: 'INVALID_MISSION', detail: `${rowLabel}: isFinalMission は boolean で指定してください` };
+    }
+
+    missions.push({
+      id,
+      area,
+      region,
+      title,
+      description,
+      points: item.points,
+      type: item.type as Mission['type'],
+      ...(lat !== undefined && lng !== undefined ? { lat, lng } : {}),
+      ...(typeof item.isFinalMission === 'boolean' ? { isFinalMission: item.isFinalMission } : {}),
+    });
+  }
+
+  return { ok: true, missions };
+}
+

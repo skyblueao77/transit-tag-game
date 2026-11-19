@@ -4,7 +4,7 @@ import type { GameConfig, User, Mission, MissionCompletion, EmergencyLocationPro
 import { MISSIONS } from '../../constants';
 import { toast } from 'sonner';
 import QRCode from 'qrcode-svg';
-import { getRoleForTeam } from '../../src/game';
+import { exportMissionsToJson, getRoleForTeam, parseImportedMissionsJson } from '../../src/game';
 import {
   calibrateAdminServerClock,
   isCurrentAuthUserAdmin,
@@ -26,7 +26,12 @@ import type { PrepareGameResetPreview } from '../../src/application/gameplayPort
 import { firebaseAdminGameResetGateway } from '../../src/infrastructure/firebase/adminGameResetActions';
 import { initializeGameSession } from '../../src/application/initializeGameSession';
 import { firebaseGameSessionInitializationGateway } from '../../src/infrastructure/firebase/adminSessionActions';
-import { createOrUpdateMission, deleteMission, awardMissionCompletionByAdmin } from '../../src/infrastructure/firebase/missionStore';
+import {
+  awardMissionCompletionByAdmin,
+  createOrUpdateMission,
+  deleteMission,
+  importMissionsBatch,
+} from '../../src/infrastructure/firebase/missionStore';
 import {
   sendAdminBroadcast,
   applyAdminPenaltyReveal,
@@ -612,6 +617,52 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     }
   };
 
+  const handleExportMissionsJson = (): void => {
+    try {
+      const jsonText = exportMissionsToJson(allMissionsList);
+      const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'transit-tag-missions.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      toast.success(`${allMissionsList.length}件のミッションをJSONエクスポートしました`);
+    } catch (err) {
+      console.error('Error exporting missions JSON:', err);
+      toast.error('ミッションJSONのエクスポートに失敗しました');
+    }
+  };
+
+  const handleImportMissionsJson = async (rawJson: string): Promise<void> => {
+    const parsed = parseImportedMissionsJson(rawJson);
+    if (parsed.ok === false) {
+      toast.error(parsed.detail || `ミッションJSONの形式が不正です (${parsed.reason})`);
+      return;
+    }
+
+    const confirmed = await confirm({
+      title: 'ミッションJSONインポート',
+      description: `${parsed.missions.length}件のミッションを読み込み、Firestoreへ保存（同IDは上書き更新）しますか？`,
+      confirmLabel: 'インポート実行',
+      variant: 'primary',
+    });
+    if (!confirmed) return;
+
+    setIsProcessing(true);
+    try {
+      const count = await importMissionsBatch(parsed.missions);
+      toast.success(`${count}件のミッションをインポートしました`);
+    } catch (err) {
+      console.error('Error importing missions JSON:', err);
+      toast.error('ミッションのインポート保存に失敗しました');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const allMissionsList = useMemo(() => {
     return missions.length > 0 ? missions : MISSIONS;
   }, [missions]);
@@ -996,6 +1047,8 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     handleSyncMissionCatalog,
     handleSaveCustomMission,
     handleDeleteMission,
+    handleExportMissionsJson,
+    handleImportMissionsJson,
     handleAdminAwardMission,
     handleSendBroadcast,
     handleApplyPenalty,

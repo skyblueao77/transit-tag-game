@@ -5,20 +5,18 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import type { Mission } from '../../../types';
 import { db } from './firebaseClient';
 import { appendToConfigLogs, assertAdmin, createLogId } from './gateways/shared';
 import { getServerNowMs } from './serverClock';
 
-/**
- * 管理者が新しいミッションを追加または既存のミッションを更新します。
- */
-export async function createOrUpdateMission(mission: Mission): Promise<void> {
-  await assertAdmin();
+function buildMissionDocumentPayload(mission: Mission): { id: string; data: Record<string, unknown> } {
   if (!mission || typeof mission.id !== 'string' || mission.id.trim().length === 0) {
     throw new Error('INVALID_MISSION_ID');
   }
+  const id = mission.id.trim();
   const title = typeof mission.title === 'string' ? mission.title.trim() : '';
   const description = typeof mission.description === 'string' ? mission.description.trim() : '';
   if (!title || title.length > 120 || !description || description.length > 500) {
@@ -31,9 +29,8 @@ export async function createOrUpdateMission(mission: Mission): Promise<void> {
     throw new Error('INVALID_MISSION_POINTS');
   }
 
-  const missionRef = doc(db, 'missions', mission.id.trim());
   const data: Record<string, unknown> = {
-    id: mission.id.trim(),
+    id,
     area: mission.area || 'ALL',
     region: mission.region || 'ALL',
     title,
@@ -50,8 +47,40 @@ export async function createOrUpdateMission(mission: Mission): Promise<void> {
   if (typeof mission.lng === 'number' && Number.isFinite(mission.lng) && mission.lng >= -180 && mission.lng <= 180) {
     data.lng = mission.lng;
   }
+  return { id, data };
+}
 
+/**
+ * 管理者が新しいミッションを追加または既存のミッションを更新します。
+ */
+export async function createOrUpdateMission(mission: Mission): Promise<void> {
+  await assertAdmin();
+  const { id, data } = buildMissionDocumentPayload(mission);
+  const missionRef = doc(db, 'missions', id);
   await setDoc(missionRef, data, { merge: true });
+}
+
+/**
+ * 管理者がJSONインポートされた複数のミッションを一括保存します。
+ */
+export async function importMissionsBatch(missions: readonly Mission[]): Promise<number> {
+  await assertAdmin();
+  if (!Array.isArray(missions) || missions.length === 0 || missions.length > 100) {
+    throw new Error('INVALID_MISSION_BATCH');
+  }
+
+  const batch = writeBatch(db);
+  const seenIds = new Set<string>();
+  for (const mission of missions) {
+    const { id, data } = buildMissionDocumentPayload(mission);
+    if (seenIds.has(id)) {
+      throw new Error('DUPLICATE_MISSION_ID');
+    }
+    seenIds.add(id);
+    batch.set(doc(db, 'missions', id), data, { merge: true });
+  }
+  await batch.commit();
+  return missions.length;
 }
 
 /**

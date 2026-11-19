@@ -76,6 +76,21 @@ async function seed(docPath, data) {
   return response.json();
 }
 
+async function createPasswordAuthUser(emailPrefix) {
+  const suffix = Math.random().toString(36).slice(2, 10);
+  const res = await fetch(`${authBase}/accounts:signUp?key=demo-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: `${emailPrefix}_${suffix}@transit-tag.local`,
+      password: 'Password123!',
+      returnSecureToken: true,
+    }),
+  });
+  assert.equal(res.ok, true, `Password auth user creation failed: ${res.status}`);
+  return res.json();
+}
+
 describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
   beforeEach(async () => {
     await clearFirestore();
@@ -144,8 +159,6 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
     });
 
     console.log('[P0-2 Test] Invincibility activation response status:', res.status);
-    // In unpatched rules (<= 11 min), this returns 403!
-    // After fixing rule to 30 min (<= nowMs + 1860000), this will return 200!
     assert.equal(res.status, 200, '30-minute invincibility activation MUST succeed with 200');
   });
 
@@ -194,10 +207,6 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
     });
 
     // 3. The REAL clientCaptureGateway batch payload:
-    // Updates config: roles flip, teamBScore +50, lastCaptureTargetId = target.localId, nextRevealTime, logs
-    // Updates all 4 users:
-    // - Team A (new ONI): target & otherRunner both get WAITING (30 mins), invincibleUntil 0
-    // - Team B (new RUNNER): captor & teammate both get ACTIVE, waitingUntil 0, invincibleCards +1
     const waitingUntil = now + 30 * 60 * 1000;
     const captureWrites = [
       {
@@ -212,7 +221,6 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
           }).fields,
         },
       },
-      // Captor B1: new RUNNER, ACTIVE, cards increment from 0 to 1
       {
         update: {
           name: `projects/${projectId}/databases/(default)/documents/users/${captor.localId}`,
@@ -222,7 +230,6 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
           }).fields,
         },
       },
-      // Teammate B2: new RUNNER, ACTIVE, cards increment from 0 to 1
       {
         update: {
           name: `projects/${projectId}/databases/(default)/documents/users/${teammate.localId}`,
@@ -232,7 +239,6 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
           }).fields,
         },
       },
-      // Target A1: new ONI, WAITING for 30 mins, invincibleUntil reset to 0
       {
         update: {
           name: `projects/${projectId}/databases/(default)/documents/users/${target.localId}`,
@@ -242,7 +248,6 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
           }).fields,
         },
       },
-      // Other A2: new ONI, WAITING for 30 mins, invincibleUntil reset to 0
       {
         update: {
           name: `projects/${projectId}/databases/(default)/documents/users/${otherRunner.localId}`,
@@ -256,8 +261,422 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
 
     const batchRes = await commitBatch(captureWrites, captor.idToken);
     console.log('[P0-1 Test] Real capture batch commit status:', batchRes.status);
-    // In PR #49 rules, this returns 403 because B1 (captor) and B2 (teammate) writes are rejected!
-    // In our fixed rules, this MUST return 200!
     assert.equal(batchRes.status, 200, 'Real capture batch transaction MUST succeed with 200');
+  });
+
+  test('Phase 4 Integration: joinCode invite gate allows valid password signup batch and denies invalid joinCode', async () => {
+    const validPlayer = await createPasswordAuthUser('runner_valid');
+    const invalidPlayer = await createPasswordAuthUser('runner_invalid');
+    const now = Date.now();
+    const validJoinCode = '0123456789abcdef0123456789abcdef';
+
+    await seed('game_config/current', {
+      gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: now - 60000,
+      sessionSchemaVersion: 2,
+      gameStatus: 'PRE_GAME',
+      registrationOpen: true,
+      currentJoinCode: validJoinCode,
+      day: 1,
+      missionMode: 'DIFFERENT',
+      teamARole: 'RUNNER',
+      teamBRole: 'ONI',
+      teamAScore: 0,
+      teamBScore: 0,
+      logs: [],
+    });
+
+    await seed(`joinCodes/${validJoinCode}`, {
+      code: validJoinCode,
+      gameSessionId: CURRENT_SESSION_ID,
+      active: true,
+      createdAt: now,
+    });
+
+    const invalidBatchRes = await commitBatch([
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${invalidPlayer.localId}`,
+          fields: fields({
+            id: invalidPlayer.localId,
+            name: '侵入テスト',
+            role: 'RUNNER',
+            team: 'A',
+            color: '#ef4444',
+            score: 0,
+            status: 'ACTIVE',
+            gameSessionId: CURRENT_SESSION_ID,
+            invincibleCards: 0,
+            joinCode: 'wrongcodewrongcodewrongcodewrong',
+          }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/privateLocations/${invalidPlayer.localId}`,
+          fields: fields({
+            gameSessionId: CURRENT_SESSION_ID,
+            latitude: 35.6812,
+            longitude: 139.7671,
+          }).fields,
+        },
+        updateTransforms: [
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+        currentDocument: { exists: false },
+      },
+    ], invalidPlayer.idToken);
+    assert.equal(invalidBatchRes.status, 403, 'Signup with wrong joinCode MUST be rejected with 403');
+
+    const validBatchRes = await commitBatch([
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${validPlayer.localId}`,
+          fields: fields({
+            id: validPlayer.localId,
+            name: '正規参加者',
+            role: 'RUNNER',
+            team: 'A',
+            color: '#ef4444',
+            score: 0,
+            status: 'ACTIVE',
+            gameSessionId: CURRENT_SESSION_ID,
+            invincibleCards: 0,
+            joinCode: validJoinCode,
+          }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/privateLocations/${validPlayer.localId}`,
+          fields: fields({
+            gameSessionId: CURRENT_SESSION_ID,
+            latitude: 35.6812,
+            longitude: 139.7671,
+          }).fields,
+        },
+        updateTransforms: [
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
+        currentDocument: { exists: false },
+      },
+    ], validPlayer.idToken);
+    if (validBatchRes.status !== 200) {
+      console.error('[Phase 4 Signup Test] failure:', await validBatchRes.text());
+    }
+    assert.equal(validBatchRes.status, 200, 'Signup with valid joinCode MUST succeed with 200');
+  });
+
+  test('Phase 4 Integration: Admin Master Reset batch rotates joinCode, resets users, and deletes private/exposed/projection/completion docs', async () => {
+    const adminUser = await createPasswordAuthUser('admin_reset');
+    const playerUser = await createPasswordAuthUser('player_reset');
+    const now = Date.now();
+    const oldJoinCode = 'aaaa1111bbbb2222cccc3333dddd4444';
+    const newJoinCode = 'ffff9999eeee8888dddd7777cccc6666';
+    const nextSessionId = 'session_integration_002';
+
+    await seed(`admins/${adminUser.localId}`, {
+      role: 'admin',
+      createdAt: new Date(now - 10000),
+    });
+    await seed('game_config/current', {
+      gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: now - 3600000,
+      sessionSchemaVersion: 2,
+      currentJoinCode: oldJoinCode,
+      registrationOpen: false,
+      gameStatus: 'GAME_OVER',
+      day: 2,
+      teamARole: 'ONI',
+      teamBRole: 'RUNNER',
+      teamAScore: 120,
+      teamBScore: 80,
+      logs: [],
+    });
+    await seed(`joinCodes/${oldJoinCode}`, {
+      code: oldJoinCode,
+      gameSessionId: CURRENT_SESSION_ID,
+      active: true,
+      createdAt: now - 3600000,
+    });
+    await seed(`users/${playerUser.localId}`, {
+      id: playerUser.localId,
+      gameSessionId: CURRENT_SESSION_ID,
+      name: 'Player One',
+      team: 'A',
+      role: 'ONI',
+      color: '#ef4444',
+      status: 'CAPTURED',
+      score: 50,
+      invincibleCards: 2,
+      invincibleUntil: 0,
+      waitingUntil: 0,
+    });
+    await seed(`privateLocations/${playerUser.localId}`, {
+      gameSessionId: CURRENT_SESSION_ID,
+      latitude: 35.68,
+      longitude: 139.76,
+      updatedAt: new Date(now - 5000),
+    });
+    await seed(`exposedLocations/${playerUser.localId}`, {
+      gameSessionId: CURRENT_SESSION_ID,
+      latitude: 35.68,
+      longitude: 139.76,
+      capturedAt: new Date(now - 5000),
+      expiresAt: new Date(now + 60000),
+      revealScope: 'GLOBAL',
+    });
+    await seed(`emergencyLocationProjections/${playerUser.localId}`, {
+      playerId: playerUser.localId,
+      gameSessionId: CURRENT_SESSION_ID,
+      latitude: 35.68,
+      longitude: 139.76,
+      projectedAt: new Date(now - 5000),
+      sourceLocationUpdatedAt: new Date(now - 6000),
+      expiresAt: new Date(now + 60000),
+      safetyStatus: 'EMERGENCY',
+      projectionKind: 'EMERGENCY',
+    });
+    await seed(`missionCompletions/A_${CURRENT_SESSION_ID}_m1`, {
+      gameSessionId: CURRENT_SESSION_ID,
+      missionId: 'm1',
+      team: 'A',
+      completedBy: playerUser.localId,
+      points: 20,
+      luckyReward: false,
+      isFinalMission: false,
+      completedAt: new Date(now - 5000),
+    });
+
+    const resetBatchWrites = [
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/game_config/current`,
+          fields: fields({
+            gameSessionId: nextSessionId,
+            sessionStartedAt: now,
+            sessionSchemaVersion: 2,
+            currentJoinCode: newJoinCode,
+            registrationOpen: true,
+            gameStatus: 'PRE_GAME',
+            day: 1,
+            teamARole: 'RUNNER',
+            teamBRole: 'ONI',
+            teamAScore: 0,
+            teamBScore: 0,
+            lastCaptureTargetId: null,
+            logs: [{ id: 'log_reset_1', timestamp: now, message: 'リセット実行', type: 'SYSTEM' }],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/joinCodes/${oldJoinCode}`,
+          fields: fields({
+            code: oldJoinCode,
+            gameSessionId: CURRENT_SESSION_ID,
+            active: false,
+            createdAt: now - 3600000,
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/joinCodes/${newJoinCode}`,
+          fields: fields({
+            code: newJoinCode,
+            gameSessionId: nextSessionId,
+            active: true,
+            createdAt: now,
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${playerUser.localId}`,
+          fields: fields({
+            id: playerUser.localId,
+            gameSessionId: nextSessionId,
+            name: 'Player One',
+            team: 'A',
+            role: 'RUNNER',
+            color: '#ef4444',
+            status: 'ACTIVE',
+            score: 0,
+            invincibleCards: 0,
+            invincibleUntil: 0,
+            waitingUntil: 0,
+          }).fields,
+        },
+      },
+      { delete: `projects/${projectId}/databases/(default)/documents/privateLocations/${playerUser.localId}` },
+      { delete: `projects/${projectId}/databases/(default)/documents/exposedLocations/${playerUser.localId}` },
+      { delete: `projects/${projectId}/databases/(default)/documents/emergencyLocationProjections/${playerUser.localId}` },
+      { delete: `projects/${projectId}/databases/(default)/documents/missionCompletions/A_${CURRENT_SESSION_ID}_m1` },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/admins/${adminUser.localId}/resetReceipts/reset_req_1`,
+          fields: fields({
+            requestId: 'reset_req_1',
+            expectedSessionId: CURRENT_SESSION_ID,
+            newSessionId: nextSessionId,
+            createdAt: now,
+          }).fields,
+        },
+      },
+    ];
+
+    const resetRes = await commitBatch(resetBatchWrites, adminUser.idToken);
+    assert.equal(resetRes.status, 200, 'Admin master reset batch MUST succeed with 200');
+  });
+
+  test('Phase 4 Integration: SURVIVAL resume clears lastCaptureTargetId and allows re-capture of same target', async () => {
+    const adminUser = await createPasswordAuthUser('admin_survival');
+    const captor = await createPasswordAuthUser('oni_captor');
+    const target = await createPasswordAuthUser('runner_target');
+    const now = Date.now();
+
+    await seed(`admins/${adminUser.localId}`, {
+      role: 'admin',
+      createdAt: new Date(now - 10000),
+    });
+    await seed('game_config/current', {
+      gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: now - 3600000,
+      sessionSchemaVersion: 2,
+      victoryMode: 'SURVIVAL',
+      gameStatus: 'DAY1_ACTIVE',
+      day: 1,
+      missionMode: 'SAME',
+      isGameOver: false,
+      teamARole: 'RUNNER',
+      teamBRole: 'ONI',
+      teamAScore: 0,
+      teamBScore: 50,
+      lastCaptureTargetId: target.localId,
+      logs: [],
+    });
+    await seed(`users/${captor.localId}`, {
+      id: captor.localId,
+      gameSessionId: CURRENT_SESSION_ID,
+      name: 'Oni Captor',
+      team: 'B',
+      role: 'ONI',
+      color: '#3b82f6',
+      status: 'ACTIVE',
+      score: 0,
+      invincibleCards: 0,
+      invincibleUntil: 0,
+      waitingUntil: 0,
+    });
+    await seed(`users/${target.localId}`, {
+      id: target.localId,
+      gameSessionId: CURRENT_SESSION_ID,
+      name: 'Target Runner',
+      team: 'A',
+      role: 'RUNNER',
+      color: '#ef4444',
+      status: 'CAPTURED',
+      score: 0,
+      invincibleCards: 0,
+      invincibleUntil: 0,
+      waitingUntil: 0,
+    });
+
+    // Admin resumes target and clears lastCaptureTargetId
+    const resumeRes = await commitBatch([
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${target.localId}`,
+          fields: fields({
+            id: target.localId,
+            gameSessionId: CURRENT_SESSION_ID,
+            name: 'Target Runner',
+            team: 'A',
+            role: 'RUNNER',
+            color: '#ef4444',
+            status: 'ACTIVE',
+            score: 0,
+            invincibleCards: 0,
+            invincibleUntil: 0,
+            waitingUntil: 0,
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/game_config/current`,
+          fields: fields({
+            gameSessionId: CURRENT_SESSION_ID,
+            sessionStartedAt: now - 3600000,
+            sessionSchemaVersion: 2,
+            victoryMode: 'SURVIVAL',
+            gameStatus: 'DAY1_ACTIVE',
+            day: 1,
+            missionMode: 'SAME',
+            isGameOver: false,
+            teamARole: 'RUNNER',
+            teamBRole: 'ONI',
+            teamAScore: 0,
+            teamBScore: 50,
+            lastCaptureTargetId: null,
+            logs: [{ id: 'log_res_1', timestamp: now, message: '復帰処理', type: 'SYSTEM' }],
+          }).fields,
+        },
+      },
+    ], adminUser.idToken);
+    assert.equal(resumeRes.status, 200, 'Admin SURVIVAL resume MUST succeed with 200');
+
+    // Oni re-captures the same target in SURVIVAL mode (prepends CAPTURE log to existing logs)
+    const recaptureRes = await commitBatch([
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/game_config/current`,
+          fields: fields({
+            gameSessionId: CURRENT_SESSION_ID,
+            sessionStartedAt: now - 3600000,
+            sessionSchemaVersion: 2,
+            victoryMode: 'SURVIVAL',
+            gameStatus: 'DAY1_ACTIVE',
+            day: 1,
+            missionMode: 'SAME',
+            isGameOver: false,
+            teamARole: 'RUNNER',
+            teamBRole: 'ONI',
+            teamAScore: 0,
+            teamBScore: 100,
+            lastCaptureTargetId: target.localId,
+            logs: [
+              { id: 'log_recap_1', timestamp: now, message: '再捕獲', type: 'CAPTURE' },
+              { id: 'log_res_1', timestamp: now, message: '復帰処理', type: 'SYSTEM' },
+            ],
+          }).fields,
+        },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${target.localId}`,
+          fields: fields({
+            id: target.localId,
+            gameSessionId: CURRENT_SESSION_ID,
+            name: 'Target Runner',
+            team: 'A',
+            role: 'RUNNER',
+            color: '#ef4444',
+            status: 'CAPTURED',
+            score: 0,
+            invincibleCards: 0,
+            invincibleUntil: 0,
+            waitingUntil: 0,
+          }).fields,
+        },
+      },
+    ], captor.idToken);
+    if (recaptureRes.status !== 200) {
+      console.error('[Phase 4 SURVIVAL Recapture Test] failure:', await recaptureRes.text());
+    }
+    assert.equal(recaptureRes.status, 200, 'SURVIVAL re-capture after admin resume MUST succeed with 200');
   });
 });

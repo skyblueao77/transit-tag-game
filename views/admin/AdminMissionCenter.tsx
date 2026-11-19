@@ -1,5 +1,6 @@
 import type React from 'react';
-import { Award, Edit2, Plus, Shuffle, Trash2 } from 'lucide-react';
+import { useRef } from 'react';
+import { Award, Download, Edit2, Plus, Shuffle, Trash2, Upload } from 'lucide-react';
 import type { GameConfig, Mission, MissionCompletion } from '../../types';
 
 interface AdminMissionCenterProps {
@@ -26,6 +27,8 @@ interface AdminMissionCenterProps {
   onShuffleMissions: () => void;
   onSyncMissionCatalog: () => void;
   onAdminAwardMission: () => void;
+  onExportMissions?: () => void;
+  onImportMissions?: (rawJson: string) => Promise<void> | void;
 }
 
 const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
@@ -52,9 +55,20 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
   onShuffleMissions,
   onSyncMissionCatalog,
   onAdminAwardMission,
+  onExportMissions,
+  onImportMissions,
 }) => {
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const currentMissionA = allMissionsList.find(m => m.id === config.activeMissionA);
   const currentMissionB = allMissionsList.find(m => m.id === config.activeMissionB);
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !onImportMissions) return;
+    const rawJson = await file.text();
+    await onImportMissions(rawJson);
+  };
 
   return (
     <section className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
@@ -209,6 +223,41 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
       {/* タブ2: ミッション一覧・作成・編集 */}
       {missionTab === 'CATALOG' && (
         <div className="space-y-3">
+          {(onExportMissions || onImportMissions) && (
+            <div className="grid grid-cols-2 gap-2">
+              {onExportMissions && (
+                <button
+                  type="button"
+                  onClick={onExportMissions}
+                  disabled={isProcessing}
+                  className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 disabled:opacity-40"
+                >
+                  <Download size={13} /> JSONエクスポート
+                </button>
+              )}
+              {onImportMissions && (
+                <>
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    aria-label="ミッションJSONファイルを選択"
+                    className="hidden"
+                    onChange={e => { void handleImportFileChange(e); }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                    disabled={isProcessing}
+                    className="py-2 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 disabled:opacity-40"
+                  >
+                    <Upload size={13} /> JSONインポート
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           <input
             type="text"
             value={missionSearch}

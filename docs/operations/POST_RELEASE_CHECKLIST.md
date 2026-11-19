@@ -8,17 +8,17 @@
 
 公開 URL（`https://<your-project-id>.web.app`）にアクセスし、以下を最短ルートで確認します。
 
-- [ ] **配信 & PWA 更新確認**
+- [ ] **配信 & PWA・地図タイル更新確認**
   - トップ画面（`/#/`）が HTTP 200 で表示され、コンソールに未処理エラー（赤いエラー）が出ていないこと。
-  - 既存端末で開く場合、Service Worker（Workbox）が新バージョンへ切り替わっていること（必要に応じてスーパーリロード / PWA 再起動）。
-  - `manifest.webmanifest` とアプリアイコンが正常に読み込まれること。
-- [ ] **認証 & 管理者導線**
-  - 管理者画面（`/#/admin`）にログインでき、右上の `/map`・`/mission` プレビュー遷移と `/admin` への復帰が動作すること。
-  - テスト用プレイヤーで新規登録 / 再開ログインができ、`users/{uid}` と `privateLocations/{uid}` が作成されること。
+  - 既存端末で開く場合、Service Worker（Workbox）が新バージョン更新ダイアログ（またはリロード）で最新へ切り替わり、`public/data/stations.json` が取得できること。
+  - `manifest.webmanifest`・アプリアイコン・国土地理院タイル（`地理院タイル` クレジット表示）が正常に表示されること。
+- [ ] **認証・招待コード & 管理者導線**
+  - Firebase Console の `admins/{uid}` 登録済みアカウントで管理者画面（`/#/admin`）にログインでき、右上の `/map`・`/mission` プレビュー遷移と `/admin` への復帰が動作すること。
+  - テスト用セッション初期化時に発行された招待コード付き URL（`/#/?join=<code>`）および手入力でテスト用プレイヤーの新規登録（安全ルール同意チェック必須）／再開ログインができ、`users/{uid}` と `privateLocations/{uid}` が作成されること。
 - [ ] **主要ゲームフロー（テストセッション上で確認）**
   - フェーズ遷移（`PRE_GAME` → `DAY1_ACTIVE` → `PAUSE` / `RESUME`）でタイマーが正常に停止・再開すること。
   - 位置情報（GPS）の取得・`lastStation` 更新・ミッション一覧表示がエラーなく動作すること。
-  - 確認後、テストデータが残らないよう管理者画面から **ゲームリセット** を実施すること。
+  - 確認後、テストデータが残らないよう管理者画面から **ゲームリセット** を実施すること（旧招待コードが無効化され新コードが発行されること）。
 
 ---
 
@@ -45,10 +45,10 @@ Firebase Console (`<your-project-id>`) で本番稼働中のリソース消費�
 
 - [ ] **Firebase API キーの HTTP リファラ制限（Google Cloud Console）**
   - Google Cloud Console →「API とサービス」→「認証情報」→ ブラウザキーに対し、許可リファラを本番ドメイン（`https://<your-project-id>.web.app/*`, `https://<your-project-id>.firebaseapp.com/*` 等）に制限する。
-- [ ] **Firebase App Check の導入検討**
-  - 本番ドメイン・正当なブラウザからのリクエストのみ Firestore / Auth にアクセスを許可する場合、reCAPTCHA v3 / Enterprise を用いた App Check の有効化を検討する。
-- [ ] **依存関係の脆弱性監査**
-  - `npm audit --omit=dev` が CI 上でパスしていることを継続確認する。
+- [ ] **Firebase App Check（reCAPTCHA Enterprise）の有効化**
+  - Firebase Console → App Check にて Cloud Firestore / Firebase Authentication の強制（Enforcement）設定を確認する。
+- [ ] **依存関係の脆弱性監査 & CodeQL**
+  - `npm audit --omit=dev`・`npm run test:rules`・GitHub CodeQL / Dependabot アラートに未対応の High/Critical 指摘がないか確認する。
 
 ---
 
@@ -62,12 +62,12 @@ Firebase Console (`<your-project-id>`) で本番稼働中のリソース消費�
    - ※ `firestore.rules` に互換性のない変更が含まれていた場合は、方法 B でルールも合わせて切り戻してください。
 
 ### 方法 B: 前バージョンの Git タグから再ビルド・再デプロイ（ルール含む完全切り戻し）
-```powershell
+```bash
 git fetch --tags
-git checkout v1.1.0
+git checkout <previous-stable-tag>
 npm ci
-node .\node_modules\vite\bin\vite.js build
-node .\node_modules\firebase-tools\lib\bin\firebase.js deploy
+npx vite build
+npx firebase deploy
 ```
 
 ---

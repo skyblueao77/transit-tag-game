@@ -39,11 +39,15 @@ repomix-output.xml
 .env
 .env.*
 !.env.example
-functions/.env
-functions/.secret.local
 
-# Cloud Functions build output
-/functions/lib
+# Secrets / credentials
+serviceAccountKey*.json
+*firebase-adminsdk*.json
+
+# Build / coverage artifacts
+coverage/
+*.tsbuildinfo
+.vercel/
 
 # OS files
 Thumbs.db

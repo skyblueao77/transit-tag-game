@@ -5,17 +5,14 @@ import path from 'node:path';
 
 test('production bundle loads Firebase auth and firestore without Component registration errors', async () => {
   const distDir = path.resolve('dist');
-  if (!fs.existsSync(distDir)) {
-    // If dist doesn't exist yet, skip
-    return;
-  }
+  assert.equal(fs.existsSync(distDir), true, 'dist directory must exist (run npm run build before npm run test:bundle)');
 
   const assetsDir = path.join(distDir, 'assets');
-  if (!fs.existsSync(assetsDir)) return;
+  assert.equal(fs.existsSync(assetsDir), true, 'dist/assets directory must exist');
 
   const files = fs.readdirSync(assetsDir);
   const indexJs = files.find(f => f.startsWith('index-') && f.endsWith('.js'));
-  if (!indexJs) return;
+  assert.ok(indexJs, 'dist/assets must contain built index-*.js bundle');
 
   globalThis.window = globalThis;
   const head = { appendChild: () => {} };
