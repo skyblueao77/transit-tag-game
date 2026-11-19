@@ -321,6 +321,9 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
             longitude: 139.7671,
           }).fields,
         },
+        updateTransforms: [
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
         currentDocument: { exists: false },
       },
     ], invalidPlayer.idToken);
@@ -353,13 +356,16 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
             latitude: 35.6812,
             longitude: 139.7671,
           }).fields,
-          updateTransforms: [
-            { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-          ],
         },
+        updateTransforms: [
+          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        ],
         currentDocument: { exists: false },
       },
     ], validPlayer.idToken);
+    if (validBatchRes.status !== 200) {
+      console.error('[Phase 4 Signup Test] failure:', await validBatchRes.text());
+    }
     assert.equal(validBatchRes.status, 200, 'Signup with valid joinCode MUST succeed with 200');
   });
 
@@ -623,7 +629,7 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
     ], adminUser.idToken);
     assert.equal(resumeRes.status, 200, 'Admin SURVIVAL resume MUST succeed with 200');
 
-    // Oni re-captures the same target in SURVIVAL mode
+    // Oni re-captures the same target in SURVIVAL mode (prepends CAPTURE log to existing logs)
     const recaptureRes = await commitBatch([
       {
         update: {
@@ -642,7 +648,10 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
             teamAScore: 0,
             teamBScore: 100,
             lastCaptureTargetId: target.localId,
-            logs: [{ id: 'log_recap_1', timestamp: now, message: '再捕獲', type: 'CAPTURE' }],
+            logs: [
+              { id: 'log_recap_1', timestamp: now, message: '再捕獲', type: 'CAPTURE' },
+              { id: 'log_res_1', timestamp: now, message: '復帰処理', type: 'SYSTEM' },
+            ],
           }).fields,
         },
       },
@@ -665,6 +674,9 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
         },
       },
     ], captor.idToken);
+    if (recaptureRes.status !== 200) {
+      console.error('[Phase 4 SURVIVAL Recapture Test] failure:', await recaptureRes.text());
+    }
     assert.equal(recaptureRes.status, 200, 'SURVIVAL re-capture after admin resume MUST succeed with 200');
   });
 });
