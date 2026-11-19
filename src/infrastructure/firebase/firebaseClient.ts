@@ -6,9 +6,19 @@ import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { getAuth, connectAuthEmulator, type Auth } from "firebase/auth";
 
 // 1. 環境変数（Config: Vite / Node.js 両対応）
-const env = (typeof import.meta !== 'undefined' && import.meta.env)
-  ? import.meta.env
-  : ((typeof process !== 'undefined' && process.env) ? process.env : {} as Record<string, string | undefined>);
+const proc = (typeof process !== 'undefined' && process.env) ? process.env : ({} as Record<string, string | undefined>);
+// NOTE: Vite 8 (rolldown) only statically replaces direct `import.meta.env.KEY` accesses.
+// Referencing the whole `import.meta.env` object would inline every VITE_* value (incl. debug token) into the bundle.
+const env = {
+  VITE_FIREBASE_API_KEY: import.meta.env?.VITE_FIREBASE_API_KEY ?? proc.VITE_FIREBASE_API_KEY,
+  VITE_FIREBASE_AUTH_DOMAIN: import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN ?? proc.VITE_FIREBASE_AUTH_DOMAIN,
+  VITE_FIREBASE_PROJECT_ID: import.meta.env?.VITE_FIREBASE_PROJECT_ID ?? proc.VITE_FIREBASE_PROJECT_ID,
+  VITE_FIREBASE_STORAGE_BUCKET: import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET ?? proc.VITE_FIREBASE_STORAGE_BUCKET,
+  VITE_FIREBASE_MESSAGING_SENDER_ID: import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID ?? proc.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  VITE_FIREBASE_APP_ID: import.meta.env?.VITE_FIREBASE_APP_ID ?? proc.VITE_FIREBASE_APP_ID,
+  VITE_FIREBASE_MEASUREMENT_ID: import.meta.env?.VITE_FIREBASE_MEASUREMENT_ID ?? proc.VITE_FIREBASE_MEASUREMENT_ID,
+  VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: import.meta.env?.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY ?? proc.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY,
+};
 
 const firebaseConfig = {
   apiKey: env.VITE_FIREBASE_API_KEY || "demo-key",
@@ -25,10 +35,10 @@ const app = initializeApp(firebaseConfig);
 
 // 2.5. Firebase App Check 初期化（ブラウザ実行時かつサイトキー設定時のみ）
 if (typeof window !== 'undefined') {
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.DEV : false;
+  const isDev = import.meta.env?.DEV ?? false;
   if (isDev) {
-    const rawDebugToken = typeof env.VITE_APPCHECK_DEBUG_TOKEN === 'string'
-      ? env.VITE_APPCHECK_DEBUG_TOKEN.trim()
+    const rawDebugToken = typeof import.meta.env?.VITE_APPCHECK_DEBUG_TOKEN === 'string'
+      ? import.meta.env.VITE_APPCHECK_DEBUG_TOKEN.trim()
       : '';
     if (rawDebugToken) {
       const globalTarget = (typeof self !== 'undefined' ? self : window) as unknown as {
