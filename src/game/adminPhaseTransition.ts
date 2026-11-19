@@ -34,6 +34,48 @@ const transitions: Partial<Record<GameStatus, Partial<Record<AdminPhaseAction, G
   FINAL_MISSION: { END_GAME: 'GAME_OVER' },
 };
 
+export interface PlayerTimerExtensionInput {
+  waitingUntil?: unknown;
+  invincibleUntil?: unknown;
+  penaltyRevealUntil?: unknown;
+  shinkansenStartTime?: unknown;
+}
+
+export function resolvePlayerPauseResumeExtensions(
+  player: PlayerTimerExtensionInput,
+  pauseStartTime: unknown,
+  now: number,
+): Record<string, number> | null {
+  if (
+    typeof pauseStartTime !== 'number'
+    || !Number.isFinite(pauseStartTime)
+    || pauseStartTime <= 0
+    || !Number.isFinite(now)
+  ) {
+    return null;
+  }
+  const pausedDelta = Math.max(0, now - pauseStartTime);
+  if (pausedDelta <= 0) {
+    return null;
+  }
+
+  const updates: Record<string, number> = {};
+  if (typeof player.waitingUntil === 'number' && Number.isFinite(player.waitingUntil) && player.waitingUntil > pauseStartTime) {
+    updates.waitingUntil = player.waitingUntil + pausedDelta;
+  }
+  if (typeof player.invincibleUntil === 'number' && Number.isFinite(player.invincibleUntil) && player.invincibleUntil > pauseStartTime) {
+    updates.invincibleUntil = player.invincibleUntil + pausedDelta;
+  }
+  if (typeof player.penaltyRevealUntil === 'number' && Number.isFinite(player.penaltyRevealUntil) && player.penaltyRevealUntil > pauseStartTime) {
+    updates.penaltyRevealUntil = player.penaltyRevealUntil + pausedDelta;
+  }
+  if (typeof player.shinkansenStartTime === 'number' && Number.isFinite(player.shinkansenStartTime) && player.shinkansenStartTime > 0) {
+    updates.shinkansenStartTime = player.shinkansenStartTime + pausedDelta;
+  }
+
+  return Object.keys(updates).length > 0 ? updates : null;
+}
+
 export function resolveAdminPhaseTransition(input: AdminPhaseTransitionInput): AdminPhaseTransitionResult {
   if (!input || typeof input !== 'object' || !phases.includes(input.currentPhase as GameStatus)) return { allowed: false, reason: 'INVALID_PHASE' };
   if (!actions.includes(input.action as AdminPhaseAction)) return { allowed: false, reason: 'INVALID_ACTION' };

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { User } from '../../types';
 import {
   getCurrentAuthUserId,
@@ -24,16 +24,19 @@ export function useAuthUser(): UseAuthUserResult {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthAdmin, setIsAuthAdmin] = useState(false);
   const [userLoading, setUserLoading] = useState(true);
+  const prevAuthUserIdRef = useRef<string | null>(authUserId);
 
   useEffect(() => {
     return subscribeAuthUserId(uid => {
+      const prevUid = prevAuthUserIdRef.current;
+      prevAuthUserIdRef.current = uid;
       setAuthUserId(uid);
       setAuthReady(true);
       if (!uid) {
         setCurrentUser(null);
         setIsAuthAdmin(false);
         setUserLoading(false);
-      } else {
+      } else if (uid !== prevUid) {
         setUserLoading(true);
       }
     });

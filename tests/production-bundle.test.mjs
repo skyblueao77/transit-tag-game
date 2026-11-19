@@ -32,6 +32,17 @@ test('production bundle loads Firebase auth and firestore without Component regi
   globalThis.MutationObserver = class { observe() {} };
   globalThis.isSecureContext = false;
 
+  assert.equal(fs.existsSync(path.join(distDir, 'data', 'stations.json')), true, 'dist/data/stations.json must be emitted');
+  const swContent = fs.readFileSync(path.join(distDir, 'sw.js'), 'utf8');
+  assert.match(swContent, /data\/stations\.json/, 'Service worker precache manifest must include data/stations.json');
+
+  for (const file of files) {
+    if (file.endsWith('.js')) {
+      const size = fs.statSync(path.join(assetsDir, file)).size;
+      assert.ok(size < 1_000_000, `Expected ${file} (${size} bytes) not to inline the 2.2MB stations.json dataset`);
+    }
+  }
+
   try {
     await import(path.join(assetsDir, indexJs));
   } catch (err) {

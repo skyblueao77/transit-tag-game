@@ -20,7 +20,8 @@
 }
 
 /* 特に緊急時のポップアップ強調 */
-.leaflet-popup-content b[style*="color:red"] {
+.leaflet-popup-content b[style*="color:red"],
+.leaflet-popup-content b[style*="color: red"] {
   font-weight: 900 !important; /* 最も太い */
   color: #dc2626 !important; /* テールウィンドのred-600相当 */
 }

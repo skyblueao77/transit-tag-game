@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 export interface ConfirmOptions {
   title: string;
@@ -15,6 +15,11 @@ export function useConfirmDialog() {
     description: '',
   });
   const resolverRef = useRef<((value: boolean) => void) | null>(null);
+
+  useEffect(() => () => {
+    resolverRef.current?.(false);
+    resolverRef.current = null;
+  }, []);
 
   const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
     if (resolverRef.current) {

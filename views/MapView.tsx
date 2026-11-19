@@ -1,11 +1,11 @@
 import type React from 'react';
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { LocateFixed } from 'lucide-react';
 import type { User, PrivateLocation, ExposedLocation, GameConfig, Role, ProtectionZoneType } from '../types';
 import type { Coordinates } from '../src/application';
 import {
+  analyzeTransitSuggestions,
   computeTeammateSplitMetrics,
-  findCandidateTransitSuggestions,
-  findTransitSuggestion,
   getPlayerRole,
   isActiveUntil,
   isGameActive,
@@ -15,12 +15,12 @@ import {
   type TransitSuggestion,
 } from '../src/game';
 import L from '../src/lib/leafletSetup';
+import { getCachedStations, loadStations } from '../src/lib/stationsLoader';
 import { createPlayerMapPopup, type PlayerMapPopupVariant } from './playerMapPopup';
 import useWakeLock from '../src/hooks/useWakeLock';
 import useOnlineStatus from '../src/hooks/useOnlineStatus';
 import useMapTimers from '../src/hooks/useMapTimers';
 import { toast } from 'sonner';
-import stationsData from '../src/data/stations.json';
 import StationSuggestCard from '../src/components/StationSuggestCard';
 import OniWaitingOverlay from './map/OniWaitingOverlay';
 import MapStatusHeader from './map/MapStatusHeader';
@@ -70,11 +70,12 @@ const MapView: React.FC<Props> = ({
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<Record<string, L.CircleMarker>>({});
+  const hasInitialCenteredRef = useRef(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState('');
   const isOnline = useOnlineStatus();
-  const isOffline = !isOnline;
 
+  const [stations, setStations] = useState<StationData[]>(() => getCachedStations() ?? []);
   const [transitSuggestion, setTransitSuggestion] = useState<TransitSuggestion | null>(null);
   const [transitCandidates, setTransitCandidates] = useState<TransitSuggestion[]>([]);
   const [isSuggestDismissed, setIsSuggestDismissed] = useState(false);
@@ -89,6 +90,21 @@ const MapView: React.FC<Props> = ({
       return false;
     }
   });
+
+  useEffect(() => {
+    if (stations.length > 0) return;
+    let active = true;
+    loadStations()
+      .then(loaded => {
+        if (active) setStations(loaded);
+      })
+      .catch(error => {
+        console.error('Failed to load station data:', error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [stations.length]);
 
   const handleToggleAutoUpdate = (enabled: boolean) => {
     setIsAutoUpdateEnabled(enabled);
@@ -111,16 +127,16 @@ const MapView: React.FC<Props> = ({
       prevCoordsRef.current = null;
       return;
     }
+    if (stations.length === 0) {
+      return;
+    }
     const currentCoords: Coordinates = {
       latitude: privateLocation.latitude,
       longitude: privateLocation.longitude,
     };
     const previousCoords = prevCoordsRef.current;
 
-    const suggestion = findTransitSuggestion(currentCoords, stationsData as StationData[], {
-      previousCoords,
-    });
-    const candidates = findCandidateTransitSuggestions(currentCoords, stationsData as StationData[], {
+    const { primary: suggestion, candidates } = analyzeTransitSuggestions(currentCoords, stations, {
       previousCoords,
     });
 
@@ -132,7 +148,7 @@ const MapView: React.FC<Props> = ({
     if (suggestion && suggestion.displayText !== lastDismissedKey.current) {
       setIsSuggestDismissed(false);
     }
-  }, [privateLocation]);
+  }, [privateLocation, stations]);
 
   // 自動反映（オートチェックイン）ロジック（異なる測位フィックス2回連続かつ最小10分間隔）
   const stableSuggestionRef = useRef<{ text: string; count: number }>({ text: '', count: 0 });
@@ -260,8 +276,10 @@ const MapView: React.FC<Props> = ({
   useEffect(() => {
     if (!containerRef.current || isOniLocked) return;
     if (!mapRef.current) {
+      const hasInitialCoords = Boolean(privateLocation);
       const map = L.map(containerRef.current).setView(
-        [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671], 13,
+        [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671],
+        hasInitialCoords ? 14 : 13,
       );
       L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
         attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener noreferrer">地理院タイル</a>',
@@ -269,16 +287,47 @@ const MapView: React.FC<Props> = ({
         maxZoom: 18,
       }).addTo(map);
       mapRef.current = map;
+      hasInitialCenteredRef.current = hasInitialCoords;
+    }
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current && mapRef.current) {
+      const currentMap = mapRef.current;
+      resizeObserver = new ResizeObserver(() => {
+        currentMap.invalidateSize({ pan: false });
+      });
+      resizeObserver.observe(containerRef.current);
     }
 
     return () => {
+      resizeObserver?.disconnect();
       markersRef.current = {};
+      hasInitialCenteredRef.current = false;
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
     };
   }, [isOniLocked]);
+
+  // 初回現在地取得時の自動パン
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || isOniLocked || !privateLocation || hasInitialCenteredRef.current) return;
+    map.setView([privateLocation.latitude, privateLocation.longitude], Math.max(map.getZoom(), 14), { animate: true });
+    hasInitialCenteredRef.current = true;
+  }, [privateLocation, isOniLocked]);
+
+  const handleRecenterMap = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !privateLocation) {
+      toast.info('現在地を取得中です。GPSが有効か確認してください。');
+      return;
+    }
+    map.flyTo([privateLocation.latitude, privateLocation.longitude], Math.max(map.getZoom(), 15), {
+      duration: 0.6,
+    });
+  }, [privateLocation]);
 
   // マーカー描画（強制共有・チーム別サーチ対応版：差分更新）
   useEffect(() => {
@@ -399,8 +448,9 @@ const MapView: React.FC<Props> = ({
 
   return (
     <div className="h-full flex flex-col relative overflow-hidden">
+      {/* オフライン通知は App.tsx 側の統合バナーで表示する */}
       <MapStatusHeader
-        isOffline={isOffline}
+        isOffline={false}
         timeLeft={timeLeft}
         gameConfig={gameConfig}
         isTeamSplitAlert={isTeamSplitAlert}
@@ -408,74 +458,92 @@ const MapView: React.FC<Props> = ({
         formatTime={formatTime}
       />
 
-      <div ref={containerRef} style={{ flex: 1, width: '100%', zIndex: 0 }} />
+      <div className="relative flex-1 min-h-0">
+        <div ref={containerRef} className="h-full w-full z-0" />
 
-      {!isAdminViewer && !isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[1001] w-full px-4 max-w-sm sm:max-w-md pointer-events-none">
-          <StationSuggestCard
-            suggestion={transitSuggestion}
-            candidates={transitCandidates}
-            currentLastStation={currentUser.lastStation}
-            onConfirmStation={handleConfirmStation}
-            onDismiss={() => {
-              setIsSuggestDismissed(true);
-              if (transitSuggestion) {
-                lastDismissedKey.current = transitSuggestion.displayText;
-              }
-            }}
-            isAutoUpdateEnabled={isAutoUpdateEnabled}
-            onToggleAutoUpdate={handleToggleAutoUpdate}
-          />
-        </div>
-      )}
+        {/* 地図上部オーバーレイHUD（ステータスバッジ・現在地ボタン・駅提案カードの重なりを防止） */}
+        <div className="pointer-events-none absolute top-3 inset-x-3 z-[1001] flex flex-col gap-2">
+          <div className="flex items-start justify-between gap-2">
+            {!isAdminViewer ? (
+              <MapStatusBadges currentUser={currentUser} timeLeft={timeLeft} formatTime={formatTime} />
+            ) : (
+              <div />
+            )}
+            <button
+              type="button"
+              onClick={handleRecenterMap}
+              aria-label="現在地へ戻る"
+              title="現在地へ戻る"
+              className="pointer-events-auto shrink-0 w-10 h-10 rounded-xl bg-white/95 hover:bg-white text-slate-800 shadow-lg border border-slate-200 flex items-center justify-center active:scale-95 transition-all"
+            >
+              <LocateFixed size={18} className={privateLocation ? 'text-blue-600' : 'text-slate-400'} />
+            </button>
+          </div>
 
-      {!isAdminViewer && (
-        <MapStatusBadges currentUser={currentUser} timeLeft={timeLeft} formatTime={formatTime} />
-      )}
-
-      {isAdminViewer ? (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] px-4 py-2 rounded-full bg-slate-900/90 text-white text-xs font-bold shadow-lg pointer-events-none">
-          管理者プレビュー（閲覧専用）
-        </div>
-      ) : (
-        <div className="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
-          {currentRole === 'ONI' && (
-            <MapOniCapturePanel
-              currentUser={currentUser}
-              gameConfig={gameConfig}
-              captureCandidates={captureCandidates}
-              selectedTargetId={selectedTargetId}
-              isProcessing={isProcessing}
-              onSelectTarget={setSelectedTargetId}
-              onCapture={async targetId => {
-                setIsProcessing(true);
-                try {
-                  await onCapture(targetId);
-                } finally {
-                  setIsProcessing(false);
-                }
-              }}
-            />
-          )}
-          {currentRole === 'RUNNER' && (
-            <MapRunnerControls
-              currentUser={currentUser}
-              gameConfig={gameConfig}
-              timeLeft={timeLeft}
-              nowMs={nowMs}
-              isProcessing={isProcessing}
-              setIsProcessing={setIsProcessing}
-              formatTime={formatTime}
-              onActivateInvincibility={onActivateInvincibility}
-              onStartShinkansenWait={onStartShinkansenWait}
-              onUpdateProtectionZone={onUpdateProtectionZone}
-              onStartShinkansen={onStartShinkansen}
-              onIncrementShinkansenSegment={onIncrementShinkansenSegment}
-              onResetShinkansen={onResetShinkansen}
-            />
+          {!isAdminViewer && !isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
+            <div className="w-full max-w-sm sm:max-w-md mx-auto">
+              <StationSuggestCard
+                suggestion={transitSuggestion}
+                candidates={transitCandidates}
+                currentLastStation={currentUser.lastStation}
+                onConfirmStation={handleConfirmStation}
+                onDismiss={() => {
+                  setIsSuggestDismissed(true);
+                  if (transitSuggestion) {
+                    lastDismissedKey.current = transitSuggestion.displayText;
+                  }
+                }}
+                isAutoUpdateEnabled={isAutoUpdateEnabled}
+                onToggleAutoUpdate={handleToggleAutoUpdate}
+              />
+            </div>
           )}
         </div>
-      )}
+
+        {isAdminViewer ? (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[1000] px-4 py-2 rounded-full bg-slate-900/90 text-white text-xs font-bold shadow-lg pointer-events-none">
+            管理者プレビュー（閲覧専用）
+          </div>
+        ) : (
+          <div className="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
+            {currentRole === 'ONI' && (
+              <MapOniCapturePanel
+                currentUser={currentUser}
+                gameConfig={gameConfig}
+                captureCandidates={captureCandidates}
+                selectedTargetId={selectedTargetId}
+                isProcessing={isProcessing}
+                onSelectTarget={setSelectedTargetId}
+                onCapture={async targetId => {
+                  setIsProcessing(true);
+                  try {
+                    await onCapture(targetId);
+                  } finally {
+                    setIsProcessing(false);
+                  }
+                }}
+              />
+            )}
+            {currentRole === 'RUNNER' && (
+              <MapRunnerControls
+                currentUser={currentUser}
+                gameConfig={gameConfig}
+                timeLeft={timeLeft}
+                nowMs={nowMs}
+                isProcessing={isProcessing}
+                setIsProcessing={setIsProcessing}
+                formatTime={formatTime}
+                onActivateInvincibility={onActivateInvincibility}
+                onStartShinkansenWait={onStartShinkansenWait}
+                onUpdateProtectionZone={onUpdateProtectionZone}
+                onStartShinkansen={onStartShinkansen}
+                onIncrementShinkansenSegment={onIncrementShinkansenSegment}
+                onResetShinkansen={onResetShinkansen}
+              />
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

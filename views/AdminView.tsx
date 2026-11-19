@@ -185,7 +185,6 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
             <AdminPlayerListSection
               config={config}
               users={users}
-              nowMs={dashboard.nowMs}
               modifyingPlayerIds={dashboard.modifyingPlayerIds}
               resumingPlayerIds={dashboard.resumingPlayerIds}
               onChangePlayerTeam={dashboard.handleChangePlayerTeam}

@@ -36,7 +36,10 @@ import {
   validateExpectedSession,
   validateGameSession,
 } from '../../../game/gameSession.ts';
-import { resolveAdminPhaseTransition } from '../../../game/adminPhaseTransition.ts';
+import {
+  resolveAdminPhaseTransition,
+  resolvePlayerPauseResumeExtensions,
+} from '../../../game/adminPhaseTransition.ts';
 import { FINAL_MISSIONS } from '../../../game/finalMissions.ts';
 import { resolveAdminRoleSwap, type AdminRoleSwapPlayer } from '../../../game/adminGameState.ts';
 import {
@@ -246,6 +249,15 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
 
       const now = getServerNowMs();
       const logId = createLogId();
+      let participantIds: string[] = [];
+      if (input.action === 'RESUME' && input.expectedSessionId) {
+        const participantSnap = await getDocs(
+          query(collection(db, 'users'), where('gameSessionId', '==', input.expectedSessionId)),
+        );
+        participantIds = participantSnap.docs
+          .filter(d => d.data().team === 'A' || d.data().team === 'B')
+          .map(d => d.id);
+      }
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
@@ -278,6 +290,10 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
           return { ok: false, reason: 'TRANSITION_NOT_ALLOWED' };
         }
 
+        const participantSnaps = input.action === 'RESUME' && participantIds.length > 0
+          ? await Promise.all(participantIds.slice(0, 495).map(id => transaction.get(doc(db, 'users', id))))
+          : [];
+
         const logs = appendToConfigLogs(configData.logs, {
           id: logId,
           now,
@@ -289,6 +305,17 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
           ...transition.updates,
           logs,
         });
+
+        if (input.action === 'RESUME') {
+          for (const pSnap of participantSnaps) {
+            if (!pSnap.exists()) continue;
+            const pData = pSnap.data();
+            const timerUpdates = resolvePlayerPauseResumeExtensions(pData, configData.pauseStartTime, now);
+            if (timerUpdates) {
+              transaction.update(doc(db, 'users', pSnap.id), timerUpdates);
+            }
+          }
+        }
 
         const result: TransitionGamePhaseResult = {
           ok: true,

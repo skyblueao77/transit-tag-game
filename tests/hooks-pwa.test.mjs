@@ -61,4 +61,14 @@ test('PWA manifest and asset configuration', async t => {
     assert.equal(tilePattern.test('https://attacker-gsi.go.jp/xyz/std/test.png'), false);
     assert.equal(tilePattern.test('http://cyberjapandata.gsi.go.jp/xyz/std/13/7200/3200.png'), false);
   });
+
+  await t.test('Phase 3: PWA uses prompt update mode and externalizes stations.json', () => {
+    const viteConfigSource = fs.readFileSync(path.resolve('vite.config.ts'), 'utf8');
+    assert.match(viteConfigSource, /registerType:\s*['"]prompt['"]/);
+    assert.doesNotMatch(viteConfigSource, /skipWaiting:\s*true/);
+    assert.match(viteConfigSource, /data\/stations\.json/);
+    assert.match(viteConfigSource, /globPatterns:[^\]]*json/);
+    assert.equal(fs.existsSync(path.resolve('public/data/stations.json')), true);
+    assert.equal(fs.existsSync(path.resolve('src/data/stations.json')), false);
+  });
 });

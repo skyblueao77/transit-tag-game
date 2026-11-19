@@ -57,6 +57,7 @@ export function createDifferentialPlayerSubscriber<TValue>({
           publish();
         },
         error => {
+          subscriptions.delete(playerId);
           values.delete(playerId);
           publish();
           if (error.code !== 'permission-denied') {

@@ -15,7 +15,6 @@ interface Props {
   config: GameConfig;
   user: User;
   onComplete: (missionId: string) => Promise<CompleteMissionResult>;
-  onExposeLocation: () => Promise<void>;
   missions: Mission[];
 }
 
@@ -34,7 +33,7 @@ function getMissionFailureMessage(reason: string): string {
   }
 }
 
-const MissionView: React.FC<Props> = ({ config, user, onComplete, onExposeLocation: _onExposeLocation, missions = [] }) => {
+const MissionView: React.FC<Props> = ({ config, user, onComplete, missions = [] }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFinalReported, setIsFinalReported] = useState(false);
   const [lastCompletedMissionId, setLastCompletedMissionId] = useState<string | null>(null);
