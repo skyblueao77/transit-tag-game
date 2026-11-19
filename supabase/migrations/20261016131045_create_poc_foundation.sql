@@ -248,7 +248,7 @@ DECLARE
   v_session_id uuid;
   v_session_name text;
   v_session_status text;
-  v_display_name text := btrim(p_display_name);
+  v_display_name text := pg_catalog.btrim(p_display_name, E' \t\n\r');
   v_membership_role text;
   v_rows_inserted integer;
 BEGIN
@@ -262,7 +262,7 @@ BEGIN
     RAISE EXCEPTION 'Invalid PoC join request.' USING ERRCODE = '22023';
   END IF;
 
-  v_join_code := pg_catalog.lower(btrim(p_join_code));
+  v_join_code := pg_catalog.lower(pg_catalog.btrim(p_join_code, E' \t\n\r'));
   IF v_join_code !~ '^[0-9a-f]{32}$' THEN
     RAISE EXCEPTION 'PoC Session is unavailable.' USING ERRCODE = 'P0002';
   END IF;

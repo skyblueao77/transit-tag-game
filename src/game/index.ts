@@ -120,6 +120,9 @@ export type {
 } from './reveal';
 export { resolveAdminRevealPlan } from './adminReveal';
 export {
+  exportMissionsToJson,
+  MAX_MISSION_IMPORT_COUNT,
+  parseImportedMissionsJson,
   planMissionCatalogSync,
   resolveMissionAssignment,
   resolveMissionModeChange,
@@ -140,6 +143,8 @@ export type {
   MissionAssignmentStrategy,
   MissionAssignmentTarget,
   MissionCatalogSyncPlan,
+  MissionImportFailureReason,
+  MissionImportParseResult,
   MissionMode,
   MissionModeChangeDecision,
 } from './adminMission';

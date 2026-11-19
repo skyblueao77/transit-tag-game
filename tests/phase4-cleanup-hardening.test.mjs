@@ -1,0 +1,129 @@
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { after, describe, test } from 'node:test';
+import { INITIAL_GAME_CONFIG, MISSIONS } from '../constants.ts';
+import { closeViteSsrServer, renderSsrComponent } from './helpers/viteSsrLoader.mjs';
+
+after(async () => {
+  await closeViteSsrServer();
+});
+
+const repoFile = relPath => new URL(`../${relPath}`, import.meta.url);
+
+describe('Phase 4: Spark Single-Backend Cleanup, CI/Test Reliability & Gateway Hardening', () => {
+  test('legacy Cloud Functions and Tailwind v3/PostCSS/Studio files are removed', () => {
+    for (const removedPath of [
+      'functions',
+      'functions/package.json',
+      'postcss.config.js',
+      'tailwind.config.js',
+      'metadata.json',
+    ]) {
+      assert.equal(existsSync(repoFile(removedPath)), false, `${removedPath} must remain deleted`);
+    }
+  });
+
+  test('package.json, .nvmrc, tsconfig.json, biome.json, and dependabot.yml are cleanly configured', () => {
+    const pkg = JSON.parse(readFileSync(repoFile('package.json'), 'utf8'));
+    assert.equal(pkg.engines?.node, '>=22.0.0');
+    assert.equal(pkg.scripts?.['test:functions'], undefined);
+    assert.equal(pkg.scripts?.['test:bundle'], 'node --test tests/production-bundle.test.mjs');
+    assert.equal(pkg.dependencies?.['@types/leaflet'], undefined);
+    assert.ok(pkg.devDependencies?.['@types/leaflet']);
+    for (const legacyDep of ['autoprefixer', 'postcss', '@tailwindcss/postcss']) {
+      assert.equal(pkg.devDependencies?.[legacyDep], undefined, `${legacyDep} must be removed`);
+    }
+
+    assert.equal(readFileSync(repoFile('.nvmrc'), 'utf8').trim(), '22');
+    assert.equal(existsSync(repoFile('.github/dependabot.yml')), true);
+
+    const tsconfig = JSON.parse(readFileSync(repoFile('tsconfig.json'), 'utf8'));
+    assert.equal(tsconfig.compilerOptions?.noUnusedLocals, true);
+    assert.equal(tsconfig.compilerOptions?.noUnusedParameters, true);
+    assert.equal(tsconfig.compilerOptions?.forceConsistentCasingInFileNames, true);
+    assert.equal(tsconfig.exclude, undefined);
+
+    const ciWorkflow = readFileSync(repoFile('.github/workflows/ci.yml'), 'utf8');
+    const releaseWorkflow = readFileSync(repoFile('.github/workflows/release.yml'), 'utf8');
+    assert.doesNotMatch(ciWorkflow, /--prefix functions/);
+    assert.doesNotMatch(releaseWorkflow, /--prefix functions/);
+    assert.match(ciWorkflow, /npm run test:bundle/);
+    assert.match(releaseWorkflow, /npm run test:bundle/);
+  });
+
+  test('Supabase PoC SQL poc_join_session trims whitespace consistently with poc_create_session', () => {
+    const sql = readFileSync(repoFile('supabase/migrations/20261016131045_create_poc_foundation.sql'), 'utf8');
+    const joinSectionMatch = sql.match(/create or replace function public\.poc_join_session[\s\S]*?AS \$function\$[\s\S]*?\$function\$/i);
+    assert.ok(joinSectionMatch, 'poc_join_session definition must exist');
+    const matches = joinSectionMatch[0].match(/pg_catalog\.btrim\([^,]+,\s*E' \\t\\n\\r'\)/g);
+    assert.equal(matches?.length, 2, 'poc_join_session must trim join code and player name using E\' \\t\\n\\r\'');
+  });
+
+  test('verify-100-patterns.mjs removes hardcoded paths and executes real verification suites', () => {
+    const script = readFileSync(repoFile('scripts/verify-100-patterns.mjs'), 'utf8');
+    assert.doesNotMatch(script, /\/home\/antigravity\/jdk21/);
+    assert.doesNotMatch(script, /PASS \(Rules Emulated\)/);
+    assert.match(script, /--write-report/);
+    assert.match(script, /process\.exitCode = 1/);
+  });
+
+  test('gateways keep receipt/completion reads and server clock reads inside runTransaction and enforce batch bounds', () => {
+    const opsGateway = readFileSync(repoFile('src/infrastructure/firebase/gateways/adminOperationsGateways.ts'), 'utf8');
+    const sessionGateway = readFileSync(repoFile('src/infrastructure/firebase/gateways/adminSessionGateways.ts'), 'utf8');
+    const gameplayGateway = readFileSync(repoFile('src/infrastructure/firebase/gateways/gameplayGateways.ts'), 'utf8');
+
+    assert.doesNotMatch(opsGateway, /await getDoc\(receiptRef\)/);
+    assert.match(opsGateway, /transaction\.get\(receiptRef\)/);
+
+    assert.doesNotMatch(gameplayGateway, /await getDoc\(/);
+    assert.match(gameplayGateway, /transaction\.get\(completionRef\)/);
+
+    // In adminSessionGateways.ts, only writeBatch-based executeGameReset may read receiptRef outside runTransaction.
+    const sessionReceiptGetDocs = sessionGateway.match(/await getDoc\(receiptRef\)/g) ?? [];
+    assert.equal(sessionReceiptGetDocs.length, 1, 'only executeGameReset (writeBatch) may call await getDoc(receiptRef)');
+    assert.match(sessionGateway, /transaction\.get\(receiptRef\)/);
+
+    assert.match(opsGateway, /pendingUpserts\.length > 495|participantIds\.length > 495/);
+    assert.match(sessionGateway, /participantIds\.length > 495/);
+    assert.match(gameplayGateway, /participantIds\.length > 495/);
+  });
+
+  test('AdminMissionCenter CATALOG tab renders JSON Export/Import buttons when handlers are supplied', async () => {
+    const baseProps = {
+      config: { ...INITIAL_GAME_CONFIG, gameSessionId: 'session-p4', gameStatus: 'PRE_GAME' },
+      allMissionsList: MISSIONS,
+      filteredMissions: MISSIONS.slice(0, 2),
+      liveCompletions: [],
+      missionTab: 'CATALOG',
+      onChangeTab: () => {},
+      missionSearch: '',
+      onChangeSearch: () => {},
+      manualMissionId: '',
+      onChangeManualMissionId: () => {},
+      manualAwardTeam: 'A',
+      onChangeManualAwardTeam: () => {},
+      manualAwardMissionId: '',
+      onChangeManualAwardMissionId: () => {},
+      isProcessing: false,
+      onCreateMission: () => {},
+      onEditMission: () => {},
+      onDeleteMission: () => {},
+      onToggleMissionMode: () => {},
+      onManualAssign: () => {},
+      onShuffleMissions: () => {},
+      onSyncMissionCatalog: () => {},
+      onAdminAwardMission: () => {},
+    };
+
+    const withExportImport = await renderSsrComponent('/views/admin/AdminMissionCenter.tsx', {
+      ...baseProps,
+      onExportMissions: () => {},
+      onImportMissions: async () => {},
+    });
+    assert.match(withExportImport, /JSONエクスポート/);
+    assert.match(withExportImport, /JSONインポート/);
+
+    const withoutExportImport = await renderSsrComponent('/views/admin/AdminMissionCenter.tsx', baseProps);
+    assert.doesNotMatch(withoutExportImport, /JSONエクスポート/);
+  });
+});

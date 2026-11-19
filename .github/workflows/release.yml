@@ -40,9 +40,7 @@ jobs:
           java-version: '21'
 
       - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix functions ci
+        run: npm ci
 
       - name: Lint and format check
         run: npm run lint
@@ -56,9 +54,6 @@ jobs:
       - name: Run audit regression tests
         run: npm run test:audit
 
-      - name: Run functions unit tests
-        run: npm --prefix functions run test:unit
-
       - name: Run Firestore security rules tests
         run: npm run test:rules
 
@@ -70,6 +65,9 @@ jobs:
           VITE_RECAPTCHA_ENTERPRISE_SITE_KEY: ${{ vars.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY || secrets.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY }}
           VITE_APPCHECK_DEBUG_TOKEN: ""
         run: npm run build
+
+      - name: Verify production bundle integrity
+        run: npm run test:bundle
 
       - name: Verify production bundle excludes debug token and secret keys
         run: |
@@ -83,9 +81,7 @@ jobs:
           fi
 
       - name: Audit production dependencies
-        run: |
-          npm audit --omit=dev
-          npm --prefix functions audit --omit=dev
+        run: npm audit --omit=dev
 
   publish:
     name: Publish GitHub Release

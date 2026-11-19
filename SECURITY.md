@@ -31,7 +31,7 @@
 
 本リポジトリは公開リポジトリであるため、reCAPTCHA のシークレットキーや実環境の認証情報をリポジトリおよび `.env` に保持しません。ボット対策・不正リクエスト防止は **Firebase App Check（reCAPTCHA Enterprise プロバイダ）** に一本化しています。
 
-> **アーキテクチャ補足**: v1.2 以降の標準本番構成は **Firebase Spark プラン（Cloud Functions 未使用・クライアントトランザクション + `firestore.rules` 強制）** です。`functions/` 配下のコードは互換・参照用パッケージとして保持されており、Cloud Functions をデプロイする構成（Blaze プラン）では各 `onCall` に設定済みの `enforceAppCheck: true` が有効になります。
+> **アーキテクチャ補足**: v1.2 以降の標準本番構成は **Firebase Spark プラン（Cloud Functions 未使用・クライアントトランザクション + `firestore.rules` 強制）** です（`functions/` パッケージは削除され Spark に一本化されました）。
 
 本番環境およびローカル開発環境を運用する際は、以下の手動コンソール設定を必ず実施してください：
 
@@ -43,8 +43,15 @@
    - Google Cloud Console（API とサービス > 認証情報）で Firebase Web API キーを選択し、アプリケーションの制限に「HTTP リファラー（ウェブサイト）」を設定して本番ドメインのみを許可する。
 3. **Firebase App Check の登録と強制（Enforcement）**
    - Firebase Console > App Check で対象 Web アプリに reCAPTCHA Enterprise サイトキーを登録する。
-   - 本番公開後のメトリクス（検証済みリクエスト率）を確認したうえで、**Cloud Functions / Cloud Firestore / Firebase Authentication** の App Check 強制（Enforce）を有効化する（Cloud Functions のすべての `onCall` はコード上でも `enforceAppCheck: true` を設定済み）。
+   - 本番公開後のメトリクス（検証済みリクエスト率）を確認したうえで、**Cloud Firestore / Firebase Authentication** の App Check 強制（Enforce）を有効化する。
 4. **ローカル開発時のデバッグトークン運用**
    - ローカル開発（`localhost`）では本番サイトキーのドメイン許可に `localhost` を追加せず、`.env.local` に `VITE_APPCHECK_DEBUG_TOKEN=true` を設定して開発サーバーを起動する。
    - ブラウザのコンソールに出力される `App Check debug token` をコピーし、Firebase Console > App Check > アプリメニューの「デバッグ トークンを管理（Manage debug tokens）」に登録する（必要に応じて登録済みトークン文字列を `.env.local` の `VITE_APPCHECK_DEBUG_TOKEN` に固定設定する）。
    - `VITE_APPCHECK_DEBUG_TOKEN` は本番ビルドには絶対に含めない（本番ビルドでは `import.meta.env.DEV` ガードによりデバッグトークン初期化コード自体が除去される）。
+
+## 自動セキュリティ検証（CI / GitHub Security）
+
+- **GitHub CodeQL (Default Setup)**: `actions` および `javascript-typescript` に対して静的解析が有効化されています。
+- **Dependabot**: `.github/dependabot.yml` により `npm` 依存および `github-actions` ワークフローの更新を毎週チェックします。
+- **依存脆弱性チェック & ルール検証**: `.github/workflows/ci.yml` にて `npm audit --omit=dev`、Firestore セキュリティルールテスト（`npm run test:rules`）、およびエミュレータ結合テスト（`npm run test:integration`）を継続実行しています。
+

@@ -140,6 +140,8 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               onShuffleMissions={() => { void dashboard.handleShuffleMissions(); }}
               onSyncMissionCatalog={() => { void dashboard.handleSyncMissionCatalog(); }}
               onAdminAwardMission={() => { void dashboard.handleAdminAwardMission(); }}
+              onExportMissions={dashboard.handleExportMissionsJson}
+              onImportMissions={dashboard.handleImportMissionsJson}
             />
 
             <AdminRuleSettingsSection config={config} requireSessionId={dashboard.requireSessionId} />

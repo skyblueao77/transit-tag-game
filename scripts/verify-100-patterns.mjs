@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 // 100パターンのカタログ定義
 export const TEST_CATALOG_100 = [
   // Cat 1: 認証・セットアップ (001-010)
-  { id: '001', cat: '1. 認証・セットアップ', name: '初回アクセス時の匿名認証自動確立', type: 'AUTOMATED', suite: 'src/infrastructure/firebase/firebaseClient.ts, App.tsx' },
+  { id: '001', cat: '1. 認証・セットアップ', name: 'メール/パスワード認証と招待コード検証による参加確立', type: 'AUTOMATED', suite: 'src/infrastructure/firebase/playerSetup.ts, App.tsx' },
   { id: '002', cat: '1. 認証・セットアップ', name: 'チームA参加者としての正常セットアップ', type: 'RULES', suite: 'tests/firestore-rules.test.mjs' },
   { id: '003', cat: '1. 認証・セットアップ', name: 'チームB参加者としての正常セットアップ', type: 'RULES', suite: 'tests/firestore-rules.test.mjs' },
   { id: '004', cat: '1. 認証・セットアップ', name: '名前未入力・空白のみでの登録ブロック', type: 'AUTOMATED', suite: 'views/SetupView.tsx' },
@@ -106,7 +106,7 @@ export const TEST_CATALOG_100 = [
   // Cat 8: PWA・オフライン・現場運用 (086-095)
   { id: '086', cat: '8. PWA・オフライン・現場運用', name: 'PWA Web App Manifest (public/manifest.webmanifest) の妥当性', type: 'AUTOMATED', suite: 'tests/hooks-pwa.test.mjs' },
   { id: '087', cat: '8. PWA・オフライン・現場運用', name: 'Service Worker (sw.js) による静的アセットのキャッシュ', type: 'AUTOMATED', suite: 'tests/hooks-pwa.test.mjs' },
-  { id: '088', cat: '8. PWA・オフライン・現場運用', name: 'OpenStreetMap タイルキャッシュパターン (tile.openstreetmap.org) の整合性', type: 'AUTOMATED', suite: 'tests/hooks-pwa.test.mjs' },
+  { id: '088', cat: '8. PWA・オフライン・現場運用', name: '国土地理院タイルキャッシュパターン (cyberjapandata.gsi.go.jp) の整合性', type: 'AUTOMATED', suite: 'tests/hooks-pwa.test.mjs' },
   { id: '089', cat: '8. PWA・オフライン・現場運用', name: '悪意あるドメインからの不正キャッシュ要求の遮断', type: 'AUTOMATED', suite: 'tests/hooks-pwa.test.mjs' },
   { id: '090', cat: '8. PWA・オフライン・現場運用', name: '画面スリープ防止 (Screen Wake Lock API) の安全な適用', type: 'AUTOMATED', suite: 'src/hooks/useWakeLock.ts' },
   { id: '091', cat: '8. PWA・オフライン・現場運用', name: 'Wake Lock非対応端末でのグレースフルデグラデーション', type: 'AUTOMATED', suite: 'src/hooks/useWakeLock.ts' },
@@ -133,38 +133,44 @@ async function run() {
   let unitTestOutput = '';
   let unitPass = false;
   try {
-    unitTestOutput = execSync('npm test', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+    unitTestOutput = execSync('npm test && npm run test:audit', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
     unitPass = true;
-    console.log(`  -> Unit Tests: PASSED`);
+    console.log(`  -> Unit & Audit Tests: PASSED`);
   } catch (err) {
-    unitTestOutput = `${err.stdout}\n${err.stderr}`;
-    console.error(`  -> Unit Tests FAILED:`, err.message);
+    unitTestOutput = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+    console.error(`  -> Unit & Audit Tests FAILED:`, err.message);
   }
 
   console.log(`[2/3] Checking Firestore Rules Test Suite (Spark Mode)...`);
   let rulesOutput = '';
   let rulesPass = false;
   try {
-    // 既存のルールテスト実行ログまたはクイックチェック
-    const env = { ...process.env, PATH: `/home/antigravity/jdk21/bin:${process.env.PATH}`, JAVA_HOME: '/home/antigravity/jdk21' };
-    rulesOutput = execSync('npm run test:rules', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], env });
+    rulesOutput = execSync('npm run test:rules', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
     rulesPass = true;
     console.log(`  -> Rules Tests: PASSED`);
   } catch (err) {
-    rulesOutput = `${err.stdout}\n${err.stderr}`;
-    console.error(`  -> Rules Tests Note:`, err.message);
+    rulesOutput = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+    console.error(`  -> Rules Tests FAILED:`, err.message);
   }
 
-  console.log(`[3/3] Checking Production Build & Type Safety...`);
+  console.log(`[3/3] Checking Lint, Type Safety, Production Build & Bundle Integrity...`);
+  let buildOutput = '';
+  let lintTypePass = false;
+  let buildPass = false;
   try {
-    execSync('npm run typecheck && npm run build', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-    console.log(`  -> Build & Typecheck: PASSED`);
+    execSync('npm run lint && npm run typecheck', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+    lintTypePass = true;
+    execSync('npm run build && npm run test:bundle', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+    buildPass = true;
+    console.log(`  -> Lint, Typecheck, Build & Bundle: PASSED`);
   } catch (err) {
-    console.error(`  -> Build/Typecheck FAILED:`, err.message);
+    buildOutput = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+    console.error(`  -> Build/Check FAILED:`, err.message);
   }
 
   // 結果集計
   let passCount = 0;
+  let failCount = 0;
   let manualCount = 0;
   let fieldCount = 0;
 
@@ -172,11 +178,28 @@ async function run() {
     let status = 'PASS';
     let detail = 'Automated Unit/Rules Verified';
     if (t.type === 'RULES') {
-      status = rulesPass ? 'PASS' : 'PASS (Rules Emulated)';
-      passCount++;
+      if (rulesPass) {
+        status = 'PASS';
+        passCount++;
+      } else {
+        status = 'FAIL';
+        detail = 'Firestore Rules suite did not pass';
+        failCount++;
+      }
     } else if (t.type === 'AUTOMATED') {
-      status = unitPass ? 'PASS' : 'FAIL';
-      passCount++;
+      const ok = t.id === '099'
+        ? lintTypePass
+        : t.id === '100'
+          ? buildPass
+          : unitPass;
+      if (ok) {
+        status = 'PASS';
+        passCount++;
+      } else {
+        status = 'FAIL';
+        detail = 'Automated suite failed';
+        failCount++;
+      }
     } else if (t.type === 'MANUAL_UI') {
       status = 'READY_FOR_UI';
       detail = 'UI Component & Guard Verified';
@@ -189,48 +212,68 @@ async function run() {
     return { ...t, status, detail };
   });
 
+  const automatedTotal = passCount + failCount;
+  const passRate = automatedTotal > 0 ? Math.round((passCount / automatedTotal) * 100) : 0;
+
   console.log(`\n====================================================`);
   console.log(`100-Pattern Summary:`);
-  console.log(`  - Automated/Rules Tests: ${passCount} / ${passCount} PASSED (100%)`);
+  console.log(`  - Automated/Rules Tests: ${passCount} / ${automatedTotal} PASSED (${passRate}%)`);
+  if (failCount > 0) {
+    console.error(`  - Failed Automated/Rules Tests: ${failCount}`);
+  }
   console.log(`  - UI Interactive Verifications: ${manualCount}`);
   console.log(`  - Field Runbook Verifications: ${fieldCount}`);
   console.log(`  - Total Patterns: ${TEST_CATALOG_100.length}`);
   console.log(`====================================================\n`);
 
-  // レポートMarkdown生成
-  const reportPath = resolve(process.cwd(), 'docs/testing/TEST_EXECUTION_100_REPORT.md');
-  const now = new Date().toISOString();
-  let markdown = `# 100-Pattern Comprehensive Verification Report\n\n`;
-  markdown += `**Execution Date**: ${now}\n`;
-  markdown += `**Environment**: Firebase Spark Plan (Full Free Tier) & Supabase PoC Evaluated\n`;
-  markdown += `**Overall Result**: **100 / 100 PATTERNS VERIFIED (100% READY)**\n\n`;
+  if (process.argv.includes('--write-report')) {
+    const reportPath = resolve(process.cwd(), 'docs/testing/TEST_EXECUTION_100_REPORT.md');
+    const now = new Date().toISOString();
+    const overallStatus = failCount === 0
+      ? `**${TEST_CATALOG_100.length} / ${TEST_CATALOG_100.length} PATTERNS VERIFIED (100% READY)**`
+      : `**FAILED (${failCount} automated checks failed)**`;
+    let markdown = `# 100-Pattern Comprehensive Verification Report\n\n`;
+    markdown += `**Execution Date**: ${now}\n`;
+    markdown += `**Environment**: Firebase Spark Plan (Full Free Tier) & Supabase PoC Evaluated\n`;
+    markdown += `**Overall Result**: ${overallStatus}\n\n`;
 
-  markdown += `## Summary Dashboard\n\n`;
-  markdown += `| Metric | Count | Rate |\n`;
-  markdown += `| :--- | :--- | :--- |\n`;
-  markdown += `| **Automated / Security Rules Tests** | ${passCount} / ${passCount} | 100% PASS |\n`;
-  markdown += `| **Interactive UI Tests (Verified)** | ${manualCount} | Ready |\n`;
-  markdown += `| **Field Runbook Scenarios** | ${fieldCount} | Ready |\n`;
-  markdown += `| **Total Coverage** | **100 / 100** | **100%** |\n\n`;
+    markdown += `## Summary Dashboard\n\n`;
+    markdown += `| Metric | Count | Rate |\n`;
+    markdown += `| :--- | :--- | :--- |\n`;
+    markdown += `| **Automated / Security Rules Tests** | ${passCount} / ${automatedTotal} | ${passRate}% PASS |\n`;
+    markdown += `| **Interactive UI Tests (Verified)** | ${manualCount} | Ready |\n`;
+    markdown += `| **Field Runbook Scenarios** | ${fieldCount} | Ready |\n`;
+    markdown += `| **Total Coverage** | **${TEST_CATALOG_100.length} / ${TEST_CATALOG_100.length}** | **${failCount === 0 ? '100%' : 'PARTIAL'}** |\n\n`;
 
-  markdown += `## 100 Test Patterns Matrix\n\n`;
-  markdown += `| ID | Category | Pattern Description | Type | Verification Suite | Status |\n`;
-  markdown += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+    markdown += `## 100 Test Patterns Matrix\n\n`;
+    markdown += `| ID | Category | Pattern Description | Type | Verification Suite | Status |\n`;
+    markdown += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
 
-  for (const r of rows) {
-    markdown += `| #${r.id} | ${r.cat} | ${r.name} | \`${r.type}\` | \`${r.suite}\` | **${r.status}** |\n`;
+    for (const r of rows) {
+      markdown += `| #${r.id} | ${r.cat} | ${r.name} | \`${r.type}\` | \`${r.suite}\` | **${r.status}** |\n`;
+    }
+
+    markdown += `\n## Test Output Logs\n\n`;
+    markdown += `### Automated Unit & Audit Suite\n\`\`\`\n${unitTestOutput.slice(0, 4000) || 'No output.'}\n\`\`\`\n\n`;
+    markdown += `### Security Rules Suite\n\`\`\`\n${rulesOutput.slice(0, 4000) || 'No output.'}\n\`\`\`\n`;
+    if (buildOutput) {
+      markdown += `\n### Lint / Typecheck / Build Output\n\`\`\`\n${buildOutput.slice(0, 4000)}\n\`\`\`\n`;
+    }
+
+    try {
+      writeFileSync(reportPath, markdown, 'utf-8');
+      console.log(`Successfully generated markdown report at: ${reportPath}`);
+    } catch (err) {
+      console.error(`Failed to write markdown report:`, err.message);
+    }
   }
 
-  markdown += `\n## Test Output Logs\n\n`;
-  markdown += `### Automated Unit Suite\n\`\`\`\n${unitTestOutput.slice(0, 4000) || 'All unit tests passed successfully.'}\n\`\`\`\n\n`;
-  markdown += `### Security Rules Suite\n\`\`\`\n${rulesOutput.slice(0, 4000) || 'Spark security rules emulation verified in CI.'}\n\`\`\`\n`;
-
-  try {
-    writeFileSync(reportPath, markdown, 'utf-8');
-    console.log(`Successfully generated markdown report at: ${reportPath}`);
-  } catch (err) {
-    console.error(`Failed to write markdown report:`, err.message);
+  if (failCount > 0) {
+    process.exitCode = 1;
   }
 }
 
-run().catch(console.error);
+run().catch(err => {
+  console.error(err);
+  process.exitCode = 1;
+});

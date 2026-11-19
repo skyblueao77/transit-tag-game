@@ -19,27 +19,32 @@
 
 ### `privateLocations/{uid}`（非公開リアルタイム位置情報）
 - 本人（`request.auth.uid == uid`）のみ読み書き可能。管理者を含む他ユーザーからの直接参照は不可。
-- `latitude` / `longitude` (number), `updatedAt` (timestamp), `gameSessionId` (string)
+- `latitude` / `longitude` (number), `updatedAt` (timestamp), `expiresAt` (timestamp, +48h TTL推奨), `gameSessionId` (string)
 
 ### `exposedLocations/{uid}`（ゼロトラスト自己投影スナップショット）
-- 全体開示・チーム別開示・個別ペナルティ開示中に、プレイヤー端末が自身の座標を期限付きで投影するコレクション。
-- `latitude` / `longitude` (number), `revealScope` (`"GLOBAL"` | `"TEAM_A"` | `"TEAM_B"` | `"PENALTY"`), `expiresAt` (timestamp), `gameSessionId` (string)
+- 全体開示・チーム別開示・定期公開・個別ペナルティ開示中に、プレイヤー端末が自身の座標を期限付きで投影するコレクション。
+- `latitude` / `longitude` (number), `revealScope` (`"GLOBAL"` | `"TEAM_A"` | `"TEAM_B"` | `"PENALTY"`), `expiresAt` (timestamp, TTL推奨), `gameSessionId` (string)
 
 ### `emergencyLocationProjections/{uid}`（SOS緊急位置投影）
-- `EMERGENCY` 状態のプレイヤー端末が管理者向けに自己投影（有効期限最大3分）。管理者のみ一覧・閲覧可能。
+- `EMERGENCY` 状態のプレイヤー端末が管理者向けに自己投影（有効期限最大3分、`expiresAt` TTL設定推奨）。管理者のみ一覧・閲覧可能。
 - `RETIRED` 等への状態遷移を伴うバッチ内でのみ本人による自己削除を許可。
 
 ### `game_config/current`（ゲーム全体設定・進行状態）
 - `gameSessionId` (string), `gameStatus` (string), `day` (`1` | `2`)
 - `teamAScore` / `teamBScore`, `teamARole` / `teamBRole`
 - `victoryMode` (`"SURVIVAL"` | `"SCORE_SWAP"`), 各種動的ルールパラメータ（新幹線制限・待機時間・定期開示間隔/時間・ペナルティ時間）
-- `broadcastMessage` / `broadcastTime` / `logs`
+- `currentJoinCode` (string), `registrationOpen` (boolean), `broadcastMessage` / `broadcastTime` / `logs`
+
+### `joinCodes/{code}`（招待コードゲート）
+- セッション初期化・リセット・コード再発行時に 32 桁ランダム英数字で生成される招待コード。
+- `gameSessionId` (string), `createdAt` (timestamp) を保持し、`firestore.rules` が新規プレイヤー作成バッチ内で招待コード一致と参加受付状態（`PRE_GAME` または `registrationOpen == true`）を検証する。
 
 ### `missions/{missionId}` & `missionCompletions/{completionId}`
 - ミッション定義およびセッション単位の完了証跡（リプレイ攻撃・二重加点の防止用）。
 
-### `admins/{uid}` & `system/admin_bootstrap`
-- `system/admin_bootstrap` の未存在時のみ初回管理者を1回限りアトミック登録。以降は管理者自身の操作のみ許可。
+### `admins/{uid}`（管理者権限ドキュメント）
+- ブラウザからの初回自己登録・自己昇格（旧 `system/admin_bootstrap`）はセキュリティルールで完全に廃止・禁止されています。
+- 初回管理者は Firebase Console の Authentication と Firestore Database から `admins/{uid}`（`role: "admin"`, `createdAt`）を手動作成して登録します。
 
 ---
 
@@ -48,7 +53,7 @@
 ### ステップ 1: Firebase プロジェクトの作成
 1. [Firebase Console](https://console.firebase.google.com/) にアクセス。
 2. 「プロジェクトを追加」をクリック（無料の Spark プランのまま利用可能）。
-3. Authentication で「メール / パスワード」と「匿名」を有効化、Firestore Database を作成（`asia-northeast1` 推奨）。
+3. Authentication で「メール / パスワード」のみを有効化し、Firestore Database を作成（`asia-northeast1` 推奨）。
 
 ### ステップ 2: 依存インストールとビルド
 ```bash

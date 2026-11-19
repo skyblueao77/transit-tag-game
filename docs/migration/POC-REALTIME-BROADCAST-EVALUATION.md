@@ -171,10 +171,10 @@ When using Supabase Realtime Broadcast:
 
 ## 6. Migration Roadmap
 
-1. **Phase 4 (Current):**
-   - Maintain Firebase Spark compatibility.
-   - Implement intelligent distance throttling in `MapView.tsx` (30m / 5m fallback).
-   - Document ADR-001 Realtime PoC architecture.
+1. **Phase 4 (Current — Shipped in Firebase Spark GA):**
+   - Maintain Firebase Spark single-backend compatibility (`functions/` removed).
+   - Shipped intelligent distance throttling (30m / 60s / 5m heartbeat), on-demand `exposedLocations` subscription, and unbundled `public/data/stations.json` in `MapView.tsx`.
+   - Document ADR-001 Realtime PoC architecture (future Phase 5+ evaluation only).
 2. **Phase 5 (Supabase Foundation):**
    - Implement PostgreSQL schema and RLS policies for auth, players, and game config.
 3. **Phase 6 (Realtime Location Migration):**

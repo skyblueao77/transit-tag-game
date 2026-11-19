@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { MISSIONS, FINAL_MISSIONS } from '../../constants.ts';
 import {
+  exportMissionsToJson,
+  MAX_MISSION_IMPORT_COUNT,
+  parseImportedMissionsJson,
   planMissionCatalogSync,
   resolveMissionAssignment,
   resolveMissionModeChange,
@@ -87,4 +90,69 @@ describe('trusted mission administration core', () => {
     assert.deepEqual(persisted, before);
     assert.equal(planMissionCatalogSync(catalog, Object.fromEntries(catalog.map(mission => [mission.id, missionData(mission)]) )).upserts.length, 0);
   });
+
+  test('exportMissionsToJson and parseImportedMissionsJson round-trip canonical catalog and normalize custom missions', () => {
+    const exported = exportMissionsToJson(catalog);
+    const reparsed = parseImportedMissionsJson(exported);
+    assert.equal(reparsed.ok, true);
+    if (reparsed.ok) {
+      assert.equal(reparsed.missions.length, catalog.length);
+      assert.equal(reparsed.missions[0].id, catalog[0].id);
+      assert.equal(reparsed.missions.at(-1)?.id, catalog.at(-1)?.id);
+    }
+
+    const wrapped = parseImportedMissionsJson(JSON.stringify({
+      missions: [
+        {
+          title: '渋谷スクランブル写真',
+          description: 'ハチ公前で撮影',
+          points: 25,
+          type: 'PHOTO',
+          lat: 35.659,
+          lng: 139.701,
+          isFinalMission: true,
+        },
+      ],
+    }));
+    assert.equal(wrapped.ok, true);
+    if (wrapped.ok) {
+      assert.equal(wrapped.missions[0].id, 'custom_import_1');
+      assert.equal(wrapped.missions[0].area, 'ALL');
+      assert.equal(wrapped.missions[0].region, 'ALL');
+      assert.equal(wrapped.missions[0].isFinalMission, true);
+    }
+  });
+
+  test('parseImportedMissionsJson rejects malformed JSON, invalid fields, duplicate IDs, and oversized batches', () => {
+    assert.deepEqual(parseImportedMissionsJson('{bad').reason, 'INVALID_JSON');
+    assert.deepEqual(parseImportedMissionsJson('[]').reason, 'INVALID_FORMAT');
+    assert.equal(
+      parseImportedMissionsJson(JSON.stringify([{ title: 'a', description: 'b', points: 101, type: 'PHOTO' }])).reason,
+      'INVALID_MISSION',
+    );
+    assert.equal(
+      parseImportedMissionsJson(JSON.stringify([{ id: 'bad/id', title: 'a', description: 'b', points: 20, type: 'PHOTO' }])).reason,
+      'INVALID_MISSION',
+    );
+    assert.equal(
+      parseImportedMissionsJson(JSON.stringify([{ title: 'a', description: 'b', points: 20, type: 'PHOTO', lat: 35.6 }])).reason,
+      'INVALID_MISSION',
+    );
+    assert.equal(
+      parseImportedMissionsJson(JSON.stringify([
+        { id: 'dup', title: 'a', description: 'b', points: 20, type: 'PHOTO' },
+        { id: 'dup', title: 'c', description: 'd', points: 30, type: 'CHECKIN' },
+      ])).reason,
+      'INVALID_MISSION',
+    );
+    const overLimit = Array.from({ length: MAX_MISSION_IMPORT_COUNT + 1 }, (_, i) => ({
+      id: `m_${i}`,
+      title: `M${i}`,
+      description: 'desc',
+      points: 20,
+      type: 'PHOTO',
+    }));
+    assert.equal(parseImportedMissionsJson(JSON.stringify(overLimit)).reason, 'TOO_MANY_MISSIONS');
+  });
 });
+

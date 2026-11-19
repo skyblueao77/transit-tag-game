@@ -87,22 +87,11 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
-
-      const now = getServerNowMs();
-      const receiptRef = doc(db, 'admins', uid, 'sessionInitializationRequests', input.requestId);
-      const receiptSnap = await getDoc(receiptRef);
-      if (receiptSnap.exists()) {
-        const rData = receiptSnap.data();
-        return {
-          ok: true,
-          gameSessionId: rData.gameSessionId,
-          sessionStartedAt: rData.sessionStartedAt,
-          sessionSchemaVersion: rData.sessionSchemaVersion,
-          duplicate: true,
-          alreadyInitialized: rData.alreadyInitialized ?? false,
-        };
+      if (!input.requestId || typeof input.requestId !== 'string') {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
       }
 
+      const receiptRef = doc(db, 'admins', uid, 'sessionInitializationRequests', input.requestId);
       const [participantsSnap, activeJoinCodesSnap] = await Promise.all([
         getDocs(query(collection(db, 'users'), where('team', 'in', ['A', 'B']))),
         getDocs(query(collection(db, 'joinCodes'), where('active', '==', true))),
@@ -115,7 +104,23 @@ export const clientGameSessionInitializationGateway: InitializeGameSessionGatewa
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
-        const configSnap = await transaction.get(configRef);
+        const [receiptSnap, configSnap] = await Promise.all([
+          transaction.get(receiptRef),
+          transaction.get(configRef),
+        ]);
+        if (receiptSnap.exists()) {
+          const rData = receiptSnap.data();
+          return {
+            ok: true,
+            gameSessionId: rData.gameSessionId,
+            sessionStartedAt: rData.sessionStartedAt,
+            sessionSchemaVersion: rData.sessionSchemaVersion,
+            duplicate: true,
+            alreadyInitialized: rData.alreadyInitialized ?? false,
+          };
+        }
+
+        const now = getServerNowMs();
         const configData = configSnap.exists() ? configSnap.data() : null;
 
         const sessionState = validateGameSession(configData);
@@ -232,22 +237,11 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
-
-      const receiptRef = doc(db, 'admins', uid, 'phaseTransitionRequests', input.requestId);
-      const receiptSnap = await getDoc(receiptRef);
-      if (receiptSnap.exists()) {
-        const rData = receiptSnap.data();
-        return {
-          ok: true,
-          action: rData.action,
-          oldPhase: rData.oldPhase,
-          newPhase: rData.newPhase,
-          selectedFinalMissionId: rData.selectedFinalMissionId,
-          duplicate: true,
-        };
+      if (!input.requestId || typeof input.requestId !== 'string') {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
       }
 
-      const now = getServerNowMs();
+      const receiptRef = doc(db, 'admins', uid, 'phaseTransitionRequests', input.requestId);
       const logId = createLogId();
       let participantIds: string[] = [];
       if (input.action === 'RESUME' && input.expectedSessionId) {
@@ -257,17 +251,43 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
         participantIds = participantSnap.docs
           .filter(d => d.data().team === 'A' || d.data().team === 'B')
           .map(d => d.id);
+        if (participantIds.length > 495) {
+          return { ok: false, reason: 'PERSISTENCE_ERROR' };
+        }
       }
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
-        const configSnap = await transaction.get(configRef);
+        const [receiptSnap, configSnap, ...participantSnaps] = await Promise.all([
+          transaction.get(receiptRef),
+          transaction.get(configRef),
+          ...(input.action === 'RESUME'
+            ? participantIds.map(id => transaction.get(doc(db, 'users', id)))
+            : []),
+        ]);
+
+        if (receiptSnap.exists()) {
+          const rData = receiptSnap.data();
+          if (rData.gameSessionId !== input.expectedSessionId || rData.action !== input.action) {
+            return { ok: false, reason: 'INVALID_ARGUMENT' };
+          }
+          return {
+            ok: true,
+            action: rData.action,
+            oldPhase: rData.oldPhase,
+            newPhase: rData.newPhase,
+            selectedFinalMissionId: rData.selectedFinalMissionId,
+            duplicate: true,
+          };
+        }
+
         if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
 
         const configData = configSnap.data();
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
+        const now = getServerNowMs();
         const finalMissionId = input.action === 'START_FINAL'
           ? FINAL_MISSIONS[Math.floor(Math.random() * FINAL_MISSIONS.length)]?.id
           : undefined;
@@ -289,10 +309,6 @@ export const clientAdminPhaseGateway: AdminPhaseGateway = {
           }
           return { ok: false, reason: 'TRANSITION_NOT_ALLOWED' };
         }
-
-        const participantSnaps = input.action === 'RESUME' && participantIds.length > 0
-          ? await Promise.all(participantIds.slice(0, 495).map(id => transaction.get(doc(db, 'users', id))))
-          : [];
 
         const logs = appendToConfigLogs(configData.logs, {
           id: logId,
@@ -352,21 +368,11 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
       const uid = requireAuthUid();
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
-
-      const receiptRef = doc(db, 'admins', uid, 'roleSwapRequests', input.requestId);
-      const receiptSnap = await getDoc(receiptRef);
-      if (receiptSnap.exists()) {
-        const rData = receiptSnap.data();
-        return {
-          ok: true,
-          replayed: true,
-          teamARole: rData.teamARole,
-          teamBRole: rData.teamBRole,
-          nextRevealTime: rData.nextRevealTime,
-          newOniTeam: rData.newOniTeam,
-        };
+      if (!input.requestId || typeof input.requestId !== 'string') {
+        return { ok: false, reason: 'INVALID_ARGUMENT' };
       }
 
+      const receiptRef = doc(db, 'admins', uid, 'roleSwapRequests', input.requestId);
       const participantQuery = query(
         collection(db, 'users'),
         where('gameSessionId', '==', input.expectedSessionId),
@@ -375,20 +381,42 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
       const participantIds = participantsSnap.docs
         .filter(d => d.data().team === 'A' || d.data().team === 'B')
         .map(d => d.id);
+      if (participantIds.length > 495) {
+        return { ok: false, reason: 'ROSTER_TOO_LARGE' };
+      }
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
         const configRef = doc(db, 'game_config', 'current');
-        const configSnap = await transaction.get(configRef);
+        const [receiptSnap, configSnap, ...userSnaps] = await Promise.all([
+          transaction.get(receiptRef),
+          transaction.get(configRef),
+          ...participantIds.map(id => transaction.get(doc(db, 'users', id))),
+        ]);
+
+        if (receiptSnap.exists()) {
+          const rData = receiptSnap.data();
+          if (rData.gameSessionId !== input.expectedSessionId) {
+            return { ok: false, reason: 'INVALID_ARGUMENT' };
+          }
+          return {
+            ok: true,
+            replayed: true,
+            teamARole: rData.teamARole,
+            teamBRole: rData.teamBRole,
+            nextRevealTime: rData.nextRevealTime,
+            newOniTeam: rData.newOniTeam,
+          };
+        }
+
         if (!configSnap.exists()) return { ok: false, reason: 'CONFIG_NOT_FOUND' };
 
         const configData = configSnap.data();
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
-        const userSnaps = await Promise.all(participantIds.map(id => transaction.get(doc(db, 'users', id))));
+        const now = getServerNowMs();
         const players: AdminRoleSwapPlayer[] = [];
         for (const snap of userSnaps) {
           if (!snap.exists()) continue;
@@ -470,7 +498,6 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
       const isAdmin = await verifyAdmin(uid);
       if (!isAdmin) return { ok: false, reason: 'PERMISSION_DENIED' };
 
-      const now = getServerNowMs();
       const logId = createLogId();
 
       return await runTransaction(db, async transaction => {
@@ -489,6 +516,7 @@ export const clientAdminGameStateGateway: AdminGameStateGateway = {
         const sessionValidation = validateExpectedSession(configData, input.expectedSessionId);
         if (!sessionValidation.valid) return { ok: false, reason: 'SESSION_CHANGED' };
 
+        const now = getServerNowMs();
         const logs = appendToConfigLogs(configData.logs, {
           id: logId,
           now,
