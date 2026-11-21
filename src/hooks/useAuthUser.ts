@@ -15,6 +15,7 @@ export interface UseAuthUserResult {
   currentUser: User | null;
   isAuthAdmin: boolean;
   userLoading: boolean;
+  initialLoading: boolean;
   setCurrentUser: React.Dispatch<React.SetStateAction<User | null>>;
 }
 
@@ -24,6 +25,7 @@ export function useAuthUser(): UseAuthUserResult {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthAdmin, setIsAuthAdmin] = useState(false);
   const [userLoading, setUserLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const prevAuthUserIdRef = useRef<string | null>(authUserId);
 
   useEffect(() => {
@@ -36,6 +38,7 @@ export function useAuthUser(): UseAuthUserResult {
         setCurrentUser(null);
         setIsAuthAdmin(false);
         setUserLoading(false);
+        setInitialLoading(false);
       } else if (uid !== prevUid) {
         setUserLoading(true);
       }
@@ -63,11 +66,13 @@ export function useAuthUser(): UseAuthUserResult {
       player => {
         setCurrentUser(player);
         setUserLoading(false);
+        setInitialLoading(false);
       },
       error => {
         console.error('Error fetching current user data:', error);
         setCurrentUser(null);
         setUserLoading(false);
+        setInitialLoading(false);
       },
     );
 
@@ -83,6 +88,7 @@ export function useAuthUser(): UseAuthUserResult {
     currentUser,
     isAuthAdmin,
     userLoading,
+    initialLoading,
     setCurrentUser,
   };
 }

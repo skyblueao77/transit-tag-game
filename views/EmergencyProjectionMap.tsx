@@ -192,7 +192,7 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
       <p className="mb-4 text-xs text-slate-600">
         SOS時の正確な位置です。2分以上更新が途絶えた場合も、管理者が解除するまで最終位置を保持します。
       </p>
-      <div ref={containerRef} className="h-72 lg:h-96 w-full overflow-hidden rounded-2xl bg-slate-100" />
+      <div ref={containerRef} className="relative isolate z-0 h-72 lg:h-96 w-full overflow-hidden rounded-2xl bg-slate-100" />
       <EmergencyProjectionList activeProjections={activeProjections} usersById={usersById} />
     </section>
   );

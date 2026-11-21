@@ -1,4 +1,4 @@
-import { doc, increment, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
+import { doc, increment, runTransaction, serverTimestamp, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from './firebaseClient';
 import type { User } from '../../../types';
 import type { ProtectionZoneType } from '../../game/types';
@@ -51,7 +51,7 @@ export async function updatePlayerLastStation(
   const rawStation = typeof lastStation === 'string' ? lastStation.trim() : '';
   const normalizedStation = truncateToUtf8Bytes(rawStation, 250, '...');
   const userRef = doc(db, 'users', playerId);
-  await setDoc(userRef, { lastStation: normalizedStation }, { merge: true });
+  await updateDoc(userRef, { lastStation: normalizedStation });
 }
 
 export async function adminChangePlayerTeam(

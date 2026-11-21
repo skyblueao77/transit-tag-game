@@ -41,7 +41,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-5 font-sans overflow-y-auto" role="dialog">
+    <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-950/80 p-5 font-sans overflow-y-auto" role="dialog" aria-modal="true">
       <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl text-slate-800">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-base font-black text-slate-900">

@@ -99,7 +99,7 @@ const App: React.FC = () => {
 const AppContent: React.FC = () => {
   const location = useLocation();
   const isAdminPath = location.pathname === '/admin';
-  const { authUserId, authReady, currentUser, isAuthAdmin, userLoading, setCurrentUser } = useAuthUser();
+  const { authUserId, authReady, currentUser, isAuthAdmin, initialLoading, setCurrentUser } = useAuthUser();
   const authUserIdRef = useRef(authUserId);
   useEffect(() => {
     authUserIdRef.current = authUserId;
@@ -484,7 +484,7 @@ const AppContent: React.FC = () => {
 
   // ---- 画面分岐 ----
 
-  if (!authReady || userLoading) {
+  if (!authReady || initialLoading) {
     return (
       <div className="min-h-[100dvh] bg-slate-900 flex items-center justify-center text-white pt-[env(safe-area-inset-top)]">
         <LoadingSpinner message="ゲームデータを読み込み中..." />

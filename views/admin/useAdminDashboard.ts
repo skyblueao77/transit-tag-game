@@ -8,6 +8,7 @@ import { exportMissionsToJson, getRoleForTeam, parseImportedMissionsJson } from 
 import {
   calibrateAdminServerClock,
   isCurrentAuthUserAdmin,
+  subscribeAuthUserId,
 } from '../../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../../src/application/adminReveal';
@@ -207,18 +208,33 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      try {
-        const isAdminUser = await isCurrentAuthUserAdmin();
-        if (mounted && isAdminUser) {
-          setIsAuthorized(true);
-        }
-      } catch (err) {
-        console.error('Error verifying admin authentication:', err);
+    let prevUid: string | null | undefined;
+    let authCheckSeq = 0;
+    const unsubscribe = subscribeAuthUserId(uid => {
+      if (!mounted) return;
+      const seq = ++authCheckSeq;
+      if (!uid) {
+        prevUid = null;
+        setIsAuthorized(false);
+        return;
       }
-    })();
+      if (prevUid !== undefined && prevUid !== uid) {
+        setIsAuthorized(false);
+      }
+      prevUid = uid;
+      void isCurrentAuthUserAdmin()
+        .then(isAdminUser => {
+          if (mounted && seq === authCheckSeq && isAdminUser) {
+            setIsAuthorized(true);
+          }
+        })
+        .catch(err => {
+          console.error('Error verifying admin authentication:', err);
+        });
+    });
     return () => {
       mounted = false;
+      unsubscribe();
     };
   }, []);
 
