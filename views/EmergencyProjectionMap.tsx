@@ -89,7 +89,10 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const map = L.map(containerRef.current).setView([35.6812, 139.7671], 11);
+    const map = L.map(containerRef.current, {
+      zoomAnimation: false,
+      markerZoomAnimation: false,
+    }).setView([35.6812, 139.7671], 11);
     L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
       attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener noreferrer">地理院タイル</a>',
       crossOrigin: true,
@@ -102,13 +105,16 @@ const EmergencyProjectionMap: React.FC<Props> = ({ projections, users }) => {
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(() => {
-        map.invalidateSize({ pan: false });
+        if (mapRef.current === map) {
+          map.invalidateSize({ pan: false });
+        }
       });
       resizeObserver.observe(containerRef.current);
     }
 
     return () => {
       resizeObserver?.disconnect();
+      map.stop();
       map.remove();
       mapRef.current = null;
       markerLayerRef.current = null;

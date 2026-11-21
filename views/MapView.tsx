@@ -279,7 +279,11 @@ const MapView: React.FC<Props> = ({
     if (!containerRef.current || isOniLocked) return;
     if (!mapRef.current) {
       const hasInitialCoords = Boolean(privateLocation);
-      const map = L.map(containerRef.current, { zoomControl: false }).setView(
+      const map = L.map(containerRef.current, {
+        zoomControl: false,
+        zoomAnimation: false,
+        markerZoomAnimation: false,
+      }).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671],
         hasInitialCoords ? 14 : 13,
       );
@@ -296,7 +300,9 @@ const MapView: React.FC<Props> = ({
     if (typeof ResizeObserver !== 'undefined' && containerRef.current && mapRef.current) {
       const currentMap = mapRef.current;
       resizeObserver = new ResizeObserver(() => {
-        currentMap.invalidateSize({ pan: false });
+        if (mapRef.current === currentMap) {
+          currentMap.invalidateSize({ pan: false });
+        }
       });
       resizeObserver.observe(containerRef.current);
     }
@@ -306,6 +312,7 @@ const MapView: React.FC<Props> = ({
       markersRef.current = {};
       hasInitialCenteredRef.current = false;
       if (mapRef.current) {
+        mapRef.current.stop();
         mapRef.current.remove();
         mapRef.current = null;
       }
@@ -316,7 +323,7 @@ const MapView: React.FC<Props> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || isOniLocked || !privateLocation || hasInitialCenteredRef.current) return;
-    map.setView([privateLocation.latitude, privateLocation.longitude], Math.max(map.getZoom(), 14), { animate: true });
+    map.setView([privateLocation.latitude, privateLocation.longitude], Math.max(map.getZoom(), 14), { animate: false });
     hasInitialCenteredRef.current = true;
   }, [privateLocation, isOniLocked]);
 
@@ -326,8 +333,8 @@ const MapView: React.FC<Props> = ({
       toast.info('現在地を取得中です。GPSが有効か確認してください。');
       return;
     }
-    map.flyTo([privateLocation.latitude, privateLocation.longitude], Math.max(map.getZoom(), 15), {
-      duration: 0.6,
+    map.setView([privateLocation.latitude, privateLocation.longitude], Math.max(map.getZoom(), 15), {
+      animate: false,
     });
   }, [privateLocation]);
 
@@ -464,64 +471,61 @@ const MapView: React.FC<Props> = ({
         <div ref={containerRef} className="relative isolate z-0 h-full w-full" />
 
         {/* 地図上部オーバーレイHUD（ステータスバッジ・現在地ボタン・ズームボタン・駅提案カードの重なりを防止） */}
-        <div className="pointer-events-none absolute top-3 inset-x-3 z-[1001] flex flex-col gap-2">
-          <div className="flex items-start justify-between gap-2">
-            {!isAdminViewer ? (
+        <div className="pointer-events-none absolute top-3 inset-x-3 z-[1001] flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0 flex flex-col items-start gap-1.5">
+            {!isAdminViewer && (
               <MapStatusBadges currentUser={currentUser} timeLeft={timeLeft} formatTime={formatTime} />
-            ) : (
-              <div />
             )}
-            <div className="flex flex-col items-end gap-2 shrink-0">
+            {!isAdminViewer && !isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
+              <div className="w-full max-w-sm">
+                <StationSuggestCard
+                  suggestion={transitSuggestion}
+                  candidates={transitCandidates}
+                  currentLastStation={currentUser.lastStation}
+                  onConfirmStation={handleConfirmStation}
+                  onDismiss={() => {
+                    setIsSuggestDismissed(true);
+                    if (transitSuggestion) {
+                      lastDismissedKey.current = transitSuggestion.displayText;
+                    }
+                  }}
+                  isAutoUpdateEnabled={isAutoUpdateEnabled}
+                  onToggleAutoUpdate={handleToggleAutoUpdate}
+                />
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleRecenterMap}
+              aria-label="現在地へ戻る"
+              title="現在地へ戻る"
+              className="pointer-events-auto w-10 h-10 rounded-xl bg-white/95 hover:bg-white text-slate-800 shadow-lg border border-slate-200 flex items-center justify-center active:scale-95 transition-all"
+            >
+              <LocateFixed size={18} className={privateLocation ? 'text-blue-600' : 'text-slate-400'} />
+            </button>
+            <div className="pointer-events-auto flex flex-col rounded-xl bg-white/95 shadow-lg border border-slate-200 overflow-hidden">
               <button
                 type="button"
-                onClick={handleRecenterMap}
-                aria-label="現在地へ戻る"
-                title="現在地へ戻る"
-                className="pointer-events-auto w-10 h-10 rounded-xl bg-white/95 hover:bg-white text-slate-800 shadow-lg border border-slate-200 flex items-center justify-center active:scale-95 transition-all"
+                onClick={() => mapRef.current?.zoomIn()}
+                aria-label="地図を拡大"
+                title="地図を拡大"
+                className="w-10 h-10 flex items-center justify-center text-slate-800 hover:bg-slate-50 active:scale-95 transition-all border-b border-slate-200"
               >
-                <LocateFixed size={18} className={privateLocation ? 'text-blue-600' : 'text-slate-400'} />
+                <Plus size={18} />
               </button>
-              <div className="pointer-events-auto flex flex-col rounded-xl bg-white/95 shadow-lg border border-slate-200 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => mapRef.current?.zoomIn()}
-                  aria-label="地図を拡大"
-                  title="地図を拡大"
-                  className="w-10 h-10 flex items-center justify-center text-slate-800 hover:bg-slate-50 active:scale-95 transition-all border-b border-slate-200"
-                >
-                  <Plus size={18} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => mapRef.current?.zoomOut()}
-                  aria-label="地図を縮小"
-                  title="地図を縮小"
-                  className="w-10 h-10 flex items-center justify-center text-slate-800 hover:bg-slate-50 active:scale-95 transition-all"
-                >
-                  <Minus size={18} />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => mapRef.current?.zoomOut()}
+                aria-label="地図を縮小"
+                title="地図を縮小"
+                className="w-10 h-10 flex items-center justify-center text-slate-800 hover:bg-slate-50 active:scale-95 transition-all"
+              >
+                <Minus size={18} />
+              </button>
             </div>
           </div>
-
-          {!isAdminViewer && !isSuggestDismissed && transitSuggestion && onUpdateLastStation && (
-            <div className="w-full max-w-sm sm:max-w-md mx-auto">
-              <StationSuggestCard
-                suggestion={transitSuggestion}
-                candidates={transitCandidates}
-                currentLastStation={currentUser.lastStation}
-                onConfirmStation={handleConfirmStation}
-                onDismiss={() => {
-                  setIsSuggestDismissed(true);
-                  if (transitSuggestion) {
-                    lastDismissedKey.current = transitSuggestion.displayText;
-                  }
-                }}
-                isAutoUpdateEnabled={isAutoUpdateEnabled}
-                onToggleAutoUpdate={handleToggleAutoUpdate}
-              />
-            </div>
-          )}
         </div>
 
         {isAdminViewer ? (
@@ -529,7 +533,7 @@ const MapView: React.FC<Props> = ({
             管理者プレビュー（閲覧専用）
           </div>
         ) : (
-          <div className="absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-4 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
+          <div className="absolute bottom-3 sm:bottom-6 left-1/2 -translate-x-1/2 z-[1000] w-full px-3 sm:px-6 flex flex-col items-center gap-3 pointer-events-none [&>*]:pointer-events-auto">
             {currentRole === 'ONI' && (
               <MapOniCapturePanel
                 currentUser={currentUser}

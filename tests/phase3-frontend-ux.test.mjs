@@ -138,6 +138,11 @@ describe('Phase 3: Frontend stability, performance & UX', () => {
 
     const useAuthUserSource = fs.readFileSync(path.resolve('src/hooks/useAuthUser.ts'), 'utf8');
     assert.match(useAuthUserSource, /prevAuthUserIdRef/);
+    assert.match(useAuthUserSource, /hasConfirmedUserRef/);
+    assert.match(useAuthUserSource, /meta\?\.hasPendingWrites/);
+
+    const subscriptionsSource = fs.readFileSync(path.resolve('src/infrastructure/firebase/subscriptions.ts'), 'utf8');
+    assert.match(subscriptionsSource, /hasPendingWrites:\s*snapshot\.metadata\.hasPendingWrites/);
 
     const useConfirmDialogSource = fs.readFileSync(path.resolve('src/hooks/useConfirmDialog.ts'), 'utf8');
     assert.match(useConfirmDialogSource, /resolverRef\.current\(false\)/);

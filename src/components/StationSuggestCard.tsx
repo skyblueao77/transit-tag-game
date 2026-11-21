@@ -54,7 +54,7 @@ export const StationSuggestCard: React.FC<Props> = ({
   return (
     <aside
       aria-label="現在地の提案"
-      className="pointer-events-auto w-full max-w-sm mx-auto bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-slate-700/80 p-3 flex flex-col gap-2 transition-all"
+      className="pointer-events-auto w-full max-w-sm bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-slate-700/80 p-2.5 sm:p-3 flex flex-col gap-2 transition-all"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">

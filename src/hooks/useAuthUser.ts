@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from '../../types';
 import {
   getCurrentAuthUserId,
@@ -27,6 +27,18 @@ export function useAuthUser(): UseAuthUserResult {
   const [userLoading, setUserLoading] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
   const prevAuthUserIdRef = useRef<string | null>(authUserId);
+  const hasConfirmedUserRef = useRef(false);
+
+  const setCurrentUserConfirmed = useCallback<React.Dispatch<React.SetStateAction<User | null>>>(
+    action => {
+      setCurrentUser(prev => {
+        const next = typeof action === 'function' ? action(prev) : action;
+        hasConfirmedUserRef.current = next !== null;
+        return next;
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     return subscribeAuthUserId(uid => {
@@ -35,11 +47,13 @@ export function useAuthUser(): UseAuthUserResult {
       setAuthUserId(uid);
       setAuthReady(true);
       if (!uid) {
+        hasConfirmedUserRef.current = false;
         setCurrentUser(null);
         setIsAuthAdmin(false);
         setUserLoading(false);
         setInitialLoading(false);
       } else if (uid !== prevUid) {
+        hasConfirmedUserRef.current = false;
         setUserLoading(true);
       }
     });
@@ -47,9 +61,12 @@ export function useAuthUser(): UseAuthUserResult {
 
   useEffect(() => {
     if (!authUserId) {
+      hasConfirmedUserRef.current = false;
       setIsAuthAdmin(false);
       return;
     }
+
+    hasConfirmedUserRef.current = false;
 
     const unsubscribeAdmin = subscribeCurrentAuthUserAdmin(
       authUserId,
@@ -63,13 +80,18 @@ export function useAuthUser(): UseAuthUserResult {
 
     const unsubscribe = subscribeCurrentPlayer(
       authUserId,
-      player => {
+      (player, meta) => {
+        if (player && meta?.hasPendingWrites && !hasConfirmedUserRef.current) {
+          return;
+        }
+        hasConfirmedUserRef.current = Boolean(player);
         setCurrentUser(player);
         setUserLoading(false);
         setInitialLoading(false);
       },
       error => {
         console.error('Error fetching current user data:', error);
+        hasConfirmedUserRef.current = false;
         setCurrentUser(null);
         setUserLoading(false);
         setInitialLoading(false);
@@ -89,7 +111,7 @@ export function useAuthUser(): UseAuthUserResult {
     isAuthAdmin,
     userLoading,
     initialLoading,
-    setCurrentUser,
+    setCurrentUser: setCurrentUserConfirmed,
   };
 }
 
