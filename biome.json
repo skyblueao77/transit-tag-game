@@ -6,7 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["**", "!!**/dist", "!!**/playwright-report", "!!**/test-results", "!!public/data/stations.json"],
+		"includes": ["**", "!!**/dist", "!!**/dist-e2e", "!!**/playwright-report", "!!**/test-results", "!!public/data/stations.json"],
 		"maxSize": 4194304
 	},
 	"formatter": {
