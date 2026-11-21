@@ -96,6 +96,23 @@ describe('Map view extracted UI components', () => {
       formatTime,
     });
     assert.match(periodicHtml, /定期位置公開中！ 残り 3:05/);
+
+    const finalPriorityHtml = await renderSsrComponent('/views/map/MapStatusHeader.tsx', {
+      isOffline: false,
+      timeLeft: makeTimeLeft({
+        nextReveal: 300,
+        final: 900,
+      }),
+      gameConfig: makeConfig({
+        gameStatus: 'FINAL_MISSION',
+        isFinalMissionActive: true,
+      }),
+      isTeamSplitAlert: false,
+      maxTeammateDistance: 0,
+      formatTime,
+    });
+    assert.match(finalPriorityHtml, /最終ミッション発動中！ 残り 15分/);
+    assert.doesNotMatch(finalPriorityHtml, /次の位置公開まで/);
   });
 
   test('MapStatusBadges renders active status badges and hides shinkansen badge when not ACTIVE', async () => {
@@ -127,6 +144,13 @@ describe('Map view extracted UI components', () => {
 
     assert.match(waitingHtml, /セーフゾーン中/);
     assert.doesNotMatch(waitingHtml, /新幹線移動:/);
+
+    const unlimitedShinkansenHtml = await renderSsrComponent('/views/map/MapStatusBadges.tsx', {
+      currentUser: makeUser({ status: 'ACTIVE', protectionZone: 'NONE' }),
+      timeLeft: makeTimeLeft({ shinkansenRemaining: Number.POSITIVE_INFINITY }),
+      formatTime,
+    });
+    assert.match(unlimitedShinkansenHtml, /新幹線移動: 無制限/);
   });
 
   test('MapOniCapturePanel disables capture when target is protected or game/player is inactive', async () => {

@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { LocateFixed } from 'lucide-react';
+import { LocateFixed, Minus, Plus } from 'lucide-react';
 import type { User, PrivateLocation, ExposedLocation, GameConfig, Role, ProtectionZoneType } from '../types';
 import type { Coordinates } from '../src/application';
 import {
@@ -31,8 +31,10 @@ import MapRunnerControls from './map/MapRunnerControls';
 const AUTO_STATION_UPDATE_COOLDOWN_MS = 10 * 60 * 1000;
 
 function formatTime(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
+  if (!Number.isFinite(sec)) return '無制限';
+  const clamped = Math.max(0, sec);
+  const m = Math.floor(clamped / 60);
+  const s = Math.floor(clamped % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
@@ -277,7 +279,7 @@ const MapView: React.FC<Props> = ({
     if (!containerRef.current || isOniLocked) return;
     if (!mapRef.current) {
       const hasInitialCoords = Boolean(privateLocation);
-      const map = L.map(containerRef.current).setView(
+      const map = L.map(containerRef.current, { zoomControl: false }).setView(
         [privateLocation?.latitude ?? 35.6812, privateLocation?.longitude ?? 139.7671],
         hasInitialCoords ? 14 : 13,
       );
@@ -459,9 +461,9 @@ const MapView: React.FC<Props> = ({
       />
 
       <div className="relative flex-1 min-h-0">
-        <div ref={containerRef} className="h-full w-full z-0" />
+        <div ref={containerRef} className="relative isolate z-0 h-full w-full" />
 
-        {/* 地図上部オーバーレイHUD（ステータスバッジ・現在地ボタン・駅提案カードの重なりを防止） */}
+        {/* 地図上部オーバーレイHUD（ステータスバッジ・現在地ボタン・ズームボタン・駅提案カードの重なりを防止） */}
         <div className="pointer-events-none absolute top-3 inset-x-3 z-[1001] flex flex-col gap-2">
           <div className="flex items-start justify-between gap-2">
             {!isAdminViewer ? (
@@ -469,15 +471,37 @@ const MapView: React.FC<Props> = ({
             ) : (
               <div />
             )}
-            <button
-              type="button"
-              onClick={handleRecenterMap}
-              aria-label="現在地へ戻る"
-              title="現在地へ戻る"
-              className="pointer-events-auto shrink-0 w-10 h-10 rounded-xl bg-white/95 hover:bg-white text-slate-800 shadow-lg border border-slate-200 flex items-center justify-center active:scale-95 transition-all"
-            >
-              <LocateFixed size={18} className={privateLocation ? 'text-blue-600' : 'text-slate-400'} />
-            </button>
+            <div className="flex flex-col items-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleRecenterMap}
+                aria-label="現在地へ戻る"
+                title="現在地へ戻る"
+                className="pointer-events-auto w-10 h-10 rounded-xl bg-white/95 hover:bg-white text-slate-800 shadow-lg border border-slate-200 flex items-center justify-center active:scale-95 transition-all"
+              >
+                <LocateFixed size={18} className={privateLocation ? 'text-blue-600' : 'text-slate-400'} />
+              </button>
+              <div className="pointer-events-auto flex flex-col rounded-xl bg-white/95 shadow-lg border border-slate-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => mapRef.current?.zoomIn()}
+                  aria-label="地図を拡大"
+                  title="地図を拡大"
+                  className="w-10 h-10 flex items-center justify-center text-slate-800 hover:bg-slate-50 active:scale-95 transition-all border-b border-slate-200"
+                >
+                  <Plus size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => mapRef.current?.zoomOut()}
+                  aria-label="地図を縮小"
+                  title="地図を縮小"
+                  className="w-10 h-10 flex items-center justify-center text-slate-800 hover:bg-slate-50 active:scale-95 transition-all"
+                >
+                  <Minus size={18} />
+                </button>
+              </div>
+            </div>
           </div>
 
           {!isAdminViewer && !isSuggestDismissed && transitSuggestion && onUpdateLastStation && (

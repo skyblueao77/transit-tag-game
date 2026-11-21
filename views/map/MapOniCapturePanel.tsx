@@ -44,7 +44,7 @@ const MapOniCapturePanel: React.FC<MapOniCapturePanelProps> = ({
         value={selectedTargetId}
         onChange={event => onSelectTarget(event.target.value)}
         disabled={isProcessing || captureCandidates.length === 0}
-        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold shadow-xl disabled:bg-slate-100"
+        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base sm:text-sm font-bold shadow-xl disabled:bg-slate-100"
       >
         {captureCandidates.length === 0 ? (
           <option value="">捕獲可能な逃走者はいません</option>

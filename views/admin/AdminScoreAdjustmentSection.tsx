@@ -42,7 +42,7 @@ const AdminScoreAdjustmentSection: React.FC<AdminScoreAdjustmentSectionProps> = 
       ))}
     </div>
     <div className="grid grid-cols-2 gap-2">
-      <select value={scoreTeam} onChange={e => onChangeScoreTeam(e.target.value as 'A' | 'B')} className="p-2 border rounded-xl text-xs font-bold text-slate-800">
+      <select value={scoreTeam} onChange={e => onChangeScoreTeam(e.target.value as 'A' | 'B')} className="p-2 border rounded-xl text-base sm:text-xs font-bold text-slate-800">
         <option value="A">Team A</option>
         <option value="B">Team B</option>
       </select>
@@ -50,7 +50,7 @@ const AdminScoreAdjustmentSection: React.FC<AdminScoreAdjustmentSectionProps> = 
         type="number"
         value={scoreDeltaInput}
         onChange={e => onChangeScoreDeltaInput(e.target.value)}
-        className="p-2 border rounded-xl text-xs font-bold text-slate-800"
+        className="p-2 border rounded-xl text-base sm:text-xs font-bold text-slate-800"
         placeholder="増減値 (例: 10 / -5)"
       />
     </div>
@@ -60,7 +60,7 @@ const AdminScoreAdjustmentSection: React.FC<AdminScoreAdjustmentSectionProps> = 
         id="score-reason-select"
         value={scoreReasonCode}
         onChange={e => onChangeScoreReasonCode(e.target.value as ScoreAdjustmentReasonCode)}
-        className="w-full p-2 border rounded-xl text-xs font-bold text-slate-800"
+        className="w-full p-2 border rounded-xl text-base sm:text-xs font-bold text-slate-800"
       >
         <option value="CORRECTION">スコア訂正</option>
         <option value="BONUS">運営ボーナス</option>

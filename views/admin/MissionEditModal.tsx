@@ -20,12 +20,16 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || busy) return;
+    const normalizedPoints = Math.trunc(Number(points));
+    if (!Number.isInteger(normalizedPoints) || normalizedPoints < 1 || normalizedPoints > 100) {
+      return;
+    }
     setBusy(true);
     const mission: Mission = {
       id: initialMission?.id || `custom_${Date.now()}`,
       title: title.trim(),
       description: description.trim(),
-      points: Number(points) || 20,
+      points: normalizedPoints,
       type,
       area: area || 'ALL',
       region: initialMission?.region || 'ALL',
@@ -47,7 +51,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
           <h3 className="text-base font-black text-slate-900">
             {initialMission ? 'ミッションを編集' : '新規ミッション作成'}
           </h3>
-          <button type="button" onClick={onClose} disabled={busy} className="p-1 text-slate-400">
+          <button type="button" onClick={onClose} disabled={busy} aria-label="モーダルを閉じる" className="w-9 h-9 flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-600">
             <X size={20} />
           </button>
         </div>
@@ -63,7 +67,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
               value={title}
               onChange={e => setTitle(e.target.value)}
               placeholder="例: 新宿駅の東口で写真を撮れ"
-              className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+              className="w-full p-2.5 bg-slate-50 border rounded-xl text-base sm:text-xs font-bold"
               required
             />
           </div>
@@ -78,7 +82,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
               onChange={e => setDescription(e.target.value)}
               placeholder="達成条件や撮影ルールなどを記載"
               rows={3}
-              className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-medium"
+              className="w-full p-2.5 bg-slate-50 border rounded-xl text-base sm:text-xs font-medium"
               required
             />
           </div>
@@ -86,21 +90,21 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label htmlFor="mission-modal-points" className="block text-[10px] font-black text-slate-400 mb-1 uppercase tracking-wider">
-                獲得ポイント
+                獲得ポイント (1〜100pt)
               </label>
-              <select
+              <input
                 id="mission-modal-points"
-                value={points}
-                onChange={e => setPoints(Number(e.target.value))}
-                className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
-              >
-                <option value={15}>15 pt（手軽）</option>
-                <option value={20}>20 pt（普通）</option>
-                <option value={25}>25 pt（中級）</option>
-                <option value={30}>30 pt（上級）</option>
-                <option value={50}>50 pt（超上級）</option>
-                <option value={100}>100 pt（クライマックス）</option>
-              </select>
+                type="number"
+                min={1}
+                max={100}
+                step={1}
+                inputMode="numeric"
+                value={points || ''}
+                onChange={e => setPoints(parseInt(e.target.value, 10) || 0)}
+                placeholder="15〜100"
+                className="w-full p-2.5 bg-slate-50 border rounded-xl text-base sm:text-xs font-bold"
+                required
+              />
             </div>
 
             <div>
@@ -111,7 +115,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
                 id="mission-modal-type"
                 value={type}
                 onChange={e => setType(e.target.value as 'PHOTO' | 'CHECKIN')}
-                className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+                className="w-full p-2.5 bg-slate-50 border rounded-xl text-base sm:text-xs font-bold"
               >
                 <option value="PHOTO">📸 写真撮影</option>
                 <option value="CHECKIN">📍 駅チェックイン</option>
@@ -129,7 +133,7 @@ const MissionEditModal: React.FC<MissionEditModalProps> = ({ initialMission, onS
               value={area}
               onChange={e => setArea(e.target.value)}
               placeholder="ALL / 山手線 など"
-              className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold"
+              className="w-full p-2.5 bg-slate-50 border rounded-xl text-base sm:text-xs font-bold"
             />
           </div>
 

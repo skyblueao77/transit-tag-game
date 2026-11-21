@@ -7,6 +7,8 @@ interface UseMapGeolocationParams {
   currentUserId: string;
   gameSessionId?: string;
   gameStatus: GameStatus;
+  onLocalPosition?: (coords: Coordinates) => void;
+  onPermissionError?: (error: GeolocationPositionError) => void;
   onUpdatePrivateLocation: (
     input: Coordinates & { playerId: string; expectedSessionId: string },
   ) => Promise<UpdatePrivateLocationResult>;
@@ -20,26 +22,42 @@ export default function useMapGeolocation({
   currentUserId,
   gameSessionId,
   gameStatus,
+  onLocalPosition,
+  onPermissionError,
   onUpdatePrivateLocation,
 }: UseMapGeolocationParams): void {
   const watchIdRef = useRef<number | null>(null);
   const lastUploadTimeRef = useRef<number>(0);
   const lastUploadedCoordsRef = useRef<Coordinates | null>(null);
+  const permissionErrorNotifiedRef = useRef<boolean>(false);
+  const onLocalPositionRef = useRef(onLocalPosition);
+  const onPermissionErrorRef = useRef(onPermissionError);
   const isTrackingEnabled = Boolean(currentUserId && isGameActive(gameStatus));
 
+  useEffect(() => {
+    onLocalPositionRef.current = onLocalPosition;
+  }, [onLocalPosition]);
+
+  useEffect(() => {
+    onPermissionErrorRef.current = onPermissionError;
+  }, [onPermissionError]);
+
   const updateLocation = useCallback(async (position: GeolocationPosition) => {
-    if (!currentUserId || !gameSessionId || !canUpdatePrivateLocation(gameStatus)) return;
-    if (!navigator.onLine) return;
+    if (!currentUserId || !canUpdatePrivateLocation(gameStatus)) return;
+    const { latitude, longitude, accuracy } = position.coords;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+
+    const currentCoords: Coordinates = { latitude, longitude };
+    if (!Number.isFinite(accuracy) || accuracy <= 400) {
+      onLocalPositionRef.current?.(currentCoords);
+    }
+
+    if (!gameSessionId || !navigator.onLine) return;
 
     const now = Date.now();
-    const currentCoords: Coordinates = {
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-    };
-
     const decision = shouldThrottleLocationUpdate({
       currentCoords,
-      currentAccuracy: position.coords.accuracy,
+      currentAccuracy: accuracy,
       currentTimeMs: now,
       lastUploadedCoords: lastUploadedCoordsRef.current,
       lastUploadedTimeMs: lastUploadTimeRef.current,
@@ -79,9 +97,16 @@ export default function useMapGeolocation({
       }
       watchIdRef.current = navigator.geolocation.watchPosition(
         position => {
+          permissionErrorNotifiedRef.current = false;
           void updateLocationRef.current(position);
         },
-        error => console.error('Geolocation watch error:', error),
+        error => {
+          console.error('Geolocation watch error:', error);
+          if (error.code === 1 && !permissionErrorNotifiedRef.current) {
+            permissionErrorNotifiedRef.current = true;
+            onPermissionErrorRef.current?.(error);
+          }
+        },
         { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 },
       );
     };
@@ -105,9 +130,19 @@ export default function useMapGeolocation({
       }
     };
 
+    const handleResumeWatch = () => {
+      if (document.visibilityState === 'visible' && watchIdRef.current === null) {
+        startWatching();
+      }
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pageshow', handleResumeWatch);
+    window.addEventListener('online', handleResumeWatch);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handleResumeWatch);
+      window.removeEventListener('online', handleResumeWatch);
       stopWatching();
     };
   }, [isTrackingEnabled]);

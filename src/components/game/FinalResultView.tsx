@@ -29,7 +29,7 @@ const FinalResultView: React.FC<FinalResultViewProps> = ({
   onChooseSafetyAction,
   onSignOutAndReload,
 }) => (
-  <div className="min-h-[100dvh] bg-slate-900 text-white p-6 flex flex-col items-center overflow-y-auto">
+  <div className="min-h-[100dvh] bg-slate-900 text-white p-6 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] flex flex-col items-center overflow-y-auto">
     <Trophy size={80} className="text-amber-500 mb-6 animate-bounce" />
     <h1 className="text-4xl font-black italic mb-2">FINAL RESULT</h1>
     <p className="text-slate-400 font-bold mb-12 uppercase tracking-widest">全行程終了！お疲れ様でした</p>

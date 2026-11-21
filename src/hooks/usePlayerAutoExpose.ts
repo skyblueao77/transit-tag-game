@@ -111,6 +111,19 @@ export default function usePlayerAutoExpose({
       return;
     }
 
+    const handleResumeTick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (!navigator.onLine) return;
+      setWindowTick(tick => tick + 1);
+    };
+
+    const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
+    if (hasDom) {
+      document.addEventListener('visibilitychange', handleResumeTick);
+      window.addEventListener('pageshow', handleResumeTick);
+      window.addEventListener('online', handleResumeTick);
+    }
+
     const now = getServerNowMs();
     const existing = exposedLocations[currentUser.id];
     const nextCheckMs = resolveNextAutoExposeTickDelayMs({
@@ -119,12 +132,22 @@ export default function usePlayerAutoExpose({
       currentUser,
       existingExposed: existing,
     });
-    if (nextCheckMs === null) return;
+    const timer = nextCheckMs !== null
+      ? window.setTimeout(() => {
+          setWindowTick(tick => tick + 1);
+        }, nextCheckMs)
+      : undefined;
 
-    const timer = window.setTimeout(() => {
-      setWindowTick(tick => tick + 1);
-    }, nextCheckMs);
-    return () => window.clearTimeout(timer);
+    return () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+      if (hasDom) {
+        document.removeEventListener('visibilitychange', handleResumeTick);
+        window.removeEventListener('pageshow', handleResumeTick);
+        window.removeEventListener('online', handleResumeTick);
+      }
+    };
   }, [
     isOnline,
     isAdmin,

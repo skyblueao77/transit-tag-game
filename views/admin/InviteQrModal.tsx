@@ -20,7 +20,7 @@ const InviteQrModal: React.FC<InviteQrModalProps> = ({
     <div className="w-full max-w-sm max-h-[90dvh] overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl text-center">
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-base font-black text-slate-900">参加用 QRコード</h3>
-        <button type="button" onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600">
+        <button type="button" onClick={onClose} aria-label="モーダルを閉じる" className="w-9 h-9 flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-600">
           <X size={20} />
         </button>
       </div>

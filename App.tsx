@@ -13,10 +13,11 @@ import {
   XCircle,
   Clock,
   WifiOff,
+  LogOut,
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import type { Role, ProtectionZoneType, User } from './types';
-import type { UpdatePrivateLocationInput } from './src/application';
+import type { CapturePlayerResult, Coordinates, UpdatePrivateLocationInput } from './src/application';
 import type { SafetyAction, SafetyReasonCode } from './src/game/playerSafety';
 import {
   activateInvincibility,
@@ -84,6 +85,39 @@ function normalizeDirectAdminPath(): void {
   if (typeof window !== 'undefined' && window.location.pathname === '/admin' && !window.location.hash) {
     window.history.replaceState(null, '', '/#/admin');
   }
+}
+
+function getCaptureFailureMessage(result: Extract<CapturePlayerResult, { ok: false }>): string {
+  if (result.reason === 'SESSION_CHANGED') {
+    return 'ゲームセッションが更新されました。画面を再読み込みして確認してください。';
+  }
+  if (result.reason === 'TARGET_NOT_FOUND' || result.reason === 'PLAYER_NOT_FOUND') {
+    return '対象プレイヤーの情報が見つかりません。';
+  }
+  if (result.reason === 'CAPTURE_REJECTED') {
+    switch (result.domainReason) {
+      case 'TARGET_INVINCIBLE':
+        return '対象プレイヤーは現在「無敵モード」中のため捕獲できません。';
+      case 'TARGET_PROTECTION_ZONE':
+        return '対象プレイヤーは特例保護エリア宣言中のため捕獲できません。';
+      case 'ONI_INITIAL_LOCK':
+        return '鬼の開始待機期間中はまだ捕獲できません。';
+      case 'TARGET_STATUS':
+        return '対象プレイヤーは現在アクティブ状態ではないため捕獲できません。';
+      case 'CAPTOR_STATUS':
+        return '現在のあなたのステータス（待機中・緊急停止など）では捕獲できません。';
+      case 'PHASE':
+        return '現在のゲームフェーズでは捕獲を実行できません。';
+      case 'SAME_TEAM':
+        return '同じチームのメンバーは捕獲できません。';
+      case 'CAPTOR_ROLE':
+      case 'TARGET_ROLE':
+        return '現在の役割状態（鬼／逃走者）では捕獲できません。';
+      default:
+        return 'このプレイヤーは捕獲できません。';
+    }
+  }
+  return '捕獲処理に失敗しました。通信環境をご確認ください。';
 }
 
 const App: React.FC = () => {
@@ -192,10 +226,30 @@ const AppContent: React.FC = () => {
     [setPrivateLocation],
   );
 
+  const handleLocalPosition = useCallback(
+    (coords: Coordinates) => {
+      if (!gameConfig.gameSessionId) return;
+      setPrivateLocation({
+        gameSessionId: gameConfig.gameSessionId,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
+    },
+    [gameConfig.gameSessionId, setPrivateLocation],
+  );
+
+  const handleGeolocationPermissionError = useCallback(() => {
+    toast.error('位置情報の利用が拒否されています。ブラウザの設定から位置情報を許可してください。', {
+      duration: 8000,
+    });
+  }, []);
+
   useMapGeolocation({
     currentUserId: !isAdmin && currentUser ? currentUser.id : '',
     gameSessionId: gameConfig.gameSessionId,
     gameStatus: gameConfig.gameStatus,
+    onLocalPosition: handleLocalPosition,
+    onPermissionError: handleGeolocationPermissionError,
     onUpdatePrivateLocation: handleUpdatePrivateLocation,
   });
 
@@ -352,9 +406,7 @@ const AppContent: React.FC = () => {
     }
     const result = await capturePlayer({ targetId, expectedSessionId: gameConfig.gameSessionId }, firebaseCaptureGateway);
     if (result.ok === false) {
-      toast.error(result.reason === 'CAPTURE_REJECTED'
-        ? 'このプレイヤーは捕獲できません。'
-        : '捕獲処理に失敗しました。');
+      toast.error(getCaptureFailureMessage(result));
     } else {
       toast.success(`${target.name} を捕獲しました！`);
     }
@@ -482,6 +534,17 @@ const AppContent: React.FC = () => {
   );
   const activeViewUser = currentUser ?? (isAdmin ? adminViewerUser : null);
 
+  const handleHeaderSignOut = useCallback(async () => {
+    const confirmed = await confirm({
+      title: 'ログアウトの確認',
+      description: 'ログアウトして参加・ログイン画面へ戻りますか？',
+      confirmLabel: 'ログアウト',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    await signOutCurrentUser();
+  }, [confirm]);
+
   // ---- 画面分岐 ----
 
   if (!authReady || initialLoading) {
@@ -513,7 +576,11 @@ const AppContent: React.FC = () => {
 
   return (
     <>
-      <Toaster position="top-center" richColors />
+      <Toaster
+        position="top-center"
+        richColors
+        mobileOffset={{ top: 'max(1rem, env(safe-area-inset-top))' }}
+      />
       <ConfirmDialog {...dialogProps} />
 
       {isAdminPath ? (
@@ -630,13 +697,13 @@ const AppContent: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             {currentUser && currentUser.team !== 'ADMIN' && (
               <button
                 type="button"
                 onClick={() => setSafetyDialogOpen(true)}
                 aria-label="SOS / リタイア"
-                className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center border border-red-100 active:scale-90 transition-all shadow-sm"
+                className="w-10 h-10 bg-red-50 text-red-600 rounded-xl flex items-center justify-center border border-red-100 active:scale-90 transition-all shadow-sm shrink-0"
               >
                 <Phone size={20} />
               </button>
@@ -652,6 +719,17 @@ const AppContent: React.FC = () => {
                 <div className="text-xs font-black text-slate-800">{gameConfig.teamBScore ?? 0}</div>
               </div>
             </div>
+            {authUserId && (
+              <button
+                type="button"
+                onClick={() => { void handleHeaderSignOut(); }}
+                aria-label="ログアウト"
+                title="ログアウト"
+                className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center border border-slate-200 active:scale-90 transition-all shrink-0"
+              >
+                <LogOut size={18} />
+              </button>
+            )}
           </div>
           </div>
         </header>
@@ -752,7 +830,8 @@ const AppContent: React.FC = () => {
           {isAdmin && (
             <Link
               to="/admin"
-              className="fixed right-6 bottom-24 w-14 h-14 bg-slate-900 text-white rounded-full flex items-center justify-center shadow-2xl z-[1000] border-4 border-white active:scale-90 transition-transform"
+              aria-label="管理者画面を開く"
+              className="fixed right-6 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] w-14 h-14 bg-slate-900 text-white rounded-full flex items-center justify-center shadow-2xl z-[1005] border-4 border-white active:scale-90 transition-transform"
             >
               <Settings size={24} />
             </Link>

@@ -44,13 +44,13 @@ const MapStatusHeader: React.FC<MapStatusHeaderProps> = ({
       <div className="z-[1001] px-4 py-2 bg-amber-600 text-white text-center text-xs font-black animate-pulse flex items-center justify-center gap-2">
         <MapPin size={14} /> 定期位置公開中！ 残り {formatTime(timeLeft.periodicRevealRemaining ?? 0)}
       </div>
-    ) : timeLeft.nextReveal > 0 ? (
-      <div className="z-[1001] px-4 py-2 bg-indigo-600 text-white text-center text-xs font-black flex items-center justify-center gap-2">
-        <Clock size={14} /> 次の位置公開まで {formatTime(timeLeft.nextReveal)}（開示: {gameConfig.periodicRevealDurationMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealDurationMinutes}分間 / 間隔: {gameConfig.periodicRevealIntervalMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes}分）
-      </div>
     ) : gameConfig.isFinalMissionActive ? (
       <div className="z-[1001] px-4 py-2 bg-slate-900 text-red-500 text-center text-xs font-black animate-pulse flex items-center justify-center gap-2 border-b border-red-500/50">
         <AlertCircle size={14} /> 最終ミッション発動中！ 残り {Math.floor(timeLeft.final / 60)}分
+      </div>
+    ) : timeLeft.nextReveal > 0 ? (
+      <div className="z-[1001] px-4 py-2 bg-indigo-600 text-white text-center text-xs font-black flex items-center justify-center gap-2">
+        <Clock size={14} /> 次の位置公開まで {formatTime(timeLeft.nextReveal)}（開示: {gameConfig.periodicRevealDurationMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealDurationMinutes}分間 / 間隔: {gameConfig.periodicRevealIntervalMinutes ?? DEFAULT_DYNAMIC_RULE_SETTINGS.periodicRevealIntervalMinutes}分）
       </div>
     ) : null}
 

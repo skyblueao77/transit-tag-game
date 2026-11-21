@@ -40,7 +40,7 @@ const MapStatusBadges: React.FC<MapStatusBadgesProps> = ({
     )}
     {timeLeft.shinkansenRemaining > 0 && currentUser.status === 'ACTIVE' && (
       <div className="bg-blue-600 text-white px-3 py-1.5 rounded-xl text-[10px] font-black shadow-lg flex items-center gap-1 w-fit">
-        <Train size={12} /> 新幹線移動: {formatTime(timeLeft.shinkansenRemaining)}
+        <Train size={12} /> 新幹線移動: {Number.isFinite(timeLeft.shinkansenRemaining) ? formatTime(timeLeft.shinkansenRemaining) : '無制限'}
       </div>
     )}
   </div>

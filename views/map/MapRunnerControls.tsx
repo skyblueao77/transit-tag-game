@@ -67,9 +67,9 @@ const MapRunnerControls: React.FC<MapRunnerControlsProps> = ({
   };
 
   return (
-    <div className="w-full max-w-sm sm:max-w-md flex flex-col items-center gap-2">
+    <div className="w-full max-w-sm sm:max-w-md flex flex-col items-center gap-1.5">
       {/* 特例保護エリア切り替えセレクター */}
-      <div className="w-full flex flex-wrap items-center justify-between gap-1.5 bg-white/95 backdrop-blur-md px-3 py-2 rounded-2xl border border-slate-200 shadow-xl">
+      <div className="w-full flex flex-wrap items-center justify-between gap-1.5 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-slate-200 shadow-xl">
         <span className="text-[10px] font-black text-slate-500 shrink-0">特例保護:</span>
         <div className="flex flex-wrap gap-1">
           <button
