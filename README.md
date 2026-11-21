@@ -4,7 +4,7 @@
 [![Release](https://github.com/skyblueao77/transit-tag-game/actions/workflows/release.yml/badge.svg)](https://github.com/skyblueao77/transit-tag-game/actions/workflows/release.yml)
 ![Version](https://img.shields.io/badge/Release-v1.2.0-blue)
 ![Firestore Rules](https://img.shields.io/badge/Firestore%20Rules-Hardened%20%26%20Zero--Trust%20Enforced-success)
-![Tests](https://img.shields.io/badge/Tests-Unit%20%7C%20Audit%20%7C%20Rules%20%7C%20Integration%20%7C%20Bundle-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-Unit%20%7C%20Audit%20%7C%20Rules%20%7C%20Integration%20%7C%20E2E%20%7C%20Bundle-brightgreen)
 ![100-Pattern Matrix](https://img.shields.io/badge/100--Pattern%20Matrix-100%25%20Verified-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue)
 ![Biome](https://img.shields.io/badge/Lint-Biome%20A11y%20Strict-purple)
@@ -329,6 +329,7 @@ GitHub Actions を利用した**PR 検証 CI (`ci.yml`)**・**タグプッシュ
    - 単体テスト全件実行 (`npm test`)
    - 監査リグレッションテスト実行 (`npm run test:audit`)
    - Firestore セキュリティルール & エミュレータ統合テスト実行 (`npm run test:rules`, `npm run test:integration`)
+   - Playwright モバイル E2E テスト実行 (`npm run test:e2e:mobile`)
    - 本番ビルド & バンドル検証 (`npm run build`, `npm run test:bundle`)
    - 本番依存脆弱性監査 (`npm audit --omit=dev`)
    - CodeQL (GitHub Default Setup: `actions`, `javascript-typescript`) & Dependabot (`.github/dependabot.yml`) による継続監視
@@ -344,7 +345,7 @@ GitHub Actions を利用した**PR 検証 CI (`ci.yml`)**・**タグプッシュ
 - `src/infrastructure/`: Firebase クライアント、トランザクションゲートウェイ、差分購読サブスクライバー、心拍同期
 - `src/hooks/`: React カスタムフック（認証状態、マップタイマー、位置監視、自動投影、Wake Lock、オンライン監視）
 - `views/`: 画面ビュー（`MapView.tsx` + `views/map/*`、`AdminView.tsx` + `views/admin/*`、`MissionView.tsx`、`SetupView.tsx`）
-- `tests/`: 単体テスト（Node native test runner + Vite SSR コンポーネント検証）、監査リグレッションテスト（`tests/audit/`）、Firestore ルールテスト、エミュレータ結合テスト、ビルド成果物検証（`production-bundle.test.mjs`）
+- `tests/`: 単体テスト（Node native test runner + Vite SSR コンポーネント検証）、監査リグレッションテスト（`tests/audit/`）、Firestore ルールテスト、エミュレータ結合テスト、Playwright モバイル E2E テスト（`playwright.config.mjs`）、ビルド成果物検証（`production-bundle.test.mjs`）
 
 ### 必要環境
 - **Node.js**: `v22` 以上（`.nvmrc` で `22` を指定）
@@ -376,6 +377,9 @@ npm run test:rules
 
 # トランザクション & ペイロード結合テスト (JDK 21+ 必須)
 npm run test:integration
+
+# Playwright モバイル E2E テスト (JDK 21+ 必須)
+npm run test:e2e:mobile
 
 # 本番依存の脆弱性監査
 npm audit --omit=dev
