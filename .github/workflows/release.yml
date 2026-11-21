@@ -83,9 +83,50 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev
 
+  mobile-e2e:
+    name: Mobile E2E (Pixel 7 & iPhone SE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Java (for Firebase emulator)
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers (Chromium & WebKit)
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Run mobile E2E tests (Pixel 7 & iPhone SE)
+        run: npm run test:e2e:mobile
+
+      - name: Upload Playwright report & failure traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-mobile-e2e-artifacts
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   publish:
     name: Publish GitHub Release
-    needs: verify
+    needs: [verify, mobile-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

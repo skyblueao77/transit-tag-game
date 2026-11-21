@@ -154,6 +154,18 @@ export function startEmergencyLocationHeartbeat(input: EmergencyLocationHeartbea
     });
   };
 
+  const handleResumeRefresh = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    refresh();
+  };
+
+  const hasDomListeners = typeof window !== 'undefined' && typeof document !== 'undefined';
+  if (hasDomListeners) {
+    document.addEventListener('visibilitychange', handleResumeRefresh);
+    window.addEventListener('pageshow', handleResumeRefresh);
+    window.addEventListener('online', handleResumeRefresh);
+  }
+
   const timer = scheduler.setInterval(refresh, EMERGENCY_LOCATION_HEARTBEAT_INTERVAL_MS);
   refresh();
 
@@ -161,6 +173,11 @@ export function startEmergencyLocationHeartbeat(input: EmergencyLocationHeartbea
     if (stopped) return;
     stopped = true;
     scheduler.clearInterval(timer);
+    if (hasDomListeners) {
+      document.removeEventListener('visibilitychange', handleResumeRefresh);
+      window.removeEventListener('pageshow', handleResumeRefresh);
+      window.removeEventListener('online', handleResumeRefresh);
+    }
   };
 }
 

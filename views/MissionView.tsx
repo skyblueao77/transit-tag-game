@@ -22,12 +22,20 @@ function getMissionFailureMessage(reason: string): string {
   switch (reason) {
     case 'SESSION_CHANGED':
       return 'ゲームセッションが更新されました。画面を再読み込みして確認してください。';
-    case 'INVALID_PHASE':
-      return '現在のゲームフェーズではこのミッションを完了報告できません。';
     case 'PLAYER_NOT_ACTIVE':
-      return '現在のプレイヤーステータスではミッション報告できません。';
+      return '現在のステータス（待機中・緊急停止など）ではミッションを完了報告できません。';
     case 'MISSION_NOT_FOUND':
       return '対象のミッションが見つかりません。';
+    case 'MISSION_NOT_ACTIVE':
+      return '現在このチームに配信されているミッションと一致しません。';
+    case 'MISSION_NOT_ALLOWED':
+      return '現在のゲームフェーズではこのミッションを完了報告できません。';
+    case 'ALREADY_COMPLETED':
+      return 'このミッションは既にチームで達成報告済みです。';
+    case 'UNAUTHENTICATED':
+    case 'INVALID_PLAYER_TEAM':
+    case 'PLAYER_NOT_FOUND':
+      return 'プレイヤー認証情報を確認できません。再ログインしてもう一度お試しください。';
     default:
       return '完了報告の処理に失敗しました。通信環境をご確認ください。';
   }
@@ -227,20 +235,35 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, missions = [] 
               )}
             </div>
 
-            {finalMission && !isAdminViewer && (
+            {finalMission && !isAdminViewer && (() => {
+              const isReportBlocked =
+                isSubmitting
+                || isFinalMissionCompleted
+                || user.status !== 'ACTIVE'
+                || !canCompleteMission(config.gameStatus, true);
+              return (
               <button
                 type="button"
                 onClick={handleComplete}
-                disabled={isSubmitting || isFinalMissionCompleted}
+                disabled={isReportBlocked}
                 className={`w-full py-5 font-black rounded-2xl shadow-xl transition-all text-xl uppercase ${
-                  isFinalMissionCompleted
+                  isReportBlocked
                     ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
                     : 'bg-red-600 hover:bg-red-700 text-white active:scale-95'
                 }`}
               >
-                {isSubmitting ? 'Processing...' : isFinalMissionCompleted ? '報告済み / Reported' : '完了報告を行う'}
+                {isSubmitting
+                  ? 'Processing...'
+                  : isFinalMissionCompleted
+                    ? '報告済み / Reported'
+                    : user.status !== 'ACTIVE'
+                      ? '待機・保護中は報告不可'
+                      : !canCompleteMission(config.gameStatus, true)
+                        ? '現在は報告できません'
+                        : '完了報告を行う'}
               </button>
-            )}
+              );
+            })()}
             {isAdminViewer && (
               <div className="w-full py-4 text-center rounded-2xl bg-slate-800 border border-slate-700 text-slate-400 text-sm font-bold">
                 管理者プレビュー（報告不可）
@@ -334,16 +357,29 @@ const MissionView: React.FC<Props> = ({ config, user, onComplete, missions = [] 
                 <div className="w-full py-4 text-center rounded-2xl bg-slate-100 border border-slate-200 text-slate-500 text-sm font-bold">
                   管理者プレビュー（報告不可）
                 </div>
-              ) : (
+              ) : (() => {
+                const isReportBlocked =
+                  isSubmitting
+                  || user.status !== 'ACTIVE'
+                  || !canCompleteMission(config.gameStatus, false);
+                return (
                 <button
                   type="button"
                   onClick={handleComplete}
-                  disabled={isSubmitting}
-                  className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-lg disabled:bg-slate-300"
+                  disabled={isReportBlocked}
+                  className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all text-lg disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 size={24} /> 完了報告を行う
+                  <CheckCircle2 size={24} />
+                  {isSubmitting
+                    ? '報告送信中...'
+                    : user.status !== 'ACTIVE'
+                      ? '待機・保護中は報告不可'
+                      : !canCompleteMission(config.gameStatus, false)
+                        ? '現在は報告できません'
+                        : '完了報告を行う'}
                 </button>
-              )}
+                );
+              })()}
             </div>
           ) : (
             <div className="text-center py-12">

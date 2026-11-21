@@ -171,7 +171,7 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
               id="assign-mission-select"
               value={manualMissionId}
               onChange={e => onChangeManualMissionId(e.target.value)}
-              className="w-full p-2 bg-white rounded-lg border border-slate-200 text-xs font-bold text-slate-800 mb-2 truncate"
+              className="w-full p-2 bg-white rounded-lg border border-slate-200 text-base sm:text-xs font-bold text-slate-800 mb-2 truncate"
             >
               <option value="">ミッションを選択してください...</option>
               {allMissionsList.map(m => (
@@ -263,7 +263,7 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
             value={missionSearch}
             onChange={e => onChangeSearch(e.target.value)}
             placeholder="ミッション名やキーワードで検索..."
-            className="w-full px-3.5 py-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs font-bold outline-none focus:border-indigo-500"
+            className="w-full px-3.5 py-2.5 bg-slate-50 rounded-xl border border-slate-200 text-base sm:text-xs font-bold outline-none focus:border-indigo-500"
           />
 
           <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
@@ -286,18 +286,20 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
                     <button
                       type="button"
                       onClick={() => onEditMission(m)}
-                      className="p-1.5 text-slate-500 hover:text-slate-900 bg-white rounded-lg border border-slate-200"
+                      aria-label={`${m.title}を編集`}
+                      className="min-w-9 min-h-9 flex items-center justify-center text-slate-500 hover:text-slate-900 bg-white rounded-lg border border-slate-200"
                       title="編集"
                     >
-                      <Edit2 size={13} />
+                      <Edit2 size={14} />
                     </button>
                     <button
                       type="button"
                       onClick={() => onDeleteMission(m)}
-                      className="p-1.5 text-red-500 hover:text-red-700 bg-white rounded-lg border border-slate-200"
+                      aria-label={`${m.title}を削除`}
+                      className="min-w-9 min-h-9 flex items-center justify-center text-red-500 hover:text-red-700 bg-white rounded-lg border border-slate-200"
                       title="削除"
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 </div>
@@ -338,7 +340,7 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
               <select
                 value={manualAwardTeam}
                 onChange={e => onChangeManualAwardTeam(e.target.value as 'A' | 'B')}
-                className="p-2 bg-white rounded-xl border border-indigo-200 text-xs font-bold text-slate-800"
+                className="p-2 bg-white rounded-xl border border-indigo-200 text-base sm:text-xs font-bold text-slate-800"
               >
                 <option value="A">Team A に加算</option>
                 <option value="B">Team B に加算</option>
@@ -346,7 +348,7 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
               <select
                 value={manualAwardMissionId}
                 onChange={e => onChangeManualAwardMissionId(e.target.value)}
-                className="p-2 bg-white rounded-xl border border-indigo-200 text-xs font-bold text-slate-800 truncate"
+                className="p-2 bg-white rounded-xl border border-indigo-200 text-base sm:text-xs font-bold text-slate-800 truncate"
               >
                 <option value="">ミッションを選択...</option>
                 {allMissionsList.map(m => (

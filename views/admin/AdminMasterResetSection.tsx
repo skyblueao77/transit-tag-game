@@ -43,7 +43,14 @@ const AdminMasterResetSection: React.FC<AdminMasterResetSectionProps> = ({
       <div className="mt-3 space-y-2 rounded-xl bg-white p-3 text-xs">
         <p>対象Player: <strong>{resetPreview.participantCount}名</strong></p>
         <label className="block pt-1 font-bold">確認のため「RESET」と入力してください:
-          <input value={resetConfirmationText} onChange={e => onChangeResetConfirmationText(e.target.value)} className="mt-1 w-full rounded-lg border p-2 text-xs" />
+          <input
+            value={resetConfirmationText}
+            onChange={e => onChangeResetConfirmationText(e.target.value)}
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            className="mt-1 w-full rounded-lg border p-2 text-base sm:text-xs"
+          />
         </label>
         <button
           type="button"

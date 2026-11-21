@@ -1,9 +1,78 @@
 rules_version = '2';
 
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: admins/{uid} (+ subcollections)
+//   - role: string ('admin'), createdAt: timestamp (== request.time)
+//
+// Collection: joinCodes/{code}
+//   - code: string, gameSessionId: string, active: bool, createdAt: int
+//
+// Collection: game_config/current
+//   - Required: gameSessionId: string (non-empty), sessionStartedAt: int (>= 0),
+//     sessionSchemaVersion: int (>= 2), gameStatus: string, day: int,
+//     missionMode: string, isGameOver: bool, teamARole: string, teamBRole: string,
+//     teamAScore: int, teamBScore: int
+//   - Optional: registrationOpen, currentJoinCode, victoryMode, startTime,
+//     nextRevealTime, lastCaptureTargetId, activeMissionA, activeMissionB,
+//     activeFinalMissionId, isFinalMissionActive, captureWaitMinutes,
+//     postShinkansenWaitMinutes, periodicRevealIntervalMinutes,
+//     periodicRevealDurationMinutes, locationRevealUntil, teamARevealUntil,
+//     teamBRevealUntil, logs (list max 200)
+//
+// Collection: users/{uid}
+//   - Required: id (== uid), name (string 1..80), role, team ('A'|'B'),
+//     color (string 1..32), score (int), status, gameSessionId,
+//     invincibleCards (int), joinCode (immutable)
+//   - Optional: lastStation, lastCompletionId, protectionZone,
+//     shinkansenStartTime, shinkansenSegmentCount, waitingUntil,
+//     invincibleUntil, penaltyRevealUntil
+//   - Forbidden: latitude, longitude, privateLatitude, privateLongitude,
+//     lastLat, lastLng
+//
+// Collection: privateLocations/{uid}
+//   - Required: gameSessionId, latitude (-90..90), longitude (-180..180),
+//     updatedAt (== request.time)
+//   - Optional: expiresAt (timestamp, request.time < expiresAt <= request.time + 49h)
+//
+// Collection: exposedLocations/{uid}
+//   - Required: gameSessionId, latitude (-90..90), longitude (-180..180),
+//     capturedAt (== request.time), expiresAt (timestamp > request.time)
+//   - Optional: revealScope ('INDIVIDUAL'|'GLOBAL'|'TEAM_A'|'TEAM_B'|'PENALTY'),
+//     playerId (== uid)
+//
+// Collection: emergencyLocationProjections/{uid}
+//   - Required: playerId (== uid), gameSessionId, latitude, longitude,
+//     projectedAt (== request.time), sourceLocationUpdatedAt (<= request.time),
+//     expiresAt (request.time < expiresAt <= request.time + 3m),
+//     safetyStatus ('EMERGENCY'), projectionKind ('EMERGENCY')
+//
+// Collection: missions/{missionId}
+//   - Admin-managed mission catalog (read by participants/admins, write by admins)
+//
+// Collection: missionCompletions/{completionId}
+//   - ID: {team}_{gameSessionId}_{missionId}
+//   - Required: gameSessionId, missionId, team, completedBy (== auth.uid),
+//     points (int), isFinalMission (bool), completedAt (== request.time)
+//   - Optional: luckyReward (bool)
+//
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
+    // ===============================================================
+    // Core Auth & Session Helper Functions
+    // ===============================================================
+
     function signedIn() {
       return request.auth != null;
+    }
+
+    function isPasswordUser() {
+      return signedIn()
+        && request.auth.token.firebase.sign_in_provider == 'password';
     }
 
     // Bootstrap this document once from the Firebase Console after creating
@@ -13,15 +82,31 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
-    function hasCurrentGameSession() {
-      let configPath = /databases/$(database)/documents/game_config/current;
-      return exists(configPath)
-        && get(configPath).data.gameSessionId is string
-        && get(configPath).data.gameSessionId.size() > 0
-        && get(configPath).data.sessionStartedAt is int
-        && get(configPath).data.sessionStartedAt >= 0
-        && get(configPath).data.sessionSchemaVersion is int
-        && get(configPath).data.sessionSchemaVersion >= 2;
+    function validSessionConfigFields(cfg) {
+      return cfg.keys().hasAll(['gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion'])
+        && cfg.gameSessionId is string
+        && cfg.gameSessionId.size() > 0
+        && cfg.sessionStartedAt is int
+        && cfg.sessionStartedAt >= 0
+        && cfg.sessionSchemaVersion is int
+        && cfg.sessionSchemaVersion >= 2;
+    }
+
+    function isValidParticipantDocWithConfig(userData, cfg) {
+      return validSessionConfigFields(cfg)
+        && userData.keys().hasAll(['team', 'gameSessionId'])
+        && userData.team in ['A', 'B']
+        && userData.gameSessionId == cfg.gameSessionId;
+    }
+
+    function isCurrentParticipant(uid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/game_config/current)
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && isValidParticipantDocWithConfig(
+          get(/databases/$(database)/documents/users/$(uid)).data,
+          get(/databases/$(database)/documents/game_config/current).data
+        );
     }
 
     function hasNoCoordinates(data) {
@@ -34,67 +119,6 @@ service cloud.firestore {
       return code is string && code.matches('^[A-Za-z0-9_-]{16,128}$');
     }
 
-    function validPlayerCreate(uid) {
-      let configPath = /databases/$(database)/documents/game_config/current;
-      let data = request.resource.data;
-      let cfg = get(configPath).data;
-      let jcPath = /databases/$(database)/documents/joinCodes/$(data.joinCode);
-      return isPasswordUser()
-        && !isAdmin()
-        && request.auth.uid == uid
-        && hasCurrentGameSession()
-        && cfg.gameStatus != 'GAME_OVER'
-        && (cfg.gameStatus == 'PRE_GAME'
-          || (cfg.keys().hasAny(['registrationOpen']) && cfg.registrationOpen == true))
-        && data.keys().hasOnly([
-          'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards', 'joinCode', 'lastCompletionId', 'lastStation',
-          'protectionZone', 'shinkansenSegmentCount', 'penaltyRevealUntil'
-        ])
-        && (!data.keys().hasAny(['lastStation']) || (data.lastStation is string && data.lastStation.size() <= 250))
-        && (!data.keys().hasAny(['lastCompletionId']) || (data.lastCompletionId is string && data.lastCompletionId.size() <= 200))
-        && (!data.keys().hasAny(['protectionZone']) || data.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE'])
-        && (!data.keys().hasAny(['shinkansenSegmentCount']) || (data.shinkansenSegmentCount is int && data.shinkansenSegmentCount >= 0))
-        && (!data.keys().hasAny(['penaltyRevealUntil']) || (data.penaltyRevealUntil is int && data.penaltyRevealUntil >= 0))
-        && data.keys().hasAll([
-          'id', 'name', 'role', 'team', 'color', 'score', 'status',
-          'gameSessionId', 'invincibleCards', 'joinCode'
-        ])
-        && data.id == uid
-        && data.name is string
-        && data.name.size() > 0
-        && data.name.size() <= 80
-        && data.role == 'RUNNER'
-        && data.team in ['A', 'B']
-        && data.color is string
-        && data.color.size() > 0
-        && data.color.size() <= 32
-        && data.status == 'ACTIVE'
-        && data.score is int
-        && data.score == 0
-        && data.invincibleCards is int
-        && data.invincibleCards == 0
-        && validJoinCodeFormat(data.joinCode)
-        && exists(jcPath)
-        && get(jcPath).data.active == true
-        && get(jcPath).data.gameSessionId == cfg.gameSessionId
-        && data.gameSessionId == cfg.gameSessionId;
-    }
-
-    function isCurrentParticipant(uid) {
-      return signedIn()
-        && hasCurrentGameSession()
-        && exists(/databases/$(database)/documents/users/$(uid))
-        && get(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
-        && get(/databases/$(database)/documents/users/$(uid)).data.gameSessionId
-          == get(/databases/$(database)/documents/game_config/current).data.gameSessionId;
-    }
-
-    function isPasswordUser() {
-      return signedIn()
-        && request.auth.token.firebase.sign_in_provider == 'password';
-    }
-
     function isActiveDeadline(deadline) {
       return (deadline is timestamp && request.time < deadline)
         || (deadline is int && request.time.toMillis() < deadline);
@@ -104,6 +128,42 @@ service cloud.firestore {
       return (deadline is timestamp && exp <= deadline + duration.value(1, 'm'))
         || (deadline is int && exp.toMillis() <= deadline + 60000);
     }
+
+    function expectedPostShinkansenWaitMs(cfg) {
+      return (cfg.keys().hasAny(['postShinkansenWaitMinutes'])
+        && cfg.postShinkansenWaitMinutes is int
+        && cfg.postShinkansenWaitMinutes >= 1
+        && cfg.postShinkansenWaitMinutes <= 180)
+        ? cfg.postShinkansenWaitMinutes * 60000
+        : 3600000;
+    }
+
+    function validPostShinkansenWaitingBound(cfg, targetTimeMs, nowMs) {
+      let waitMs = expectedPostShinkansenWaitMs(cfg);
+      return targetTimeMs is int
+        && targetTimeMs >= nowMs + waitMs - 60000
+        && targetTimeMs <= nowMs + waitMs + 60000;
+    }
+
+    function expectedCaptureWaitMs(cfg) {
+      return (cfg.keys().hasAny(['captureWaitMinutes'])
+        && cfg.captureWaitMinutes is int
+        && cfg.captureWaitMinutes >= 1
+        && cfg.captureWaitMinutes <= 120)
+        ? cfg.captureWaitMinutes * 60000
+        : 1800000;
+    }
+
+    function validCaptureWaitingBound(cfg, targetTimeMs, nowMs) {
+      let waitMs = expectedCaptureWaitMs(cfg);
+      return targetTimeMs is int
+        && targetTimeMs >= nowMs + waitMs - 60000
+        && targetTimeMs <= nowMs + waitMs + 60000;
+    }
+
+    // ===============================================================
+    // Domain Validators: joinCodes, system, admins
+    // ===============================================================
 
     match /joinCodes/{code} {
       allow get: if isPasswordUser();
@@ -118,6 +178,7 @@ service cloud.firestore {
       allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow create: if isAdmin()
         && request.resource.data.keys().hasOnly(['role', 'createdAt'])
+        && request.resource.data.keys().hasAll(['role', 'createdAt'])
         && request.resource.data.role == 'admin'
         && request.resource.data.createdAt == request.time;
       allow update, delete: if false;
@@ -127,36 +188,58 @@ service cloud.firestore {
       }
     }
 
+    // ===============================================================
+    // Domain Validators: privateLocations
+    // ===============================================================
+
+    function validPrivateLocationPayload(data) {
+      return data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt', 'expiresAt'])
+        && data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
+        && data.gameSessionId is string
+        && data.gameSessionId.size() > 0
+        && data.latitude is number
+        && data.latitude >= -90
+        && data.latitude <= 90
+        && data.longitude is number
+        && data.longitude >= -180
+        && data.longitude <= 180
+        && data.updatedAt == request.time
+        && (!data.keys().hasAny(['expiresAt'])
+          || (data.expiresAt is timestamp
+            && data.expiresAt > request.time
+            && data.expiresAt <= request.time + duration.value(49, 'h')));
+    }
+
+    function validPrivateLocationSession(uid, sessionId, cfg) {
+      return validSessionConfigFields(cfg)
+        && sessionId == cfg.gameSessionId
+        && (
+          (exists(/databases/$(database)/documents/users/$(uid))
+            && get(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
+            && get(/databases/$(database)/documents/users/$(uid)).data.gameSessionId == sessionId)
+          || (existsAfter(/databases/$(database)/documents/users/$(uid))
+            && getAfter(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
+            && getAfter(/databases/$(database)/documents/users/$(uid)).data.gameSessionId == sessionId)
+        );
+    }
+
     match /privateLocations/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow create, update: if signedIn()
         && request.auth.uid == uid
-        && hasCurrentGameSession()
-        && (isCurrentParticipant(uid)
-          || (existsAfter(/databases/$(database)/documents/users/$(uid))
-            && getAfter(/databases/$(database)/documents/users/$(uid)).data.team in ['A', 'B']
-            && getAfter(/databases/$(database)/documents/users/$(uid)).data.gameSessionId
-              == get(/databases/$(database)/documents/game_config/current).data.gameSessionId))
-        && request.resource.data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'updatedAt', 'expiresAt'])
-        && request.resource.data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'updatedAt'])
-        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-        && request.resource.data.latitude is number
-        && request.resource.data.latitude >= -90
-        && request.resource.data.latitude <= 90
-        && request.resource.data.longitude is number
-        && request.resource.data.longitude >= -180
-        && request.resource.data.longitude <= 180
-        && request.resource.data.updatedAt == request.time
-        && (!request.resource.data.keys().hasAny(['expiresAt'])
-          || (request.resource.data.expiresAt is timestamp
-            && request.resource.data.expiresAt > request.time
-            && request.resource.data.expiresAt <= request.time + duration.value(49, 'h')));
+        && validPrivateLocationPayload(request.resource.data)
+        && exists(/databases/$(database)/documents/game_config/current)
+        && validPrivateLocationSession(
+          uid,
+          request.resource.data.gameSessionId,
+          get(/databases/$(database)/documents/game_config/current).data
+        );
       allow delete: if isAdmin();
     }
 
-    function isRevealViewer() {
-      return signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
-    }
+    // ===============================================================
+    // Domain Validators: exposedLocations
+    // ===============================================================
 
     function periodicRevealIntervalMs(cfg) {
       return (cfg.keys().hasAny(['periodicRevealIntervalMinutes'])
@@ -204,60 +287,39 @@ service cloud.firestore {
     }
 
     function validExposedLocationScope(data, me, cfg) {
-      return ((!data.keys().hasAny(['revealScope']) || data.revealScope == 'INDIVIDUAL')
-          && data.expiresAt <= request.time + duration.value(6, 'm'))
-        || (data.revealScope == 'GLOBAL'
-          && cfg.keys().hasAny(['locationRevealUntil'])
-          && isActiveDeadline(cfg.locationRevealUntil)
-          && expiresWithinDeadline(data.expiresAt, cfg.locationRevealUntil)
-          && data.expiresAt <= request.time + duration.value(61, 'm'))
-        || (data.revealScope == 'GLOBAL'
-          && validPeriodicGlobalRevealScope(data, cfg))
-        || (data.revealScope == 'TEAM_A'
-          && me.team == 'A'
-          && cfg.keys().hasAny(['teamARevealUntil'])
-          && isActiveDeadline(cfg.teamARevealUntil)
-          && expiresWithinDeadline(data.expiresAt, cfg.teamARevealUntil)
-          && data.expiresAt <= request.time + duration.value(61, 'm'))
-        || (data.revealScope == 'TEAM_B'
-          && me.team == 'B'
-          && cfg.keys().hasAny(['teamBRevealUntil'])
-          && isActiveDeadline(cfg.teamBRevealUntil)
-          && expiresWithinDeadline(data.expiresAt, cfg.teamBRevealUntil)
-          && data.expiresAt <= request.time + duration.value(61, 'm'))
-        || (data.revealScope == 'PENALTY'
-          && me.keys().hasAny(['penaltyRevealUntil'])
-          && isActiveDeadline(me.penaltyRevealUntil)
-          && expiresWithinDeadline(data.expiresAt, me.penaltyRevealUntil)
-          && data.expiresAt <= request.time + duration.value(61, 'm'));
+      return !data.keys().hasAny(['revealScope']) || data.revealScope == 'INDIVIDUAL'
+        ? data.expiresAt <= request.time + duration.value(6, 'm')
+        : data.revealScope == 'GLOBAL'
+          ? ((cfg.keys().hasAny(['locationRevealUntil'])
+              && isActiveDeadline(cfg.locationRevealUntil)
+              && expiresWithinDeadline(data.expiresAt, cfg.locationRevealUntil)
+              && data.expiresAt <= request.time + duration.value(61, 'm'))
+            || validPeriodicGlobalRevealScope(data, cfg))
+          : data.revealScope == 'TEAM_A'
+            ? (me.team == 'A'
+              && cfg.keys().hasAny(['teamARevealUntil'])
+              && isActiveDeadline(cfg.teamARevealUntil)
+              && expiresWithinDeadline(data.expiresAt, cfg.teamARevealUntil)
+              && data.expiresAt <= request.time + duration.value(61, 'm'))
+            : data.revealScope == 'TEAM_B'
+              ? (me.team == 'B'
+                && cfg.keys().hasAny(['teamBRevealUntil'])
+                && isActiveDeadline(cfg.teamBRevealUntil)
+                && expiresWithinDeadline(data.expiresAt, cfg.teamBRevealUntil)
+                && data.expiresAt <= request.time + duration.value(61, 'm'))
+              : (data.revealScope == 'PENALTY'
+                && me.keys().hasAny(['penaltyRevealUntil'])
+                && isActiveDeadline(me.penaltyRevealUntil)
+                && expiresWithinDeadline(data.expiresAt, me.penaltyRevealUntil)
+                && data.expiresAt <= request.time + duration.value(61, 'm'));
     }
 
-    function validOwnerExposedLocationWrite(uid) {
-      let data = request.resource.data;
-      let configPath = /databases/$(database)/documents/game_config/current;
-      let playerPath = /databases/$(database)/documents/users/$(uid);
-      let cfg = get(configPath).data;
-      let me = get(playerPath).data;
-      return signedIn()
-        && request.auth.uid == uid
-        && !isAdmin()
-        && exists(configPath)
-        && cfg.gameSessionId is string
-        && cfg.gameSessionId.size() > 0
-        && cfg.sessionStartedAt is int
-        && cfg.sessionStartedAt >= 0
-        && cfg.sessionSchemaVersion is int
-        && cfg.sessionSchemaVersion >= 2
-        && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
-        && exists(playerPath)
-        && me.team in ['A', 'B']
-        && me.gameSessionId == cfg.gameSessionId
-        && me.status != 'EMERGENCY'
-        && me.status != 'RETIRED'
-        && data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt', 'revealScope', 'playerId'])
+    function validExposedLocationPayload(uid, data) {
+      return data.keys().hasOnly(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt', 'revealScope', 'playerId'])
         && data.keys().hasAll(['gameSessionId', 'latitude', 'longitude', 'capturedAt', 'expiresAt'])
         && (!data.keys().hasAny(['playerId']) || data.playerId == uid)
-        && data.gameSessionId == cfg.gameSessionId
+        && data.gameSessionId is string
+        && data.gameSessionId.size() > 0
         && data.latitude is number
         && data.latitude >= -90
         && data.latitude <= 90
@@ -267,7 +329,32 @@ service cloud.firestore {
         && data.capturedAt == request.time
         && data.expiresAt is timestamp
         && request.time < data.expiresAt
+        && (!data.keys().hasAny(['revealScope']) || data.revealScope in ['INDIVIDUAL', 'GLOBAL', 'TEAM_A', 'TEAM_B', 'PENALTY']);
+    }
+
+    function validExposedLocationContext(data, me, cfg) {
+      return validSessionConfigFields(cfg)
+        && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+        && me.team in ['A', 'B']
+        && me.gameSessionId == cfg.gameSessionId
+        && me.status != 'EMERGENCY'
+        && me.status != 'RETIRED'
+        && data.gameSessionId == cfg.gameSessionId
         && validExposedLocationScope(data, me, cfg);
+    }
+
+    function validOwnerExposedLocationWrite(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && !isAdmin()
+        && validExposedLocationPayload(uid, request.resource.data)
+        && exists(/databases/$(database)/documents/game_config/current)
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && validExposedLocationContext(
+          request.resource.data,
+          get(/databases/$(database)/documents/users/$(uid)).data,
+          get(/databases/$(database)/documents/game_config/current).data
+        );
     }
 
     function ownerMayReplaceSnapshot() {
@@ -275,11 +362,10 @@ service cloud.firestore {
       let newData = request.resource.data;
       let oldScope = oldData.keys().hasAny(['revealScope']) ? oldData.revealScope : 'INDIVIDUAL';
       let newScope = newData.keys().hasAny(['revealScope']) ? newData.revealScope : 'INDIVIDUAL';
-      let cfg = get(/databases/$(database)/documents/game_config/current).data;
       return !oldData.keys().hasAny(['gameSessionId'])
-        || oldData.gameSessionId != cfg.gameSessionId
         || !(oldData.expiresAt is timestamp)
         || oldData.expiresAt <= request.time
+        || oldData.gameSessionId != get(/databases/$(database)/documents/game_config/current).data.gameSessionId
         || (oldScope == 'PENALTY'
             && newScope == 'PENALTY'
             && newData.expiresAt >= oldData.expiresAt - duration.value(1, 's'))
@@ -290,17 +376,22 @@ service cloud.firestore {
         || (oldScope == 'INDIVIDUAL');
     }
 
+    function validExposedSnapshotVisible(uid, snap) {
+      return snap.keys().hasAll(['gameSessionId', 'expiresAt'])
+        && snap.expiresAt is timestamp
+        && snap.expiresAt > request.time
+        && exists(/databases/$(database)/documents/game_config/current)
+        && snap.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && !(get(/databases/$(database)/documents/users/$(uid)).data.status in ['EMERGENCY', 'RETIRED']);
+    }
+
     match /exposedLocations/{uid} {
       allow get: if isAdmin()
-        || (isRevealViewer()
+        || (isCurrentParticipant(request.auth.uid)
           && (request.auth.uid == uid
             || resource == null
-            || (hasCurrentGameSession()
-              && resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-              && resource.data.expiresAt is timestamp
-              && resource.data.expiresAt > request.time
-              && get(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY'
-              && get(/databases/$(database)/documents/users/$(uid)).data.status != 'RETIRED')));
+            || validExposedSnapshotVisible(uid, resource.data)));
       allow list: if isAdmin();
       allow create: if validOwnerExposedLocationWrite(uid);
       allow update: if validOwnerExposedLocationWrite(uid) && ownerMayReplaceSnapshot();
@@ -314,36 +405,46 @@ service cloud.firestore {
               && resource.data.expiresAt <= request.time)));
     }
 
+    // ===============================================================
+    // Domain Validators: emergencyLocationProjections
+    // ===============================================================
+
+    function validEmergencyProjectionPayload(uid, data) {
+      return data.keys().hasOnly([
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
+          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
+        ])
+        && data.keys().hasAll([
+          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
+          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
+        ])
+        && data.playerId == uid
+        && data.gameSessionId is string
+        && data.gameSessionId.size() > 0
+        && data.safetyStatus == 'EMERGENCY'
+        && data.projectionKind == 'EMERGENCY'
+        && data.latitude is number
+        && data.latitude >= -90
+        && data.latitude <= 90
+        && data.longitude is number
+        && data.longitude >= -180
+        && data.longitude <= 180
+        && data.projectedAt == request.time
+        && data.sourceLocationUpdatedAt is timestamp
+        && data.sourceLocationUpdatedAt <= request.time
+        && data.expiresAt is timestamp
+        && data.expiresAt > request.time
+        && data.expiresAt <= request.time + duration.value(3, 'm');
+    }
+
     function validEmergencyProjectionWrite(uid) {
-      return isCurrentParticipant(uid)
+      return signedIn()
         && request.auth.uid == uid
-        && hasCurrentGameSession()
-        && request.resource.data.keys().hasOnly([
-          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
-          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
-        ])
-        && request.resource.data.keys().hasAll([
-          'playerId', 'gameSessionId', 'latitude', 'longitude', 'projectedAt',
-          'sourceLocationUpdatedAt', 'expiresAt', 'safetyStatus', 'projectionKind'
-        ])
-        && request.resource.data.playerId == uid
-        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId
-        && request.resource.data.safetyStatus == 'EMERGENCY'
-        && request.resource.data.projectionKind == 'EMERGENCY'
+        && validEmergencyProjectionPayload(uid, request.resource.data)
         && existsAfter(/databases/$(database)/documents/users/$(uid))
         && getAfter(/databases/$(database)/documents/users/$(uid)).data.status == 'EMERGENCY'
-        && request.resource.data.latitude is number
-        && request.resource.data.latitude >= -90
-        && request.resource.data.latitude <= 90
-        && request.resource.data.longitude is number
-        && request.resource.data.longitude >= -180
-        && request.resource.data.longitude <= 180
-        && request.resource.data.projectedAt == request.time
-        && request.resource.data.sourceLocationUpdatedAt is timestamp
-        && request.resource.data.sourceLocationUpdatedAt <= request.time
-        && request.resource.data.expiresAt is timestamp
-        && request.resource.data.expiresAt > request.time
-        && request.resource.data.expiresAt <= request.time + duration.value(3, 'm');
+        && isCurrentParticipant(uid)
+        && request.resource.data.gameSessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId;
     }
 
     match /emergencyLocationProjections/{uid} {
@@ -357,232 +458,342 @@ service cloud.firestore {
           && getAfter(/databases/$(database)/documents/users/$(uid)).data.status != 'EMERGENCY');
     }
 
-    function expectedPostShinkansenWaitMs(cfg) {
-      return (cfg.keys().hasAny(['postShinkansenWaitMinutes'])
-        && cfg.postShinkansenWaitMinutes is int
-        && cfg.postShinkansenWaitMinutes >= 1
-        && cfg.postShinkansenWaitMinutes <= 180)
-        ? cfg.postShinkansenWaitMinutes * 60000
-        : 3600000;
+    // ===============================================================
+    // Domain Validators: users
+    // ===============================================================
+
+    function validPlayerCreateFields(uid, data) {
+      return data.keys().hasOnly([
+          'id', 'name', 'role', 'team', 'color', 'score', 'status',
+          'gameSessionId', 'invincibleCards', 'joinCode', 'lastCompletionId', 'lastStation',
+          'protectionZone', 'shinkansenSegmentCount', 'penaltyRevealUntil'
+        ])
+        && data.keys().hasAll([
+          'id', 'name', 'role', 'team', 'color', 'score', 'status',
+          'gameSessionId', 'invincibleCards', 'joinCode'
+        ])
+        && data.id == uid
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 80
+        && data.role == 'RUNNER'
+        && data.team in ['A', 'B']
+        && data.color is string
+        && data.color.size() > 0
+        && data.color.size() <= 32
+        && data.status == 'ACTIVE'
+        && data.score is int
+        && data.score == 0
+        && data.invincibleCards is int
+        && data.invincibleCards == 0
+        && data.gameSessionId is string
+        && data.gameSessionId.size() > 0
+        && validJoinCodeFormat(data.joinCode)
+        && (!data.keys().hasAny(['lastStation']) || (data.lastStation is string && data.lastStation.size() <= 250))
+        && (!data.keys().hasAny(['lastCompletionId']) || (data.lastCompletionId is string && data.lastCompletionId.size() <= 200))
+        && (!data.keys().hasAny(['protectionZone']) || data.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE'])
+        && (!data.keys().hasAny(['shinkansenSegmentCount']) || (data.shinkansenSegmentCount is int && data.shinkansenSegmentCount >= 0))
+        && (!data.keys().hasAny(['penaltyRevealUntil']) || (data.penaltyRevealUntil is int && data.penaltyRevealUntil >= 0));
     }
 
-    function validPostShinkansenWaitingBound(cfg, targetTimeMs, nowMs) {
-      let waitMs = expectedPostShinkansenWaitMs(cfg);
-      return targetTimeMs is int
-        && targetTimeMs >= nowMs + waitMs - 60000
-        && targetTimeMs <= nowMs + waitMs + 60000;
+    function validPlayerCreateConfigAndCode(data, cfg, jc) {
+      return validSessionConfigFields(cfg)
+        && cfg.gameStatus != 'GAME_OVER'
+        && (cfg.gameStatus == 'PRE_GAME'
+          || (cfg.keys().hasAny(['registrationOpen']) && cfg.registrationOpen == true))
+        && data.gameSessionId == cfg.gameSessionId
+        && jc.active == true
+        && jc.gameSessionId == data.gameSessionId;
     }
 
-    function expectedCaptureWaitMs(cfg) {
-      return (cfg.keys().hasAny(['captureWaitMinutes'])
-        && cfg.captureWaitMinutes is int
-        && cfg.captureWaitMinutes >= 1
-        && cfg.captureWaitMinutes <= 120)
-        ? cfg.captureWaitMinutes * 60000
-        : 1800000;
+    function validPlayerCreate(uid) {
+      return isPasswordUser()
+        && request.auth.uid == uid
+        && !isAdmin()
+        && validPlayerCreateFields(uid, request.resource.data)
+        && exists(/databases/$(database)/documents/game_config/current)
+        && exists(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode))
+        && validPlayerCreateConfigAndCode(
+          request.resource.data,
+          get(/databases/$(database)/documents/game_config/current).data,
+          get(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode)).data
+        );
     }
 
-    function validCaptureWaitingBound(cfg, targetTimeMs, nowMs) {
-      let waitMs = expectedCaptureWaitMs(cfg);
-      return targetTimeMs is int
-        && targetTimeMs >= nowMs + waitMs - 60000
-        && targetTimeMs <= nowMs + waitMs + 60000;
+    function hasMatchingCurrentSession(sessionId) {
+      return exists(/databases/$(database)/documents/game_config/current)
+        && validSessionConfigFields(get(/databases/$(database)/documents/game_config/current).data)
+        && sessionId == get(/databases/$(database)/documents/game_config/current).data.gameSessionId;
+    }
+
+    function isRunnerInActiveSessionWithConfig(userTeam, userSessionId, cfg) {
+      return validSessionConfigFields(cfg)
+        && userSessionId == cfg.gameSessionId
+        && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
+        && (userTeam == 'A' ? cfg.teamARole : cfg.teamBRole) == 'RUNNER';
+    }
+
+    function isRunnerInActiveSession(b) {
+      return exists(/databases/$(database)/documents/game_config/current)
+        && isRunnerInActiveSessionWithConfig(
+          b.team,
+          b.gameSessionId,
+          get(/databases/$(database)/documents/game_config/current).data
+        );
+    }
+
+    function validSelfProfileUpdate(b, a, diff) {
+      return diff.hasOnly(['name', 'lastStation'])
+        && (!diff.hasAny(['name']) || (a.name is string && a.name.size() > 0 && a.name.size() <= 80))
+        && (!diff.hasAny(['lastStation']) || (a.lastStation is string && a.lastStation.size() <= 250))
+        && (diff.size() > 0
+          || (a.name is string && a.name.size() > 0 && a.name.size() <= 80)
+          || (a.keys().hasAny(['lastStation']) && a.lastStation is string && a.lastStation.size() <= 250))
+        && hasMatchingCurrentSession(b.gameSessionId);
+    }
+
+    function validSelfShinkansenFields(b, a, diff, nowMs) {
+      return b.keys().hasAny(['status'])
+        && b.status == 'ACTIVE'
+        && (
+          (diff.hasOnly(['shinkansenSegmentCount'])
+            && b.keys().hasAny(['shinkansenStartTime'])
+            && b.shinkansenStartTime is int
+            && b.shinkansenStartTime > 0
+            && a.shinkansenSegmentCount is int
+            && a.shinkansenSegmentCount >= 0
+            && a.shinkansenSegmentCount == (b.keys().hasAny(['shinkansenSegmentCount']) && b.shinkansenSegmentCount is int ? b.shinkansenSegmentCount : 0) + 1)
+          || (diff.hasOnly(['shinkansenStartTime', 'shinkansenSegmentCount'])
+            && (!diff.hasAny(['shinkansenSegmentCount'])
+              || (a.shinkansenSegmentCount is int && a.shinkansenSegmentCount == 0))
+            && (
+              ((!b.keys().hasAny(['shinkansenStartTime']) || b.shinkansenStartTime == 0 || b.shinkansenStartTime == null)
+                && a.shinkansenStartTime is int
+                && a.shinkansenStartTime >= nowMs - 60000
+                && a.shinkansenStartTime <= nowMs + 60000)
+              || ((a.shinkansenStartTime == 0 || a.shinkansenStartTime == null)
+                && b.keys().hasAny(['shinkansenStartTime'])
+                && b.shinkansenStartTime is int
+                && nowMs <= b.shinkansenStartTime + 60000
+                && (!b.keys().hasAny(['shinkansenSegmentCount']) || b.shinkansenSegmentCount == 0))
+            ))
+        );
+    }
+
+    function validSelfWaitingStartWithConfig(b, a, nowMs, cfg) {
+      return isRunnerInActiveSessionWithConfig(b.team, b.gameSessionId, cfg)
+        && validPostShinkansenWaitingBound(cfg, a.waitingUntil, nowMs);
+    }
+
+    function validSelfStatusUpdate(b, a, diff, nowMs) {
+      return b.keys().hasAny(['status'])
+        && a.keys().hasAll(['status', 'waitingUntil', 'shinkansenStartTime'])
+        && (
+          a.status in ['EMERGENCY', 'RETIRED']
+            ? (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'invincibleUntil'])
+              && a.keys().hasAny(['invincibleUntil'])
+              && b.status != 'RETIRED'
+              && a.waitingUntil == 0
+              && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0)
+              && a.invincibleUntil == 0
+              && hasMatchingCurrentSession(b.gameSessionId))
+            : a.status == 'ACTIVE'
+              ? (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+                && b.status == 'WAITING'
+                && b.keys().hasAny(['waitingUntil'])
+                && b.waitingUntil is int && b.waitingUntil <= nowMs
+                && a.waitingUntil == 0
+                && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0)
+                && hasMatchingCurrentSession(b.gameSessionId))
+              : (a.status == 'WAITING'
+                && diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
+                && b.status == 'ACTIVE'
+                && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0)
+                && exists(/databases/$(database)/documents/game_config/current)
+                && validSelfWaitingStartWithConfig(
+                  b, a, nowMs,
+                  get(/databases/$(database)/documents/game_config/current).data
+                ))
+        );
+    }
+
+    function validSelfInvincibleUpdate(b, a, diff, nowMs) {
+      return diff.hasOnly(['invincibleCards', 'invincibleUntil'])
+        && b.keys().hasAny(['status'])
+        && b.status == 'ACTIVE'
+        && (!b.keys().hasAny(['invincibleUntil']) || !(b.invincibleUntil is int) || b.invincibleUntil <= nowMs)
+        && b.keys().hasAny(['invincibleCards'])
+        && b.invincibleCards is int
+        && b.invincibleCards >= 1
+        && a.keys().hasAll(['invincibleCards', 'invincibleUntil'])
+        && a.invincibleCards == b.invincibleCards - 1
+        && a.invincibleUntil is int
+        && a.invincibleUntil >= nowMs + 1740000
+        && a.invincibleUntil <= nowMs + 1860000
+        && isRunnerInActiveSession(b);
+    }
+
+    function validMissionRewardCompletion(uid, b, a, comp) {
+      return comp.completedBy == uid
+        && comp.team == b.team
+        && comp.gameSessionId == b.gameSessionId
+        && a.lastCompletionId == b.team + '_' + b.gameSessionId + '_' + comp.missionId
+        && a.score == b.score + comp.points
+        && comp.points > 0
+        && comp.points <= 100
+        && (a.invincibleCards == b.invincibleCards
+            || (a.invincibleCards == b.invincibleCards + 1
+                && comp.keys().hasAny(['luckyReward'])
+                && comp.luckyReward == true));
     }
 
     function validMissionRewardUpdate(uid, b, a, diff) {
       return diff.hasOnly(['score', 'invincibleCards', 'lastCompletionId'])
         && a.keys().hasAny(['lastCompletionId'])
         && a.lastCompletionId is string
+        && a.lastCompletionId.size() > 0
+        && a.score is int
+        && b.score is int
+        && a.score > b.score
+        && a.score <= b.score + 100
+        && a.keys().hasAny(['invincibleCards'])
+        && b.keys().hasAny(['invincibleCards'])
+        && (a.invincibleCards == b.invincibleCards || a.invincibleCards == b.invincibleCards + 1)
         && !exists(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId))
         && existsAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId))
-        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.completedBy == uid
-        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.team == b.team
-        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.gameSessionId == b.gameSessionId
-        && a.lastCompletionId == b.team + '_' + b.gameSessionId + '_' + getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.missionId
-        && a.score == b.score + getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.points
-        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.points > 0
-        && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.points <= 100
-        && (a.invincibleCards == b.invincibleCards
-            || (a.invincibleCards == b.invincibleCards + 1
-                && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.keys().hasAny(['luckyReward'])
-                && getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data.luckyReward == true));
+        && validMissionRewardCompletion(
+          uid, b, a,
+          getAfter(/databases/$(database)/documents/missionCompletions/$(a.lastCompletionId)).data
+        )
+        && hasMatchingCurrentSession(b.gameSessionId);
+    }
+
+    function validSelfUserBranch(uid, b, a, diff) {
+      return diff.hasOnly([
+          'name', 'lastStation', 'protectionZone',
+          'shinkansenStartTime', 'shinkansenSegmentCount',
+          'status', 'waitingUntil', 'invincibleCards', 'invincibleUntil',
+          'score', 'lastCompletionId'
+        ])
+        && (
+          diff.hasAny(['score'])
+            ? validMissionRewardUpdate(uid, b, a, diff)
+            : diff.hasAny(['status'])
+              ? validSelfStatusUpdate(b, a, diff, request.time.toMillis())
+              : diff.hasAny(['invincibleCards', 'invincibleUntil'])
+                ? validSelfInvincibleUpdate(b, a, diff, request.time.toMillis())
+                : diff.hasAny(['shinkansenStartTime', 'shinkansenSegmentCount'])
+                  ? (validSelfShinkansenFields(b, a, diff, request.time.toMillis()) && isRunnerInActiveSession(b))
+                  : diff.hasAny(['protectionZone'])
+                    ? (diff.hasOnly(['protectionZone'])
+                      && b.keys().hasAny(['status'])
+                      && b.status == 'ACTIVE'
+                      && a.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE']
+                      && isRunnerInActiveSession(b))
+                    : validSelfProfileUpdate(b, a, diff)
+        );
     }
 
     function validSelfUserUpdate(uid) {
       let b = resource.data;
       let a = request.resource.data;
-      let diff = a.diff(b).affectedKeys();
-      let nowMs = request.time.toMillis();
-      let configPath = /databases/$(database)/documents/game_config/current;
-      let cfg = get(configPath).data;
-      let hasCfg = hasCurrentGameSession();
-      let isActivePhase = hasCfg && cfg.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION'];
-      let myRole = hasCfg ? (b.team == 'A' ? cfg.teamARole : cfg.teamBRole) : '';
-      return isCurrentParticipant(uid)
+      return signedIn()
         && request.auth.uid == uid
         && hasNoCoordinates(a)
+        && a.keys().hasAll(['id', 'team', 'role', 'gameSessionId'])
+        && b.keys().hasAll(['id', 'team', 'role', 'gameSessionId'])
         && a.id == b.id
         && a.team == b.team
         && a.role == b.role
         && a.gameSessionId == b.gameSessionId
+        && b.team in ['A', 'B']
         && (!b.keys().hasAny(['joinCode']) || (a.keys().hasAny(['joinCode']) && a.joinCode == b.joinCode))
+        && validSelfUserBranch(uid, b, a, a.diff(b).affectedKeys());
+    }
+
+    function validCaptureParticipantState(uid, b, a, nowMs, curConfig, afterConfig, me) {
+      return validSessionConfigFields(curConfig)
+        && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
+        && a.gameSessionId == curConfig.gameSessionId
+        && me.team in ['A', 'B']
+        && me.gameSessionId == curConfig.gameSessionId
+        && (me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole) == 'ONI'
+        && me.status == 'ACTIVE'
         && (
-          // 1. Profile name or lastStation update
-          (diff.hasOnly(['name']) && a.name is string && a.name.size() > 0 && a.name.size() <= 80)
-          || (diff.hasOnly(['lastStation']) && a.lastStation is string && a.lastStation.size() <= 250)
-          || (diff.hasOnly(['name', 'lastStation'])
-              && a.name is string && a.name.size() > 0 && a.name.size() <= 80
-              && a.lastStation is string && a.lastStation.size() <= 250)
-          // 1b. Protection Zone declaration (NONE, GREEN_CAR, SAFE_ZONE)
-          || (diff.hasOnly(['protectionZone'])
-              && isActivePhase
-              && b.status == 'ACTIVE'
-              && myRole == 'RUNNER'
-              && a.protectionZone in ['NONE', 'GREEN_CAR', 'SAFE_ZONE'])
-          // 1c. Shinkansen tracker updates
-          || (diff.hasOnly(['shinkansenStartTime', 'shinkansenSegmentCount'])
-              && isActivePhase
-              && b.status == 'ACTIVE'
-              && myRole == 'RUNNER'
-              && a.shinkansenSegmentCount is int
-              && a.shinkansenSegmentCount >= 0
-              && (
-                ((!b.keys().hasAny(['shinkansenStartTime']) || b.shinkansenStartTime == 0 || b.shinkansenStartTime == null)
-                  && a.shinkansenStartTime is int
-                  && a.shinkansenStartTime >= nowMs - 60000
-                  && a.shinkansenStartTime <= nowMs + 60000
-                  && a.shinkansenSegmentCount == 0)
-                || ((a.shinkansenStartTime == 0 || a.shinkansenStartTime == null)
-                    && b.keys().hasAny(['shinkansenStartTime'])
-                    && b.shinkansenStartTime is int
-                    && nowMs <= b.shinkansenStartTime + 60000
-                    && (!b.keys().hasAny(['shinkansenSegmentCount']) || b.shinkansenSegmentCount == 0)
-                    && a.shinkansenSegmentCount == 0)
-              ))
-          || (diff.hasOnly(['shinkansenSegmentCount'])
-              && isActivePhase
-              && b.status == 'ACTIVE'
-              && myRole == 'RUNNER'
-              && b.keys().hasAny(['shinkansenStartTime'])
-              && b.shinkansenStartTime is int
-              && b.shinkansenStartTime > 0
-              && a.shinkansenSegmentCount is int
-              && a.shinkansenSegmentCount == (b.keys().hasAny(['shinkansenSegmentCount']) && b.shinkansenSegmentCount is int ? b.shinkansenSegmentCount : 0) + 1)
-          || (diff.hasOnly(['shinkansenStartTime'])
-              && isActivePhase
-              && b.status == 'ACTIVE'
-              && myRole == 'RUNNER'
-              && (
-                ((!b.keys().hasAny(['shinkansenStartTime']) || b.shinkansenStartTime == 0 || b.shinkansenStartTime == null)
-                  && a.shinkansenStartTime is int
-                  && a.shinkansenStartTime >= nowMs - 60000
-                  && a.shinkansenStartTime <= nowMs + 60000)
-                || ((a.shinkansenStartTime == 0 || a.shinkansenStartTime == null)
-                    && b.keys().hasAny(['shinkansenStartTime'])
-                    && b.shinkansenStartTime is int
-                    && nowMs <= b.shinkansenStartTime + 60000
-                    && (!b.keys().hasAny(['shinkansenSegmentCount']) || b.shinkansenSegmentCount == 0))
-              ))
-          // 2. Waiting resume upon expiry
-          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
-              && b.status == 'WAITING' && a.status == 'ACTIVE'
-              && b.waitingUntil is int && b.waitingUntil <= nowMs
-              && a.waitingUntil == 0
-              && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0))
-          // 3. Manual waiting start (strict ±60s bound around postShinkansenWaitMinutes or default 60 min)
-          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime'])
-              && isActivePhase
-              && myRole == 'RUNNER'
-              && b.status == 'ACTIVE' && a.status == 'WAITING'
-              && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0)
-              && validPostShinkansenWaitingBound(cfg, a.waitingUntil, nowMs))
-          // 4. Powerup invincibility card use (30 min ±60s tolerance)
-          || (diff.hasOnly(['invincibleCards', 'invincibleUntil'])
-              && isActivePhase
-              && myRole == 'RUNNER'
-              && b.status == 'ACTIVE'
-              && (!b.keys().hasAny(['invincibleUntil']) || !(b.invincibleUntil is int) || b.invincibleUntil <= nowMs)
-              && b.invincibleCards is int && b.invincibleCards >= 1
-              && a.invincibleCards == b.invincibleCards - 1
-              && a.invincibleUntil is int
-              && a.invincibleUntil >= nowMs + 1740000
-              && a.invincibleUntil <= nowMs + 1860000)
-          // 5. Safety action: Emergency or Retire
-          || (diff.hasOnly(['status', 'waitingUntil', 'shinkansenStartTime', 'invincibleUntil'])
-              && b.status != 'RETIRED'
-              && a.status in ['EMERGENCY', 'RETIRED']
-              && a.waitingUntil == 0
-              && (a.shinkansenStartTime == null || a.shinkansenStartTime == 0)
-              && a.invincibleUntil == 0)
-          // 6. Mission completion reward: only evaluated if diff has 'score'
-          || (diff.hasAny(['score']) && validMissionRewardUpdate(uid, b, a, diff))
+          a.status == 'CAPTURED'
+            ? (curConfig.keys().hasAny(['victoryMode'])
+              && curConfig.victoryMode == 'SURVIVAL'
+              && afterConfig.teamARole == curConfig.teamARole
+              && b.team != me.team
+              && afterConfig.lastCaptureTargetId == uid
+              && ((me.team == 'A' && afterConfig.teamAScore == curConfig.teamAScore + 50 && afterConfig.teamBScore == curConfig.teamBScore)
+                || (me.team == 'B' && afterConfig.teamBScore == curConfig.teamBScore + 50 && afterConfig.teamAScore == curConfig.teamAScore)))
+            : (!(curConfig.keys().hasAny(['victoryMode']) && curConfig.victoryMode == 'SURVIVAL')
+              && afterConfig.teamARole != curConfig.teamARole
+              && (a.status == 'WAITING'
+                ? (b.team != me.team && validCaptureWaitingBound(curConfig, a.waitingUntil, nowMs))
+                : (a.status == 'ACTIVE' && b.team == me.team)))
+        );
+    }
+
+    function validParticipantCaptureDiff(uid, b, a, diff, nowMs) {
+      return (
+          (a.status == 'CAPTURED'
+            && request.auth.uid != uid
+            && b.status == 'ACTIVE'
+            && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
+            && a.keys().hasAll(['waitingUntil', 'invincibleUntil'])
+            && a.waitingUntil == 0
+            && a.invincibleUntil == 0
+            && (!b.keys().hasAny(['invincibleUntil']) || !(b.invincibleUntil is int) || b.invincibleUntil <= nowMs)
+            && (!b.keys().hasAny(['protectionZone']) || b.protectionZone == 'NONE'))
+          || (a.status == 'WAITING'
+            && request.auth.uid != uid
+            && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
+            && a.keys().hasAll(['waitingUntil', 'invincibleUntil'])
+            && a.invincibleUntil == 0)
+          || (a.status == 'ACTIVE'
+            && diff.hasOnly(['status', 'waitingUntil', 'invincibleCards'])
+            && a.keys().hasAll(['waitingUntil', 'invincibleCards'])
+            && a.waitingUntil == 0
+            && a.invincibleCards == (b.keys().hasAny(['invincibleCards']) ? b.invincibleCards : 0) + 1)
+        )
+        && exists(/databases/$(database)/documents/game_config/current)
+        && existsAfter(/databases/$(database)/documents/game_config/current)
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && validCaptureParticipantState(
+          uid, b, a, nowMs,
+          get(/databases/$(database)/documents/game_config/current).data,
+          getAfter(/databases/$(database)/documents/game_config/current).data,
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data
         );
     }
 
     function validParticipantCaptureUpdate(uid) {
       let b = resource.data;
       let a = request.resource.data;
-      let diff = a.diff(b).affectedKeys();
-      let configPath = /databases/$(database)/documents/game_config/current;
-      let curConfig = get(configPath).data;
-      let afterConfig = getAfter(configPath).data;
-      let me = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-      let myRole = me.team == 'A' ? curConfig.teamARole : curConfig.teamBRole;
-      let nowMs = request.time.toMillis();
-      let isSurvival = curConfig.keys().hasAny(['victoryMode']) && curConfig.victoryMode == 'SURVIVAL';
       return signedIn()
-        && isCurrentParticipant(request.auth.uid)
         && hasNoCoordinates(a)
+        && a.keys().hasAll(['id', 'name', 'team', 'role', 'score', 'gameSessionId', 'status'])
+        && b.keys().hasAll(['id', 'name', 'team', 'role', 'score', 'gameSessionId', 'status'])
         && a.id == b.id
         && a.name == b.name
         && a.team == b.team
         && a.role == b.role
         && a.score == b.score
         && a.gameSessionId == b.gameSessionId
-        && a.gameSessionId == curConfig.gameSessionId
-        && (!b.keys().hasAny(['color']) || a.color == b.color)
+        && b.team in ['A', 'B']
+        && (!b.keys().hasAny(['color']) || (a.keys().hasAny(['color']) && a.color == b.color))
         && (!b.keys().hasAny(['joinCode']) || (a.keys().hasAny(['joinCode']) && a.joinCode == b.joinCode))
-        && curConfig.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
-        && myRole == 'ONI'
-        && me.status == 'ACTIVE'
-        && (!isSurvival ? afterConfig.teamARole != curConfig.teamARole : afterConfig.teamARole == curConfig.teamARole)
         && b.status != 'EMERGENCY'
         && b.status != 'RETIRED'
-        && (
-          // Survival mode: only captured target becomes CAPTURED without waiting
-          (isSurvival
-           && b.team != me.team
-           && afterConfig.lastCaptureTargetId == uid
-           && ((me.team == 'A' && afterConfig.teamAScore == curConfig.teamAScore + 50 && afterConfig.teamBScore == curConfig.teamBScore)
-             || (me.team == 'B' && afterConfig.teamBScore == curConfig.teamBScore + 50 && afterConfig.teamAScore == curConfig.teamAScore))
-           && b.status == 'ACTIVE'
-           && (!b.keys().hasAny(['invincibleUntil']) || !(b.invincibleUntil is int) || b.invincibleUntil <= nowMs)
-           && (!b.keys().hasAny(['protectionZone']) || b.protectionZone == 'NONE')
-           && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
-           && a.status == 'CAPTURED'
-           && a.waitingUntil == 0
-           && a.invincibleUntil == 0)
-          // Branch A: Captured side (opposing team b.team != me.team)
-          // All players transition to WAITING (strict ±60s bound around captureWaitMinutes) with invincibility cleared
-          || (!isSurvival
-              && b.team != me.team
-              && diff.hasOnly(['status', 'waitingUntil', 'invincibleUntil'])
-              && a.status == 'WAITING'
-              && validCaptureWaitingBound(curConfig, a.waitingUntil, nowMs)
-              && a.invincibleUntil == 0)
-          // Branch B: Capturing side (own team b.team == me.team, including captor)
-          // All players transition to ACTIVE, clear waiting, and receive exactly +1 invincibleCard
-          || (!isSurvival
-              && b.team == me.team
-              && diff.hasOnly(['status', 'waitingUntil', 'invincibleCards'])
-              && a.status == 'ACTIVE'
-              && a.waitingUntil == 0
-              && a.invincibleCards == (b.keys().hasAny(['invincibleCards']) ? b.invincibleCards : 0) + 1)
-        );
+        && a.status in ['CAPTURED', 'WAITING', 'ACTIVE']
+        && (request.auth.uid != uid || a.status == 'ACTIVE')
+        && validParticipantCaptureDiff(uid, b, a, a.diff(b).affectedKeys(), request.time.toMillis());
     }
 
     match /users/{uid} {
-      allow get: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid) || request.auth.uid == uid);
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin() || isCurrentParticipant(request.auth.uid));
       allow list: if signedIn() && (isAdmin() || isCurrentParticipant(request.auth.uid));
       allow create: if validPlayerCreate(uid);
       allow update: if (isAdmin() && hasNoCoordinates(request.resource.data))
@@ -591,22 +802,17 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ===============================================================
+    // Domain Validators: missions, missionCompletions
+    // ===============================================================
+
     match /missions/{missionId} {
       allow read: if isAdmin() || isCurrentParticipant(request.auth.uid);
       allow write: if isAdmin();
     }
 
-    function validMissionCompletionCreate(completionId) {
-      let data = request.resource.data;
-      let configPath = /databases/$(database)/documents/game_config/current;
-      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
-      let missionPath = /databases/$(database)/documents/missions/$(data.missionId);
-      let config = get(configPath).data;
-      let mission = get(missionPath).data;
-      return signedIn()
-        && isCurrentParticipant(request.auth.uid)
-        && hasCurrentGameSession()
-        && data.keys().hasOnly([
+    function validMissionCompletionPayload(completionId, data) {
+      return data.keys().hasOnly([
           'gameSessionId', 'missionId', 'team', 'completedBy',
           'points', 'luckyReward', 'isFinalMission', 'completedAt'
         ])
@@ -615,37 +821,57 @@ service cloud.firestore {
           'points', 'isFinalMission', 'completedAt'
         ])
         && data.completedBy == request.auth.uid
-        && data.gameSessionId == config.gameSessionId
-        && data.team == get(userPath).data.team
-        && get(userPath).data.status == 'ACTIVE'
-        && exists(missionPath)
-        && (!mission.keys().hasAny(['isFinalMission']) || mission.isFinalMission == data.isFinalMission)
+        && data.gameSessionId is string
+        && data.gameSessionId.size() > 0
+        && data.missionId is string
+        && data.missionId.size() > 0
+        && data.team in ['A', 'B']
         && data.points is int
-        && data.points == mission.points
         && data.isFinalMission is bool
-        && config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
-        && (
-          (data.isFinalMission == true
-            && config.gameStatus == 'FINAL_MISSION'
-            && config.isFinalMissionActive == true
-            && config.keys().hasAny(['activeFinalMissionId'])
-            && config.activeFinalMissionId == data.missionId)
-          || (data.isFinalMission == false
-            && config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
-            && (
-              (data.team == 'A'
-                && config.keys().hasAny(['activeMissionA'])
-                && config.activeMissionA is string
-                && config.activeMissionA == data.missionId)
-              || (data.team == 'B'
-                && config.keys().hasAny(['activeMissionB'])
-                && config.activeMissionB is string
-                && config.activeMissionB == data.missionId)
-            ))
-        )
         && (!data.keys().hasAny(['luckyReward']) || data.luckyReward is bool)
         && data.completedAt == request.time
         && completionId == data.team + '_' + data.gameSessionId + '_' + data.missionId;
+    }
+
+    function validMissionCompletionContext(data, config, user, mission) {
+      return validSessionConfigFields(config)
+        && data.gameSessionId == config.gameSessionId
+        && user.team in ['A', 'B']
+        && user.gameSessionId == config.gameSessionId
+        && data.team == user.team
+        && user.status == 'ACTIVE'
+        && (!mission.keys().hasAny(['isFinalMission']) || mission.isFinalMission == data.isFinalMission)
+        && data.points == mission.points
+        && config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
+        && (
+          data.isFinalMission
+            ? (config.gameStatus == 'FINAL_MISSION'
+              && config.isFinalMissionActive == true
+              && config.keys().hasAny(['activeFinalMissionId'])
+              && config.activeFinalMissionId == data.missionId)
+            : (config.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE']
+              && (data.team == 'A'
+                ? (config.keys().hasAny(['activeMissionA'])
+                  && config.activeMissionA is string
+                  && config.activeMissionA == data.missionId)
+                : (config.keys().hasAny(['activeMissionB'])
+                  && config.activeMissionB is string
+                  && config.activeMissionB == data.missionId)))
+        );
+    }
+
+    function validMissionCompletionCreate(completionId) {
+      return signedIn()
+        && validMissionCompletionPayload(completionId, request.resource.data)
+        && exists(/databases/$(database)/documents/game_config/current)
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && exists(/databases/$(database)/documents/missions/$(request.resource.data.missionId))
+        && validMissionCompletionContext(
+          request.resource.data,
+          get(/databases/$(database)/documents/game_config/current).data,
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          get(/databases/$(database)/documents/missions/$(request.resource.data.missionId)).data
+        );
     }
 
     match /missionCompletions/{completionId} {
@@ -654,7 +880,11 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    function validLogEntry(entry, allowedTypes) {
+    // ===============================================================
+    // Domain Validators: game_config
+    // ===============================================================
+
+    function validLogEntry(entry, allowedType) {
       let nowMs = request.time.toMillis();
       return entry is map
         && entry.keys().hasOnly(['id', 'timestamp', 'message', 'type'])
@@ -668,115 +898,186 @@ service cloud.firestore {
         && entry.message is string
         && entry.message.size() > 0
         && entry.message.size() <= 300
-        && entry.type in allowedTypes;
+        && entry.type == allowedType;
     }
 
-    function validPrependedLogs(currentData, newData, allowedTypes) {
-      let prevLogs = (currentData.keys().hasAny(['logs']) && currentData.logs is list) ? currentData.logs : [];
-      return newData.logs is list
+    function validPrependedLogsWithPrev(prevLogs, newLogs, allowedType) {
+      return newLogs.size() == (prevLogs.size() >= 200 ? 200 : prevLogs.size() + 1)
+        && validLogEntry(newLogs[0], allowedType)
+        && (prevLogs.size() == 0
+          || newLogs[1:newLogs.size()] == prevLogs[0:(newLogs.size() - 1)]);
+    }
+
+    function validPrependedLogs(currentData, newData, allowedType) {
+      return newData.keys().hasAny(['logs'])
+        && newData.logs is list
         && newData.logs.size() >= 1
         && newData.logs.size() <= 200
-        && newData.logs.size() == (prevLogs.size() >= 200 ? 200 : prevLogs.size() + 1)
-        && validLogEntry(newData.logs[0], allowedTypes)
-        && (prevLogs.size() == 0
-          || newData.logs[1:newData.logs.size()] == prevLogs[0:(newData.logs.size() - 1)]);
+        && validPrependedLogsWithPrev(
+          (currentData.keys().hasAny(['logs']) && currentData.logs is list) ? currentData.logs : [],
+          newData.logs,
+          allowedType
+        );
     }
 
-    function validLogOnlyConfigUpdate(currentData, newData, diff) {
-      let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
-      let safetyChange = exists(mePath)
-        && existsAfter(mePath)
-        && get(mePath).data.status != getAfter(mePath).data.status
-        && getAfter(mePath).data.status in ['EMERGENCY', 'RETIRED'];
-      let gameplayStateChange = exists(mePath)
-        && existsAfter(mePath)
-        && ((get(mePath).data.status != getAfter(mePath).data.status
-            && getAfter(mePath).data.status in ['ACTIVE', 'WAITING'])
-          || (getAfter(mePath).data.invincibleCards < get(mePath).data.invincibleCards));
-      return diff.hasOnly(['logs'])
-        && diff.size() == 1
-        && ((safetyChange && validPrependedLogs(currentData, newData, ['EMERGENCY']))
-          || (gameplayStateChange && validPrependedLogs(currentData, newData, ['SYSTEM'])))
+    function validLogOnlyMeTransition(currentSessionId, logType, meBefore, meAfter) {
+      return meBefore.team in ['A', 'B']
+        && meBefore.gameSessionId == currentSessionId
+        && (
+          logType == 'EMERGENCY'
+            ? (meBefore.status != meAfter.status && meAfter.status in ['EMERGENCY', 'RETIRED'])
+            : (logType == 'SYSTEM'
+              && ((meBefore.status != meAfter.status && meAfter.status in ['ACTIVE', 'WAITING'])
+                || (meAfter.invincibleCards < meBefore.invincibleCards)))
+        );
+    }
+
+    function validLogOnlyConfigUpdate(currentData, newData) {
+      return newData.keys().hasAll(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore'])
         && newData.teamARole == currentData.teamARole
         && newData.teamBRole == currentData.teamBRole
         && newData.teamAScore == currentData.teamAScore
         && newData.teamBScore == currentData.teamBScore
-        && (!currentData.keys().hasAny(['nextRevealTime']) || newData.nextRevealTime == currentData.nextRevealTime);
+        && (!currentData.keys().hasAny(['nextRevealTime'])
+          || (newData.keys().hasAny(['nextRevealTime']) && newData.nextRevealTime == currentData.nextRevealTime))
+        && newData.keys().hasAny(['logs'])
+        && newData.logs is list
+        && newData.logs.size() >= 1
+        && newData.logs.size() <= 200
+        && newData.logs[0] is map
+        && newData.logs[0].keys().hasAny(['type'])
+        && newData.logs[0].type in ['EMERGENCY', 'SYSTEM']
+        && validPrependedLogs(currentData, newData, newData.logs[0].type)
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+        && validLogOnlyMeTransition(
+          currentData.gameSessionId,
+          newData.logs[0].type,
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        );
+    }
+
+    function validMissionScoreCompletion(currentData, newData, diff, meBefore, meAfter, comp) {
+      let delta = meAfter.team == 'A'
+        ? (newData.teamAScore - currentData.teamAScore)
+        : (newData.teamBScore - currentData.teamBScore);
+      return meBefore.team in ['A', 'B']
+        && meBefore.gameSessionId == currentData.gameSessionId
+        && comp.completedBy == request.auth.uid
+        && comp.team == meAfter.team
+        && comp.gameSessionId == currentData.gameSessionId
+        && comp.points == delta
+        && (meAfter.team == 'A'
+          ? (diff.hasOnly(['teamAScore', 'logs']) && newData.teamBScore == currentData.teamBScore)
+          : (diff.hasOnly(['teamBScore', 'logs']) && newData.teamAScore == currentData.teamAScore));
+    }
+
+    function validMissionScoreCompletionPath(currentData, newData, diff, meBefore, meAfter, compId) {
+      let compPath = /databases/$(database)/documents/missionCompletions/$(compId);
+      return !exists(compPath)
+        && existsAfter(compPath)
+        && validMissionScoreCompletion(currentData, newData, diff, meBefore, meAfter, getAfter(compPath).data);
     }
 
     function validMissionScoreConfigUpdate(currentData, newData, diff) {
       let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
-      let compPath = /databases/$(database)/documents/missionCompletions/$(getAfter(mePath).data.lastCompletionId);
-      return existsAfter(mePath)
-        && getAfter(mePath).data.keys().hasAny(['lastCompletionId'])
-        && getAfter(mePath).data.lastCompletionId is string
-        && !exists(compPath)
-        && existsAfter(compPath)
-        && getAfter(compPath).data.completedBy == request.auth.uid
-        && getAfter(compPath).data.team == getAfter(mePath).data.team
-        && getAfter(compPath).data.gameSessionId == currentData.gameSessionId
-        && getAfter(compPath).data.points > 0
-        && getAfter(compPath).data.points <= 100
+      return newData.keys().hasAll(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore'])
         && newData.teamARole == currentData.teamARole
         && newData.teamBRole == currentData.teamBRole
-        && (!currentData.keys().hasAny(['nextRevealTime']) || newData.nextRevealTime == currentData.nextRevealTime)
-        && (!diff.hasAny(['logs']) || validPrependedLogs(currentData, newData, ['MISSION']))
-        && (getAfter(mePath).data.team == 'A'
-            ? (diff.hasOnly(['teamAScore', 'logs'])
-               && newData.teamAScore == currentData.teamAScore + getAfter(compPath).data.points
-               && newData.teamBScore == currentData.teamBScore)
-            : (diff.hasOnly(['teamBScore', 'logs'])
-               && newData.teamBScore == currentData.teamBScore + getAfter(compPath).data.points
-               && newData.teamAScore == currentData.teamAScore));
+        && (!currentData.keys().hasAny(['nextRevealTime'])
+          || (newData.keys().hasAny(['nextRevealTime']) && newData.nextRevealTime == currentData.nextRevealTime))
+        && (
+          (diff.hasOnly(['teamAScore', 'logs'])
+            && newData.teamAScore is int && currentData.teamAScore is int
+            && newData.teamAScore > currentData.teamAScore && newData.teamAScore <= currentData.teamAScore + 100
+            && newData.teamBScore == currentData.teamBScore)
+          || (diff.hasOnly(['teamBScore', 'logs'])
+            && newData.teamBScore is int && currentData.teamBScore is int
+            && newData.teamBScore > currentData.teamBScore && newData.teamBScore <= currentData.teamBScore + 100
+            && newData.teamAScore == currentData.teamAScore)
+        )
+        && (!diff.hasAny(['logs']) || validPrependedLogs(currentData, newData, 'MISSION'))
+        && exists(mePath)
+        && existsAfter(mePath)
+        && getAfter(mePath).data.keys().hasAny(['lastCompletionId'])
+        && getAfter(mePath).data.lastCompletionId is string
+        && getAfter(mePath).data.lastCompletionId.size() > 0
+        && validMissionScoreCompletionPath(
+          currentData, newData, diff,
+          get(mePath).data,
+          getAfter(mePath).data,
+          getAfter(mePath).data.lastCompletionId
+        );
+    }
+
+    function validCaptureConfigParticipants(currentData, newData, nowMs, isSurvival, me, targetBefore, targetPath) {
+      return me.team in ['A', 'B']
+        && me.gameSessionId == currentData.gameSessionId
+        && (me.team == 'A' ? currentData.teamARole : currentData.teamBRole) == 'ONI'
+        && me.status == 'ACTIVE'
+        && targetBefore.gameSessionId == currentData.gameSessionId
+        && targetBefore.team in ['A', 'B']
+        && targetBefore.team != me.team
+        && targetBefore.status == 'ACTIVE'
+        && (!targetBefore.keys().hasAny(['invincibleUntil'])
+          || !(targetBefore.invincibleUntil is int)
+          || targetBefore.invincibleUntil <= nowMs)
+        && (!targetBefore.keys().hasAny(['protectionZone']) || targetBefore.protectionZone == 'NONE')
+        && (isSurvival
+          ? (getAfter(targetPath).data.status == 'CAPTURED'
+            && getAfter(targetPath).data.waitingUntil == 0
+            && (me.team == 'A'
+              ? (newData.teamAScore == currentData.teamAScore + 50 && newData.teamBScore == currentData.teamBScore)
+              : (newData.teamBScore == currentData.teamBScore + 50 && newData.teamAScore == currentData.teamAScore)))
+          : (getAfter(targetPath).data.status == 'WAITING'
+            && validCaptureWaitingBound(currentData, getAfter(targetPath).data.waitingUntil, nowMs)
+            && (me.team == 'A'
+              ? (currentData.teamARole == 'ONI'
+                && newData.teamARole == 'RUNNER'
+                && newData.teamBRole == 'ONI'
+                && newData.teamAScore == currentData.teamAScore + 50
+                && newData.teamBScore == currentData.teamBScore)
+              : (currentData.teamBRole == 'ONI'
+                && newData.teamBRole == 'RUNNER'
+                && newData.teamARole == 'ONI'
+                && newData.teamBScore == currentData.teamBScore + 50
+                && newData.teamAScore == currentData.teamAScore))));
+    }
+
+    function validCaptureConfigWithTarget(currentData, newData, nowMs, isSurvival, me, targetPath) {
+      return exists(targetPath)
+        && existsAfter(targetPath)
+        && validCaptureConfigParticipants(
+          currentData, newData, nowMs, isSurvival, me,
+          get(targetPath).data, targetPath
+        );
     }
 
     function validCaptureConfigUpdate(currentData, newData, diff) {
-      let mePath = /databases/$(database)/documents/users/$(request.auth.uid);
-      let targetPath = /databases/$(database)/documents/users/$(newData.lastCaptureTargetId);
       let nowMs = request.time.toMillis();
       let isSurvival = currentData.keys().hasAny(['victoryMode']) && currentData.victoryMode == 'SURVIVAL';
-      return exists(mePath)
+      return diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])
         && currentData.gameStatus in ['DAY1_ACTIVE', 'DAY2_ACTIVE', 'FINAL_MISSION']
-        && (get(mePath).data.team == 'A' ? currentData.teamARole : currentData.teamBRole) == 'ONI'
-        && get(mePath).data.status == 'ACTIVE'
-        && diff.hasOnly(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'nextRevealTime', 'lastCaptureTargetId', 'logs'])
-        && (!isSurvival
-            ? validCaptureWaitingBound(currentData, newData.nextRevealTime, nowMs)
-            : (!currentData.keys().hasAny(['nextRevealTime'])
-                ? (!newData.keys().hasAny(['nextRevealTime']) || newData.nextRevealTime is int)
-                : newData.nextRevealTime == currentData.nextRevealTime))
-        && (!currentData.keys().hasAny(['startTime']) || !(currentData.startTime is int) || nowMs >= currentData.startTime + 1800000)
+        && newData.keys().hasAll(['teamARole', 'teamBRole', 'teamAScore', 'teamBScore', 'lastCaptureTargetId'])
         && newData.lastCaptureTargetId is string
-        && exists(targetPath)
-        && existsAfter(targetPath)
-        && get(targetPath).data.gameSessionId == currentData.gameSessionId
-        && get(targetPath).data.team in ['A', 'B']
-        && get(targetPath).data.team != get(mePath).data.team
-        && get(targetPath).data.status == 'ACTIVE'
-        && (!get(targetPath).data.keys().hasAny(['invincibleUntil']) || !(get(targetPath).data.invincibleUntil is int) || get(targetPath).data.invincibleUntil <= nowMs)
-        && (!get(targetPath).data.keys().hasAny(['protectionZone']) || get(targetPath).data.protectionZone == 'NONE')
+        && newData.lastCaptureTargetId.size() > 0
+        && (!currentData.keys().hasAny(['startTime']) || !(currentData.startTime is int) || nowMs >= currentData.startTime + 1800000)
+        && (!isSurvival
+          ? (newData.keys().hasAny(['nextRevealTime']) && validCaptureWaitingBound(currentData, newData.nextRevealTime, nowMs))
+          : (!currentData.keys().hasAny(['nextRevealTime'])
+            ? (!newData.keys().hasAny(['nextRevealTime']) || newData.nextRevealTime is int)
+            : (newData.keys().hasAny(['nextRevealTime']) && newData.nextRevealTime == currentData.nextRevealTime)))
         && (isSurvival
-            ? (getAfter(targetPath).data.status == 'CAPTURED'
-               && getAfter(targetPath).data.waitingUntil == 0
-               && newData.teamARole == currentData.teamARole
-               && newData.teamBRole == currentData.teamBRole
-               && (get(mePath).data.team == 'A'
-                   ? (newData.teamAScore == currentData.teamAScore + 50 && newData.teamBScore == currentData.teamBScore)
-                   : (newData.teamBScore == currentData.teamBScore + 50 && newData.teamAScore == currentData.teamAScore)))
-            : (getAfter(targetPath).data.status == 'WAITING'
-               && validCaptureWaitingBound(currentData, getAfter(targetPath).data.waitingUntil, nowMs)
-               && (get(mePath).data.team == 'A'
-                   ? (currentData.teamARole == 'ONI'
-                      && newData.teamARole == 'RUNNER'
-                      && newData.teamBRole == 'ONI'
-                      && newData.teamAScore == currentData.teamAScore + 50
-                      && newData.teamBScore == currentData.teamBScore)
-                   : (currentData.teamBRole == 'ONI'
-                      && newData.teamBRole == 'RUNNER'
-                      && newData.teamARole == 'ONI'
-                      && newData.teamBScore == currentData.teamBScore + 50
-                      && newData.teamAScore == currentData.teamAScore))))
-        && (!diff.hasAny(['logs']) || validPrependedLogs(currentData, newData, ['CAPTURE']));
+          ? (newData.teamARole == currentData.teamARole && newData.teamBRole == currentData.teamBRole)
+          : (newData.teamARole != currentData.teamARole && newData.teamBRole != currentData.teamBRole))
+        && (!diff.hasAny(['logs']) || validPrependedLogs(currentData, newData, 'CAPTURE'))
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && validCaptureConfigWithTarget(
+          currentData, newData, nowMs, isSurvival,
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data,
+          /databases/$(database)/documents/users/$(newData.lastCaptureTargetId)
+        );
     }
 
     function validParticipantConfigUpdate(configId) {
@@ -785,8 +1086,11 @@ service cloud.firestore {
       let diff = newData.diff(currentData).affectedKeys();
       return signedIn()
         && configId == 'current'
-        && isCurrentParticipant(request.auth.uid)
-        && hasCurrentGameSession()
+        && validSessionConfigFields(currentData)
+        && newData.keys().hasAll([
+          'gameSessionId', 'sessionStartedAt', 'sessionSchemaVersion',
+          'gameStatus', 'day', 'missionMode', 'isGameOver'
+        ])
         && newData.gameSessionId == currentData.gameSessionId
         && newData.sessionStartedAt == currentData.sessionStartedAt
         && newData.sessionSchemaVersion == currentData.sessionSchemaVersion
@@ -794,10 +1098,16 @@ service cloud.firestore {
         && newData.day == currentData.day
         && newData.missionMode == currentData.missionMode
         && newData.isGameOver == currentData.isGameOver
+        && diff.hasOnly([
+          'logs', 'teamARole', 'teamBRole', 'teamAScore',
+          'teamBScore', 'nextRevealTime', 'lastCaptureTargetId'
+        ])
         && (
-          (diff.hasOnly(['logs']) && validLogOnlyConfigUpdate(currentData, newData, diff))
-          || (diff.hasAny(['teamARole', 'teamBRole', 'lastCaptureTargetId']) && validCaptureConfigUpdate(currentData, newData, diff))
-          || (diff.hasAny(['teamAScore', 'teamBScore']) && validMissionScoreConfigUpdate(currentData, newData, diff))
+          diff.hasOnly(['logs'])
+            ? (diff.size() == 1 && validLogOnlyConfigUpdate(currentData, newData))
+            : diff.hasAny(['teamARole', 'teamBRole', 'lastCaptureTargetId'])
+              ? validCaptureConfigUpdate(currentData, newData, diff)
+              : (diff.hasAny(['teamAScore', 'teamBScore']) && validMissionScoreConfigUpdate(currentData, newData, diff))
         );
     }
 

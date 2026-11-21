@@ -1,7 +1,8 @@
 import type React from 'react';
 import { Link } from 'react-router-dom';
 import type { GameConfig, User, Mission } from '../types';
-import { Shield, QrCode, Map as MapIcon, Target } from 'lucide-react';
+import { Shield, QrCode, Map as MapIcon, Target, LogOut } from 'lucide-react';
+import { signOutCurrentUser } from '../src/infrastructure/firebase/auth';
 import EmergencyProjectionMap from './EmergencyProjectionMap';
 import useConfirmDialog from '../src/hooks/useConfirmDialog';
 import ConfirmDialog from '../src/components/ui/ConfirmDialog';
@@ -39,9 +40,21 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
     );
   }
 
+  const handleAdminSignOut = async () => {
+    const confirmed = await confirm({
+      title: '管理者ログアウト',
+      description: '管理者アカウントからログアウトしますか？',
+      confirmLabel: 'ログアウト',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    await signOutCurrentUser();
+    dashboard.setIsAuthorized(false);
+  };
+
   return (
     <div className="min-h-[100dvh] bg-slate-100 text-slate-800 font-sans">
-      <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 pb-24 space-y-6">
+      <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 pt-[max(1rem,env(safe-area-inset-top))] pb-[calc(6rem+env(safe-area-inset-bottom))] space-y-6">
         <header className="flex flex-wrap justify-between items-center gap-3 bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-lg sm:text-xl font-black text-slate-900 flex items-center gap-2">
@@ -71,6 +84,15 @@ const AdminView: React.FC<Props> = ({ config, users = [], missions = [] }) => {
               className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 flex items-center gap-1.5 shadow-sm transition-all"
             >
               <QrCode size={14} /> 招待QR
+            </button>
+            <button
+              type="button"
+              onClick={() => { void handleAdminSignOut(); }}
+              aria-label="管理者ログアウト"
+              title="ログアウト"
+              className="w-9 h-9 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 flex items-center justify-center border border-slate-200 transition-all active:scale-95"
+            >
+              <LogOut size={16} />
             </button>
           </div>
         </header>

@@ -24,13 +24,24 @@ import {
 } from '../differentialPlayerSubscriber';
 import { recordConfirmedServerTimestamp } from './serverClock';
 
+export interface SnapshotMeta {
+  hasPendingWrites: boolean;
+  fromCache: boolean;
+}
+
 export function subscribeCurrentPlayer(
   uid: string,
-  onValue: (player: User | null) => void,
+  onValue: (player: User | null, meta?: SnapshotMeta) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
   return onSnapshot(doc(db, 'users', uid), snapshot => {
-    onValue(snapshot.exists() ? mapUserDocument(snapshot.id, snapshot.data()) : null);
+    onValue(
+      snapshot.exists() ? mapUserDocument(snapshot.id, snapshot.data()) : null,
+      {
+        hasPendingWrites: snapshot.metadata.hasPendingWrites,
+        fromCache: snapshot.metadata.fromCache,
+      },
+    );
   }, onError);
 }
 

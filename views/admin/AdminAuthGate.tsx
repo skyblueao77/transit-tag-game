@@ -79,7 +79,11 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({ onAuthorized }) => {
               type="text"
               value={adminIdInput}
               onChange={e => setAdminIdInput(e.target.value)}
-              className="w-full p-3.5 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="username"
+              className="w-full p-3.5 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-base sm:text-sm"
               placeholder="例: admin"
               required
             />
@@ -94,7 +98,8 @@ const AdminAuthGate: React.FC<AdminAuthGateProps> = ({ onAuthorized }) => {
               type="password"
               value={passwordInput}
               onChange={e => setPasswordInput(e.target.value)}
-              className="w-full p-3.5 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-sm"
+              autoComplete="current-password"
+              className="w-full p-3.5 bg-slate-700/80 rounded-xl text-white font-bold outline-none border-2 border-transparent focus:border-blue-500 text-base sm:text-sm"
               placeholder="パスワード"
               required
             />

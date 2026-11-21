@@ -65,8 +65,9 @@ const AdminInviteSection: React.FC<AdminInviteSectionProps> = ({
         <input
           type="text"
           readOnly
+          aria-label="招待URL"
           value={inviteUrl}
-          className="flex-1 min-w-0 bg-transparent text-xs font-bold text-slate-600 outline-none truncate"
+          className="flex-1 min-w-0 bg-transparent text-base sm:text-xs font-bold text-slate-600 outline-none truncate"
         />
         <button
           type="button"

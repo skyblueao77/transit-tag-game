@@ -679,4 +679,91 @@ describe('P0 Reproduction & Gateway Payload Integration Tests', () => {
     }
     assert.equal(recaptureRes.status, 200, 'SURVIVAL re-capture after admin resume MUST succeed with 200');
   });
+
+  test('Player updateDoc(lastStation) and Admin awardMissionCompletionByAdmin(isFinalMission: true) succeed against Firestore Rules', async () => {
+    const now = Date.now();
+    const adminUser = await createPasswordAuthUser('admin_award');
+    const player = await createPasswordAuthUser('runner_station');
+    await seed(`admins/${adminUser.localId}`, { role: 'admin', createdAt: new Date(now) });
+
+    const playerDoc = {
+      id: player.localId,
+      gameSessionId: CURRENT_SESSION_ID,
+      name: 'Station Runner',
+      team: 'A',
+      role: 'RUNNER',
+      color: '#ef4444',
+      status: 'ACTIVE',
+      score: 0,
+      invincibleCards: 0,
+      invincibleUntil: 0,
+      waitingUntil: 0,
+    };
+    await seed(`users/${player.localId}`, playerDoc);
+    await seed('game_config/current', {
+      gameSessionId: CURRENT_SESSION_ID,
+      sessionStartedAt: now - 3600000,
+      sessionSchemaVersion: 2,
+      victoryMode: 'SURVIVAL',
+      gameStatus: 'FINAL_MISSION',
+      day: 2,
+      missionMode: 'SAME',
+      isGameOver: false,
+      isFinalMissionActive: true,
+      teamARole: 'RUNNER',
+      teamBRole: 'ONI',
+      teamAScore: 0,
+      teamBScore: 0,
+      logs: [],
+    });
+
+    // 1. updateDoc equivalent (currentDocument.exists=true + updateMask=['lastStation'])
+    const stationRes = await commitBatch([
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/users/${player.localId}`,
+          fields: fields({ ...playerDoc, lastStation: '新宿駅 (JR山手線)' }).fields,
+        },
+        updateMask: { fieldPaths: ['lastStation'] },
+        currentDocument: { exists: true },
+      },
+    ], player.idToken);
+    assert.equal(stationRes.status, 200, 'updateDoc lastStation MUST succeed with 200');
+
+    // 2. Admin manual award for final mission sets isFinalMission: true
+    const compId = `A_${CURRENT_SESSION_ID}_final_m1`;
+    const awardRes = await commitBatch([
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/game_config/current`,
+          fields: fields({ teamAScore: 100, logs: [{ id: 'log_award_1', timestamp: now, message: '【運営承認】Team A が最終達成 (+100pt)', type: 'MISSION' }] }).fields,
+        },
+        updateMask: { fieldPaths: ['teamAScore', 'logs'] },
+      },
+      {
+        update: {
+          name: `projects/${projectId}/databases/(default)/documents/missionCompletions/${compId}`,
+          fields: fields({
+            gameSessionId: CURRENT_SESSION_ID,
+            missionId: 'final_m1',
+            team: 'A',
+            completedBy: 'ADMIN',
+            points: 100,
+            luckyReward: false,
+            isFinalMission: true,
+            completedAt: new Date(now),
+          }).fields,
+        },
+        currentDocument: { exists: false },
+      },
+    ], adminUser.idToken);
+    assert.equal(awardRes.status, 200, 'Admin manual final mission award MUST succeed with 200');
+
+    const compDocRes = await fetch(`${firestoreBase}/missionCompletions/${compId}`, {
+      headers: { Authorization: `Bearer ${adminUser.idToken}` },
+    });
+    assert.equal(compDocRes.status, 200);
+    const compDoc = await compDocRes.json();
+    assert.equal(compDoc.fields?.isFinalMission?.booleanValue, true);
+  });
 });

@@ -30,7 +30,7 @@ const AdminBroadcastSection: React.FC<AdminBroadcastSectionProps> = ({
           onChange={e => onChangeBroadcastInput(e.target.value)}
           maxLength={200}
           placeholder="例: 14:00から中間ボーナスミッション開始！"
-          className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-500"
+          className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl text-base sm:text-xs font-bold text-slate-800 outline-none focus:border-blue-500"
           disabled={isSendingBroadcast}
         />
         <button

@@ -337,8 +337,8 @@ describe('Audit 02: Session Initialization, Phase Transition Matrix & Master Res
       'utf8',
     );
     assert.ok(
-      dashboardSource.includes('`${window.location.origin}/#/`'),
-      'inviteUrl should be built from ${window.location.origin}/#/ so direct /admin visits do not corrupt QR URLs',
+      dashboardSource.includes('`$' + '{window.location.origin}/#/`'),
+      'inviteUrl should build root origin hash URLs so direct /admin visits do not corrupt QR URLs',
     );
   });
 });

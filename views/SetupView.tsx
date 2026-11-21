@@ -170,7 +170,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
   };
 
   return (
-    <div className="min-h-[100dvh] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-4 py-8 flex flex-col items-center text-white font-sans">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-4 py-8 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] flex flex-col items-center text-white font-sans">
       <div className="w-full max-w-md my-auto flex flex-col items-center">
       {isFirebaseMisconfigured && (
         <div className="w-full mb-4 p-4 bg-red-600/90 border-2 border-red-400 text-white rounded-2xl text-xs font-bold shadow-2xl flex items-start gap-2.5">
@@ -182,7 +182,7 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
         </div>
       )}
 
-      <div className="mb-6 text-center animate-in fade-in zoom-in duration-700">
+      <div className="mb-6 text-center">
         <div className="w-20 h-20 bg-white/5 backdrop-blur-xl rounded-[2rem] flex items-center justify-center mx-auto mb-4 shadow-2xl active:scale-90 transition-all border border-white/10">
           <Train size={40} className="text-blue-400 drop-shadow-[0_0_15px_rgba(96,165,250,0.5)]" />
         </div>
@@ -238,7 +238,11 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
                   type="text"
                   value={joinCode}
                   onChange={e => setJoinCode(e.target.value.trim())}
-                  className="w-full pl-9 pr-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-mono font-bold text-xs transition-all"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="one-time-code"
+                  className="w-full pl-9 pr-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-mono font-bold text-base sm:text-xs transition-all"
                   placeholder="管理者共有のQRまたは招待コードを入力"
                   maxLength={128}
                   required
@@ -262,7 +266,11 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
                   type="text"
                   value={userId}
                   onChange={e => setUserId(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-                  className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-sm transition-all"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="username"
+                  className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-base sm:text-sm transition-all"
                   placeholder="例: tanaka01"
                   maxLength={30}
                   required
@@ -283,7 +291,8 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
                   type="password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-sm transition-all"
+                  autoComplete="new-password"
+                  className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-base sm:text-sm transition-all"
                   placeholder="6文字以上のパスワード"
                   minLength={6}
                   maxLength={50}
@@ -303,7 +312,8 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-sm transition-all"
+                autoComplete="nickname"
+                className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-base sm:text-sm transition-all"
                 placeholder="例: たなか"
                 maxLength={80}
                 required
@@ -402,7 +412,11 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
                 type="text"
                 value={userId}
                 onChange={e => setUserId(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-                className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-sm transition-all"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="username"
+                className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-base sm:text-sm transition-all"
                 placeholder="登録したユーザーID"
                 required
                 disabled={isSubmitting}
@@ -418,7 +432,8 @@ const SetupView: React.FC<Props> = ({ onComplete, gameSessionId, isAuthenticated
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-sm transition-all"
+                autoComplete="current-password"
+                className="w-full px-4 py-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-blue-500 focus:bg-white outline-none font-bold text-base sm:text-sm transition-all"
                 placeholder="パスワード"
                 required
                 disabled={isSubmitting}

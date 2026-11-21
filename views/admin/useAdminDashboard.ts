@@ -8,6 +8,7 @@ import { exportMissionsToJson, getRoleForTeam, parseImportedMissionsJson } from 
 import {
   calibrateAdminServerClock,
   isCurrentAuthUserAdmin,
+  subscribeAuthUserId,
 } from '../../src/infrastructure/firebase/auth';
 import { resumePlayer, swapTeamRoles } from '../../src/application/adminGameStateActions';
 import { revealPlayerLocations } from '../../src/application/adminReveal';
@@ -39,6 +40,7 @@ import {
   setAdminRegistrationOpen,
 } from '../../src/infrastructure/firebase/clientFirestoreGateways';
 import { adminChangePlayerTeam, adminDeletePlayer } from '../../src/infrastructure/firebase/playerStore';
+import { generateSecureId } from '../../src/infrastructure/firebase/gateways/shared';
 import {
   createEmergencyLocationProjectionsSubscriber,
   type EmergencyLocationProjectionsSubscriber,
@@ -207,18 +209,33 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      try {
-        const isAdminUser = await isCurrentAuthUserAdmin();
-        if (mounted && isAdminUser) {
-          setIsAuthorized(true);
-        }
-      } catch (err) {
-        console.error('Error verifying admin authentication:', err);
+    let prevUid: string | null | undefined;
+    let authCheckSeq = 0;
+    const unsubscribe = subscribeAuthUserId(uid => {
+      if (!mounted) return;
+      const seq = ++authCheckSeq;
+      if (!uid) {
+        prevUid = null;
+        setIsAuthorized(false);
+        return;
       }
-    })();
+      if (prevUid !== undefined && prevUid !== uid) {
+        setIsAuthorized(false);
+      }
+      prevUid = uid;
+      void isCurrentAuthUserAdmin()
+        .then(isAdminUser => {
+          if (mounted && seq === authCheckSeq && isAdminUser) {
+            setIsAuthorized(true);
+          }
+        })
+        .catch(err => {
+          console.error('Error verifying admin authentication:', err);
+        });
+    });
     return () => {
       mounted = false;
+      unsubscribe();
     };
   }, []);
 
@@ -233,7 +250,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     setIsProcessing(true);
     setSessionInitializationBusy(true);
     try {
-      sessionInitializationRequestIdRef.current ??= crypto.randomUUID();
+      sessionInitializationRequestIdRef.current ??= generateSecureId();
       const initResult = await initializeGameSession(
         { requestId: sessionInitializationRequestIdRef.current },
         firebaseGameSessionInitializationGateway,
@@ -245,7 +262,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
       sessionInitializationRequestIdRef.current = null;
 
       const syncResult = await syncMissionCatalog(
-        { requestId: crypto.randomUUID(), expectedSessionId: initResult.gameSessionId },
+        { requestId: generateSecureId(), expectedSessionId: initResult.gameSessionId },
         firebaseAdminMissionGateway,
       );
       if (syncResult.ok) {
@@ -261,7 +278,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
   const handleInitializeGameSession = async (): Promise<void> => {
     if (sessionInitializationBusy || isProcessing) return;
-    sessionInitializationRequestIdRef.current ??= crypto.randomUUID();
+    sessionInitializationRequestIdRef.current ??= generateSecureId();
     setSessionInitializationBusy(true);
     try {
       const result = await initializeGameSession(
@@ -308,7 +325,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     setIsProcessing(true);
     try {
       const result = await transitionGamePhase(
-        { action, requestId: crypto.randomUUID(), expectedSessionId },
+        { action, requestId: generateSecureId(), expectedSessionId },
         firebaseAdminPhaseGateway,
       );
       if (result.ok === false) {
@@ -335,7 +352,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
     roleSwapBusyRef.current = true;
     setIsProcessing(true);
-    const requestId = roleSwapRequestIdRef.current ?? crypto.randomUUID();
+    const requestId = roleSwapRequestIdRef.current ?? generateSecureId();
     roleSwapRequestIdRef.current = requestId;
     try {
       const result = await swapTeamRoles({ requestId, expectedSessionId }, firebaseAdminGameStateGateway);
@@ -393,7 +410,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
 
     revealBusyRef.current = true;
     setIsProcessing(true);
-    const requestId = revealRequestIdsRef.current[scope] ?? crypto.randomUUID();
+    const requestId = revealRequestIdsRef.current[scope] ?? generateSecureId();
     revealRequestIdsRef.current[scope] = requestId;
     try {
       const result = await revealPlayerLocations(
@@ -436,7 +453,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     const key = `${scoreTeam}:${delta}:${scoreReasonCode}`;
     const requestId = pendingScoreRequestRef.current?.key === key
       ? pendingScoreRequestRef.current.requestId
-      : crypto.randomUUID();
+      : generateSecureId();
     pendingScoreRequestRef.current = { key, requestId };
     scoreBusyRef.current = true;
     setIsProcessing(true);
@@ -460,7 +477,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
   };
 
   const missionRequestId = (key: string): string => {
-    missionRequestIdsRef.current[key] ??= crypto.randomUUID();
+    missionRequestIdsRef.current[key] ??= generateSecureId();
     return missionRequestIdsRef.current[key];
   };
 
@@ -470,7 +487,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     if (!expectedSessionId) return;
     const pending = pendingMissionModeRef.current;
     const next = pending?.mode ?? (config.missionMode === 'SAME' ? 'DIFFERENT' : 'SAME');
-    const requestId = pending?.requestId ?? crypto.randomUUID();
+    const requestId = pending?.requestId ?? generateSecureId();
     pendingMissionModeRef.current ??= { mode: next, requestId };
     missionBusyRef.current = true;
     setIsProcessing(true);
@@ -698,6 +715,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
         title: targetMission.title,
         points: targetMission.points,
         expectedSessionId,
+        isFinalMission: Boolean(targetMission.isFinalMission),
       });
       if (success) {
         toast.success(`Team ${manualAwardTeam} に +${targetMission.points}pt 加算しました！`);
@@ -864,7 +882,7 @@ export function useAdminDashboard({ config, users, missions, confirm }: UseAdmin
     setIsProcessing(true);
     setResetError(null);
     try {
-      resetRequestIdRef.current ??= crypto.randomUUID();
+      resetRequestIdRef.current ??= generateSecureId();
       const result = await executeGameReset({
         confirmationToken: resetPreview.confirmationToken,
         requestId: resetRequestIdRef.current,

@@ -47,9 +47,10 @@ const AdminLocationRevealSection: React.FC<AdminLocationRevealSectionProps> = ({
             type="number"
             min={1}
             max={30}
+            inputMode="numeric"
             value={searchDuration}
             onChange={e => onChangeSearchDuration(Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 1)))}
-            className="w-16 bg-white text-amber-700 font-black p-1.5 rounded-lg text-center text-xs"
+            className="w-16 bg-white text-amber-700 font-black p-1.5 rounded-lg text-center text-base sm:text-xs"
           />
         </div>
         <button
@@ -92,7 +93,7 @@ const AdminLocationRevealSection: React.FC<AdminLocationRevealSectionProps> = ({
             <select
               value={penaltyTargetPlayerId}
               onChange={e => onChangePenaltyTargetPlayerId(e.target.value)}
-              className="flex-1 min-w-[180px] bg-white text-slate-800 text-xs font-bold p-2.5 rounded-xl border border-amber-300"
+              className="flex-1 min-w-[180px] bg-white text-slate-800 text-base sm:text-xs font-bold p-2.5 rounded-xl border border-amber-300"
             >
               <option value="">対象プレイヤーを選択...</option>
               {participants.map(u => {
@@ -110,9 +111,10 @@ const AdminLocationRevealSection: React.FC<AdminLocationRevealSectionProps> = ({
                 type="number"
                 min={1}
                 max={180}
+                inputMode="numeric"
                 value={penaltyDurationMinutes}
                 onChange={e => onChangePenaltyDurationMinutes(Math.min(180, Math.max(1, parseInt(e.target.value, 10) || 1)))}
-                className="w-16 bg-white text-amber-800 text-xs font-black p-1.5 rounded-lg text-center"
+                className="w-16 bg-white text-amber-800 text-base sm:text-xs font-black p-1.5 rounded-lg text-center"
               />
             </div>
             <button

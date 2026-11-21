@@ -25,7 +25,7 @@ export const ConfirmDialog: React.FC<Props> = ({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150 overflow-y-auto">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
       <div
         role="dialog"
         aria-modal="true"

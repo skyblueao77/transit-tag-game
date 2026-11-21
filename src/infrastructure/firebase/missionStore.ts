@@ -101,6 +101,7 @@ interface AwardMissionInput {
   points: number;
   title: string;
   expectedSessionId: string;
+  isFinalMission?: boolean;
 }
 
 /**
@@ -159,7 +160,7 @@ export async function awardMissionCompletionByAdmin(input: AwardMissionInput): P
         completedBy: 'ADMIN',
         points: input.points,
         luckyReward: false,
-        isFinalMission: false,
+        isFinalMission: Boolean(input.isFinalMission),
         completedAt: serverTimestamp(),
       });
     });

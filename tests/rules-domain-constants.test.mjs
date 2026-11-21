@@ -10,7 +10,7 @@ import {
 
 test('Domain time constants align with firestore.rules threshold limits (+60s tolerance)', () => {
   const rulesPath = path.resolve(process.cwd(), 'firestore.rules');
-  const rulesContent = fs.readFileSync(rulesPath, 'utf-8');
+  const rulesContent = fs.readFileSync(rulesPath, 'utf-8').replace(/\r\n/g, '\n');
 
   // Tolerance allowance for client-server clock skew in firestore.rules is 60,000ms (60s)
   const CLOCK_SKEW_TOLERANCE_MS = 60_000;

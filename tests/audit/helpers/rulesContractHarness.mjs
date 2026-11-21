@@ -463,7 +463,7 @@ export class SimulatedFirestore {
           && cfg.periodicRevealDurationMinutes <= 30
           ? cfg.periodicRevealDurationMinutes * 60_000
           : 300_000;
-        const durationMs = rawDurationMs < intervalMs ? rawDurationMs : intervalMs;
+        const durationMs = Math.min(rawDurationMs, intervalMs);
         if (!wrapKeys(cfg).hasAny(['gameStatus']) || !['DAY1_ACTIVE', 'DAY2_ACTIVE'].includes(cfg.gameStatus)) return 0;
         if (!wrapKeys(cfg).hasAny(['startTime']) || !isInt(cfg.startTime) || cfg.startTime <= 0) return 0;
         if (nowMs < cfg.startTime + intervalMs) return 0;

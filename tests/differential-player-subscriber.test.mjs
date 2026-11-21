@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { createDifferentialPlayerSubscriber } from '../src/infrastructure/differentialPlayerSubscriber.ts';
 
-function createHarness() {
+function createHarness(options = {}) {
   const activeListeners = new Map();
   const subscribeCalls = [];
   const unsubscribeCalls = [];
@@ -24,6 +24,7 @@ function createHarness() {
     onError: error => {
       errors.push(error);
     },
+    ...options,
   });
 
   return { subscriber, activeListeners, subscribeCalls, unsubscribeCalls, published, errors };
@@ -107,5 +108,48 @@ describe('Differential per-player subscriber', () => {
 
     assert.deepEqual(subscribeCalls, ['p1']);
     assert.equal(published.length, publishedCountBeforeDispose);
+  });
+
+  test('automatically retries permission-denied subscriptions with backoff and recovers on next snapshot', async () => {
+    const { subscriber, activeListeners, subscribeCalls, published, errors } = createHarness({
+      retryBaseDelayMs: 15,
+      maxRetryDelayMs: 60,
+    });
+
+    subscriber.setPlayerIds(['p1']);
+    assert.deepEqual(subscribeCalls, ['p1']);
+
+    const permError = Object.assign(new Error('Missing permissions'), { code: 'permission-denied' });
+    activeListeners.get('p1').onFailure(permError);
+    assert.equal(errors.length, 0);
+
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.deepEqual(subscribeCalls, ['p1', 'p1']);
+
+    activeListeners.get('p1').onNext({ lat: 35.69 });
+    assert.deepEqual(published.at(-1), { p1: { lat: 35.69 } });
+
+    subscriber.dispose();
+  });
+
+  test('cancels pending permission-denied retry timer when player is removed or disposed', async () => {
+    const { subscriber, activeListeners, subscribeCalls } = createHarness({
+      retryBaseDelayMs: 25,
+      maxRetryDelayMs: 100,
+    });
+
+    subscriber.setPlayerIds(['p1']);
+    const permError = Object.assign(new Error('Missing permissions'), { code: 'permission-denied' });
+    activeListeners.get('p1').onFailure(permError);
+
+    subscriber.setPlayerIds([]);
+    await new Promise(resolve => setTimeout(resolve, 45));
+    assert.deepEqual(subscribeCalls, ['p1']);
+
+    subscriber.setPlayerIds(['p2']);
+    activeListeners.get('p2').onFailure(permError);
+    subscriber.dispose();
+    await new Promise(resolve => setTimeout(resolve, 45));
+    assert.deepEqual(subscribeCalls, ['p1', 'p2']);
   });
 });
