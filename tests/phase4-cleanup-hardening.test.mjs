@@ -45,6 +45,23 @@ describe('Phase 4: Spark Single-Backend Cleanup, CI/Test Reliability & Gateway H
     const dependabotYml = readFileSync(repoFile('.github/dependabot.yml'), 'utf8');
     assert.match(dependabotYml, /cooldown:/);
     assert.match(dependabotYml, /groups:/);
+    const githubActionsSection = dependabotYml.split(/- package-ecosystem:\s*"github-actions"/)[1] ?? '';
+    assert.ok(githubActionsSection.length > 0, 'github-actions ecosystem must be configured');
+    const actionsLines = githubActionsSection.split(/\r?\n/);
+    const cooldownStartIdx = actionsLines.findIndex(line => /^\s*cooldown:\s*$/.test(line));
+    assert.notEqual(cooldownStartIdx, -1, 'github-actions cooldown block must exist');
+    const cooldownIndent = actionsLines[cooldownStartIdx].match(/^(\s*)/)?.[1].length ?? 0;
+    const cooldownLines = [];
+    for (let i = cooldownStartIdx + 1; i < actionsLines.length; i += 1) {
+      const line = actionsLines[i];
+      if (!line.trim()) continue;
+      const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (indent <= cooldownIndent) break;
+      cooldownLines.push(line);
+    }
+    const actionsCooldownBlock = cooldownLines.join('\n');
+    assert.match(actionsCooldownBlock, /^\s*default-days:\s*[1-9]\d*\s*$/m);
+    assert.doesNotMatch(actionsCooldownBlock, /semver-(?:major|minor|patch)-days\s*:/);
 
     const tsconfig = JSON.parse(readFileSync(repoFile('tsconfig.json'), 'utf8'));
     assert.equal(tsconfig.compilerOptions?.noUnusedLocals, true);
