@@ -520,6 +520,9 @@ describe('Audit 01: Auth, Bootstrap, Player Registration & Subscription Lifecycl
     assert.ok(globalRule, 'Expected global header rule');
     const headerMap = Object.fromEntries(globalRule.headers.map(h => [h.key, h.value]));
     assert.match(headerMap['Strict-Transport-Security'] ?? '', /max-age=31536000/);
+    assert.equal(headerMap['Cross-Origin-Opener-Policy'], 'same-origin');
+    assert.equal(headerMap['Cross-Origin-Resource-Policy'], 'same-origin');
+    assert.equal(headerMap['X-Permitted-Cross-Domain-Policies'], 'none');
     const csp = headerMap['Content-Security-Policy'] ?? '';
     assert.match(csp, /object-src 'none'/);
     assert.match(csp, /worker-src 'self'/);

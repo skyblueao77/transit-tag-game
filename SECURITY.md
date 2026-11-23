@@ -52,6 +52,9 @@
 ## 自動セキュリティ検証（CI / GitHub Security）
 
 - **GitHub CodeQL (Default Setup)**: `actions` および `javascript-typescript` に対して静的解析が有効化されています。
-- **Dependabot**: `.github/dependabot.yml` により `npm` 依存および `github-actions` ワークフローの更新を毎週チェックします。
-- **依存脆弱性チェック & ルール検証**: `.github/workflows/ci.yml` にて `npm audit --omit=dev`、Firestore セキュリティルールテスト（`npm run test:rules`）、およびエミュレータ結合テスト（`npm run test:integration`）を継続実行しています。
+- **Dependabot**: `.github/dependabot.yml` により `npm` 依存および `github-actions` ワークフローの更新を毎週チェックし、通常バージョン更新にはクールダウン期間（`cooldown`）と関連アップデート集約（`groups`）を適用してサプライチェーンリスクと PR ノイズを抑えています（セキュリティアップデートは即時通知されます）。
+- **二段依存脆弱性チェック & PR レビュー**: `.github/workflows/ci.yml` および `.github/workflows/release.yml` にて、本番依存監査（`npm audit --omit=dev`）に加えて全依存監査（`npm audit --audit-level=moderate`）を実行しています。また PR 時には `dependency-review-action` により新規の脆弱な依存混入を自動ブロックし、全ワークフローで GitHub Actions のフルコミット SHA ピン止めと `persist-credentials: false` を徹底しています。
+- **週次定期セキュリティ監査**: `.github/workflows/security-audit.yml` により、コード変更がない期間も毎週自動で依存脆弱性監査（`npm audit --omit=dev` / `npm audit --audit-level=moderate`）、監査リグレッションテスト（`npm run test:audit`）、および Firestore セキュリティルールテスト（`npm run test:rules`）を実行します。
+- **Hosting / 入力防御**: `firebase.json` にて HSTS・CSP に加え `Cross-Origin-Opener-Policy: same-origin`・`Cross-Origin-Resource-Policy: same-origin`・`X-Permitted-Cross-Domain-Policies: none` を強制し、管理画面のミッション JSON インポートには 512KB 上限検証を適用しています。
+- **ルール・統合・E2E 検証**: `.github/workflows/ci.yml` にて Firestore セキュリティルールテスト（`npm run test:rules`）、エミュレータ結合テスト（`npm run test:integration`）、およびモバイル E2E テスト（`npm run test:e2e:mobile`）を継続実行しています。
 

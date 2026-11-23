@@ -1,6 +1,8 @@
 import type React from 'react';
 import { useRef } from 'react';
 import { Award, Download, Edit2, Plus, Shuffle, Trash2, Upload } from 'lucide-react';
+import { toast } from 'sonner';
+import { MAX_MISSION_IMPORT_BYTES } from '../../src/game/adminMission';
 import type { GameConfig, Mission, MissionCompletion } from '../../types';
 
 interface AdminMissionCenterProps {
@@ -66,6 +68,10 @@ const AdminMissionCenter: React.FC<AdminMissionCenterProps> = ({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file || !onImportMissions) return;
+    if (file.size > MAX_MISSION_IMPORT_BYTES) {
+      toast.error(`JSONファイルサイズが大きすぎます（${Math.floor(MAX_MISSION_IMPORT_BYTES / 1024)}KB以内にしてください）`);
+      return;
+    }
     const rawJson = await file.text();
     await onImportMissions(rawJson);
   };

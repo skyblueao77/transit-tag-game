@@ -28,14 +28,23 @@ describe('Phase 4: Spark Single-Backend Cleanup, CI/Test Reliability & Gateway H
     assert.equal(pkg.engines?.node, '>=22.0.0');
     assert.equal(pkg.scripts?.['test:functions'], undefined);
     assert.equal(pkg.scripts?.['test:bundle'], 'node --test tests/production-bundle.test.mjs');
+    assert.ok(pkg.dependencies?.firebase, 'firebase must be classified in dependencies');
+    assert.ok(pkg.dependencies?.['lucide-react'], 'lucide-react must be classified in dependencies');
+    assert.equal(pkg.devDependencies?.firebase, undefined, 'firebase must not be in devDependencies');
+    assert.equal(pkg.devDependencies?.['lucide-react'], undefined, 'lucide-react must not be in devDependencies');
     assert.equal(pkg.dependencies?.['@types/leaflet'], undefined);
     assert.ok(pkg.devDependencies?.['@types/leaflet']);
+    assert.equal(pkg.overrides?.deepmerge, undefined, 'stale deepmerge override must be removed');
+    assert.match(pkg.overrides?.['@grpc/grpc-js'] ?? '', /^\^/);
     for (const legacyDep of ['autoprefixer', 'postcss', '@tailwindcss/postcss']) {
       assert.equal(pkg.devDependencies?.[legacyDep], undefined, `${legacyDep} must be removed`);
     }
 
     assert.equal(readFileSync(repoFile('.nvmrc'), 'utf8').trim(), '22');
     assert.equal(existsSync(repoFile('.github/dependabot.yml')), true);
+    const dependabotYml = readFileSync(repoFile('.github/dependabot.yml'), 'utf8');
+    assert.match(dependabotYml, /cooldown:/);
+    assert.match(dependabotYml, /groups:/);
 
     const tsconfig = JSON.parse(readFileSync(repoFile('tsconfig.json'), 'utf8'));
     assert.equal(tsconfig.compilerOptions?.noUnusedLocals, true);
@@ -45,10 +54,23 @@ describe('Phase 4: Spark Single-Backend Cleanup, CI/Test Reliability & Gateway H
 
     const ciWorkflow = readFileSync(repoFile('.github/workflows/ci.yml'), 'utf8');
     const releaseWorkflow = readFileSync(repoFile('.github/workflows/release.yml'), 'utf8');
+    const securityAuditPath = '.github/workflows/security-audit.yml';
+    assert.equal(existsSync(repoFile(securityAuditPath)), true);
+    const securityAuditWorkflow = readFileSync(repoFile(securityAuditPath), 'utf8');
+
     assert.doesNotMatch(ciWorkflow, /--prefix functions/);
     assert.doesNotMatch(releaseWorkflow, /--prefix functions/);
     assert.match(ciWorkflow, /npm run test:bundle/);
     assert.match(releaseWorkflow, /npm run test:bundle/);
+    assert.match(ciWorkflow, /persist-credentials:\s*false/);
+    assert.match(ciWorkflow, /actions\/dependency-review-action@/);
+    assert.match(ciWorkflow, /npm audit --audit-level=moderate/);
+    assert.match(releaseWorkflow, /persist-credentials:\s*false/);
+    assert.match(releaseWorkflow, /npm audit --audit-level=moderate/);
+    assert.match(securityAuditWorkflow, /schedule:/);
+    assert.match(securityAuditWorkflow, /persist-credentials:\s*false/);
+    assert.match(securityAuditWorkflow, /npm audit --omit=dev/);
+    assert.match(securityAuditWorkflow, /npm audit --audit-level=moderate/);
   });
 
   test('Supabase PoC SQL poc_join_session trims whitespace consistently with poc_create_session', () => {
