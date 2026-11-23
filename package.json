@@ -39,7 +39,7 @@
     "@vitejs/plugin-react": "^6.3.0",
     "firebase": "^13.4.0",
     "firebase-tools": "^15.34.0",
-    "lucide-react": "^1.75.0",
+    "lucide-react": "^1.76.0",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.8.2",
     "vite": "^8.3.8",
