@@ -41,7 +41,7 @@
     "firebase-tools": "^15.34.0",
     "lucide-react": "^1.75.0",
     "tailwindcss": "^4.1.18",
-    "typescript": "~5.8.2",
+    "typescript": "~7.0.2",
     "vite": "^8.3.8",
     "vite-plugin-pwa": "^2.0.0"
   },
