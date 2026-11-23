@@ -213,11 +213,13 @@ export function planMissionCatalogSync(
 }
 
 export const MAX_MISSION_IMPORT_COUNT = 100;
+export const MAX_MISSION_IMPORT_BYTES = 512 * 1024;
 const VALID_IMPORTED_MISSION_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
 export type MissionImportFailureReason =
   | 'INVALID_JSON'
   | 'INVALID_FORMAT'
+  | 'PAYLOAD_TOO_LARGE'
   | 'TOO_MANY_MISSIONS'
   | 'INVALID_MISSION';
 
@@ -255,6 +257,13 @@ export function exportMissionsToJson(missions: readonly Mission[]): string {
 export function parseImportedMissionsJson(rawJson: string): MissionImportParseResult {
   if (typeof rawJson !== 'string' || rawJson.trim().length === 0) {
     return { ok: false, reason: 'INVALID_JSON', detail: 'JSON文字列が空です' };
+  }
+  if (rawJson.length > MAX_MISSION_IMPORT_BYTES || new TextEncoder().encode(rawJson).byteLength > MAX_MISSION_IMPORT_BYTES) {
+    return {
+      ok: false,
+      reason: 'PAYLOAD_TOO_LARGE',
+      detail: `JSONファイルサイズが大きすぎます（${Math.floor(MAX_MISSION_IMPORT_BYTES / 1024)}KB以内にしてください）`,
+    };
   }
   let parsed: unknown;
   try {

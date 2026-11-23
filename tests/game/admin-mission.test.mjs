@@ -3,6 +3,7 @@ import { describe, test } from 'node:test';
 import { MISSIONS, FINAL_MISSIONS } from '../../constants.ts';
 import {
   exportMissionsToJson,
+  MAX_MISSION_IMPORT_BYTES,
   MAX_MISSION_IMPORT_COUNT,
   parseImportedMissionsJson,
   planMissionCatalogSync,
@@ -153,6 +154,13 @@ describe('trusted mission administration core', () => {
       type: 'PHOTO',
     }));
     assert.equal(parseImportedMissionsJson(JSON.stringify(overLimit)).reason, 'TOO_MANY_MISSIONS');
+
+    const oversizedPayload = 'x'.repeat(MAX_MISSION_IMPORT_BYTES + 1);
+    const oversizedResult = parseImportedMissionsJson(oversizedPayload);
+    assert.equal(oversizedResult.ok, false);
+    if (!oversizedResult.ok) {
+      assert.equal(oversizedResult.reason, 'PAYLOAD_TOO_LARGE');
+    }
   });
 });
 
